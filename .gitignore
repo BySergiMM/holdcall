@@ -1,0 +1,26 @@
+# Go
+/engine/bin/
+*.exe
+*.test
+*.out
+
+# Node
+node_modules/
+.next/
+out/
+.vercel/
+
+# Local state: this is where credentials and the journal live. Never commit it.
+.nim/
+*.db
+*.journal
+
+# Env
+.env
+.env.*
+!.env.example
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
