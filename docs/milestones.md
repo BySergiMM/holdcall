@@ -3,11 +3,32 @@
 Each one ends in something demonstrable. Nothing is built before the milestone
 that needs it.
 
+## Standing decisions
+
+- **Daemon + shim.** One thin relay per configured MCP server, all state in a
+  single local daemon. Tool names stay untouched; budgets, journal and approval
+  have one writer.
+- **SQLite is the source of truth** for configuration, sessions, grants and the
+  journal. It is the only thing an authorization decision reads.
+- **`config.toml` configures the daemon only** — socket path, data directory,
+  which servers to supervise. Nothing an authorization decision depends on.
+- **Supabase is a mirror, never a dependency.** It receives a copy of the
+  journal for the dashboard. If it is unreachable, nothing changes locally.
+- **Every table is prefixed `nim_`**, in SQLite and in Postgres alike, so the
+  schema is unambiguous wherever it lands.
+- **The relay forwards original bytes.** Messages are parsed only far enough to
+  read `method`; the buffer is never re-serialised. Re-encoding JSON changes key
+  order and whitespace and breaks clients in ways that are hard to reproduce.
+
 ## M1 — Pass-through (current)
 
-Nim spawns one downstream MCP server and relays stdio in both directions. It
-parses only enough of each message to recognise `tools/call`, counts those, and
-writes them to a file. Nothing is blocked.
+The shim spawns one downstream MCP server and relays stdio in both directions,
+forwarding every byte untouched. It recognises `tools/call` and reports it to
+the daemon, which appends a row to `nim_calls` in SQLite. Nothing is blocked,
+no credentials are handled, no policy is evaluated.
+
+Scope is exactly: shim, daemon, unix socket / named pipe, SQLite, `config.toml`.
+Anything else is a later milestone.
 
 **Done when:** Claude Code lists exactly the same tools with and without Nim, a
 real working session is indistinguishable, and the file shows the calls.
