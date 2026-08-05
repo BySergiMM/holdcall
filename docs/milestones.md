@@ -30,22 +30,36 @@ no credentials are handled, no policy is evaluated.
 Scope is exactly: shim, daemon, unix socket / named pipe, SQLite, `config.toml`.
 Anything else is a later milestone.
 
-**Done when:** Claude Code lists exactly the same tools with and without Nim, a
-real working session is indistinguishable, and the file shows the calls.
+**Status: done.** A real MCP client was run twice against the same server, once
+direct and once through Nim, and the two runs were identical on everything the
+client can observe: tool list, JSON schemas, unicode round-trips, a 512 KiB
+payload, error propagation and ping. The harness lives in `tools/relay-rig`.
 
-**Why first:** it validates the highest technical risk in the project — that we
-can sit in the middle of a protocol we do not control without breaking it. If
-this fails there is no product, and it is better to know in week one.
+Three findings worth keeping:
 
-## M2 — Daemon
+- **Unix sockets work on Windows**, so one transport serves all three platforms
+  and `go-winio` is not needed.
+- **The socket cannot live inside the install directory.** AF_UNIX paths are
+  capped near 104 bytes; a deep `NIM_HOME` overflowed it and the daemon died
+  with `bind: invalid argument` while the relay carried on, recording nothing
+  and reporting no problem. The socket name is now a hash of the home path,
+  placed in the temp directory, and an unusable path is rejected with an
+  explanation instead of a kernel error.
+- **A failed tool call is a successful JSON-RPC response.** MCP reports tool
+  errors as `result.isError`, not as a protocol error, so checking only the
+  JSON-RPC `error` field recorded every failure as a success.
 
-State moves out of the shim. The shim becomes a byte relay to a local daemon
-over a unix socket / named pipe. The daemon supervises downstream servers and
-owns all shared state.
+The second and third were invisible to unit tests and obvious the moment a real
+client was involved. That is the argument for keeping the rig.
 
-**Why:** budgets, the hash-chained journal and human approval all need one
-writer. A client spawns one shim per configured server; only a daemon gives
-them a single view.
+## M2 — Daemon lifetime
+
+On Windows the daemon dies with the process tree that spawned it. State survives
+in SQLite and the next shim restarts it, so M1 stands, but a daemon shared
+across sessions needs proper detachment.
+
+**Why it matters:** budgets, the hash-chained journal and human approval all
+need one writer that outlives any single client session.
 
 ## M3 — Credentials
 
