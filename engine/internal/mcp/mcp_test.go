@@ -78,11 +78,104 @@ func TestParseRecognisesToolCalls(t *testing.T) {
 
 func TestParseTolueratesAnythingElse(t *testing.T) {
 	// Nim only has to understand tools/call. Everything else must survive.
-	for _, raw := range []string{`garbage`, `[]`, `null`, `{"method":"future/method"}`} {
+	//
+	// A JSON-RPC batch used to be listed here as another harmless shape. It is
+	// not harmless: see TestBatchIsAnAnomalyRatherThanNothing.
+	for _, raw := range []string{`garbage`, `null`, `{"method":"future/method"}`} {
 		env, ok := Parse([]byte(raw))
 		if ok && env.IsToolCall() {
 			t.Errorf("%q was mistaken for a tools/call", raw)
 		}
+	}
+}
+
+// A batch is an array, so Envelope parsing never sees the tools/call inside it
+// and the message is relayed with no record that it happened.
+//
+// Nothing is blocked here -- that needs the strict reader that comes with
+// enforcement. What must not happen is the earlier behaviour: a tool call
+// reaching a server having left no trace at all.
+func TestBatchIsAnAnomalyRatherThanNothing(t *testing.T) {
+	raw := []byte(`[{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"delete_repository"}}]`)
+
+	// The old path is blind to it, which is the reason the classifier exists.
+	if env, ok := Parse(raw); ok && env.IsToolCall() {
+		t.Fatal("Parse suddenly understands batches; this test needs rewriting")
+	}
+
+	env, anomaly := Classify(raw)
+	if anomaly != AnomalyBatch {
+		t.Fatalf("anomaly = %q, want %q: a tools/call inside a batch went unnoticed", anomaly, AnomalyBatch)
+	}
+	if env.IsToolCall() {
+		t.Error("the envelope should be empty: the batch was not unwrapped")
+	}
+
+	// An empty array is still a batch, and still not a shape Nim can account for.
+	if _, a := Classify([]byte(`[]`)); a != AnomalyBatch {
+		t.Errorf("empty batch classified as %q", a)
+	}
+}
+
+func TestMalformedJSONIsAnAnomaly(t *testing.T) {
+	for _, raw := range []string{`garbage`, `{"unterminated":`, `{"a":1}}`} {
+		if _, a := Classify([]byte(raw)); a != AnomalyMalformedJSON {
+			t.Errorf("Classify(%q) = %q, want %q", raw, a, AnomalyMalformedJSON)
+		}
+	}
+}
+
+// The transport is one message per line. Two values in one frame means Nim and
+// the server downstream may not agree on how many messages arrived.
+func TestTwoValuesInOneFrameIsAnAnomaly(t *testing.T) {
+	raw := []byte(`{"jsonrpc":"2.0","id":1,"method":"ping"}{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"x"}}`)
+	if _, a := Classify(raw); a != AnomalyFraming {
+		t.Fatalf("anomaly = %q, want %q", a, AnomalyFraming)
+	}
+}
+
+func TestClassifyLeavesOrdinaryMessagesAlone(t *testing.T) {
+	cases := []struct {
+		raw      string
+		toolCall bool
+	}{
+		{`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"echo"}}`, true},
+		{`{"jsonrpc":"2.0","method":"notifications/initialized"}`, false},
+		{`{"jsonrpc":"2.0","id":2,"result":{}}`, false},
+		{`{"method":"unknown/future-thing"}`, false},
+		{`null`, false},
+		{`  `, false},
+	}
+	for _, c := range cases {
+		env, anomaly := Classify([]byte(c.raw))
+		if anomaly != AnomalyNone {
+			t.Errorf("Classify(%q) reported %q; ordinary traffic must not be flagged", c.raw, anomaly)
+		}
+		if env.IsToolCall() != c.toolCall {
+			t.Errorf("Classify(%q) tool call = %v, want %v", c.raw, env.IsToolCall(), c.toolCall)
+		}
+	}
+}
+
+// Which protocol version was agreed is only knowable from the response, and it
+// is what decides whether the server accepts batches at all.
+func TestProtocolVersionComesFromTheInitializeResponse(t *testing.T) {
+	request, _ := Parse([]byte(`{"jsonrpc":"2.0","id":0,"method":"initialize","params":{}}`))
+	if !request.IsInitialize() {
+		t.Fatal("initialize request not recognised")
+	}
+	if request.ProtocolVersion() != "" {
+		t.Error("the request cannot know the negotiated version")
+	}
+
+	response, _ := Parse([]byte(`{"jsonrpc":"2.0","id":0,"result":{"protocolVersion":"2025-06-18"}}`))
+	if got := response.ProtocolVersion(); got != "2025-06-18" {
+		t.Errorf("protocol version = %q, want 2025-06-18", got)
+	}
+
+	other, _ := Parse([]byte(`{"jsonrpc":"2.0","id":1,"result":{"content":[]}}`))
+	if got := other.ProtocolVersion(); got != "" {
+		t.Errorf("a non-initialize response reported version %q", got)
 	}
 }
 

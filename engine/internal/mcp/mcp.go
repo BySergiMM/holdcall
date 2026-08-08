@@ -10,20 +10,100 @@
 //
 // Nothing is assumed about a message beyond JSON-RPC's own envelope. Anything
 // that fails to parse, or that carries a method Nim does not know, is still
-// relayed. Nim only has to understand tools/call; the rest of the protocol is
-// not its business and must keep working as the specification evolves.
+// relayed. Nim only has to act on tools/call; the rest of the protocol is not
+// its business and must keep working as the specification evolves.
+//
+// Relaying a message Nim did not understand is still relaying it unmediated, so
+// the ones it cannot account for are classified and counted -- see Classify.
+// Counting is all that happens here: nothing is rejected while Nim only
+// observes.
 package mcp
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"io"
 )
 
-// MethodToolsCall is the only method Nim needs to recognise.
+// MethodToolsCall is the only method Nim acts on.
 const MethodToolsCall = "tools/call"
+
+// MethodInitialize carries the negotiated protocol version, which decides
+// whether the server accepts JSON-RPC batches at all.
+const MethodInitialize = "initialize"
+
+// Anomaly names a message Nim relayed without being able to account for it.
+//
+// These are not errors in Nim and not, yet, anything it acts on. They are the
+// shapes that would let a message reach a server without passing inspection,
+// which makes them worth a number rather than a shrug.
+type Anomaly string
+
+const (
+	AnomalyNone Anomaly = ""
+
+	// AnomalyBatch is a JSON-RPC batch: an array of messages. Envelope parsing
+	// expects an object, so a tools/call inside an array is not seen at all.
+	AnomalyBatch Anomaly = "batch"
+
+	// AnomalyMalformedJSON is a frame that is not JSON. Nim cannot tell what it
+	// asks for, so it cannot tell whether it mattered.
+	AnomalyMalformedJSON Anomaly = "malformed_json"
+
+	// AnomalyFraming is more than one JSON value in a single frame. The
+	// transport is one message per line; a reader that accumulates instead
+	// would see different messages than Nim did.
+	AnomalyFraming Anomaly = "framing"
+)
+
+// Classify parses a message and names what is odd about it.
+//
+// A frame Nim cannot parse into an object is not automatically an anomaly:
+// `null`, a bare number and a string are all valid JSON that no server treats
+// as a request, and reporting them would bury the shapes that do matter.
+//
+// One real framing case is out of reach here: a single message split across
+// several lines arrives as several unparseable frames and is reported as
+// malformed JSON. Distinguishing the two needs the strict reader that comes
+// with enforcement, and guessing in the meantime would put a number on
+// something this cannot actually detect.
+func Classify(raw []byte) (Envelope, Anomaly) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return Envelope{}, AnomalyNone
+	}
+
+	dec := json.NewDecoder(bytes.NewReader(trimmed))
+	var value json.RawMessage
+	if err := dec.Decode(&value); err != nil {
+		return Envelope{}, AnomalyMalformedJSON
+	}
+
+	// Anything after the first complete value means Nim and the server may not
+	// agree on how many messages arrived. Decoder.More is not enough to notice:
+	// it answers for array and object iteration, so a stray `}` looks like the
+	// end of something rather than leftovers.
+	if rest := bytes.TrimSpace(trimmed[dec.InputOffset():]); len(rest) > 0 {
+		var next json.RawMessage
+		if json.NewDecoder(bytes.NewReader(rest)).Decode(&next) == nil {
+			return Envelope{}, AnomalyFraming // a second message in one frame
+		}
+		return Envelope{}, AnomalyMalformedJSON // trailing junk
+	}
+
+	if trimmed[0] == '[' {
+		return Envelope{}, AnomalyBatch
+	}
+
+	var env Envelope
+	if err := json.Unmarshal(value, &env); err != nil {
+		return Envelope{}, AnomalyNone
+	}
+	return env, AnomalyNone
+}
 
 // Reader yields raw messages from an MCP stdio stream.
 type Reader struct {
@@ -68,6 +148,25 @@ func Parse(raw []byte) (Envelope, bool) {
 
 // IsToolCall reports whether this message is a tools/call request.
 func (e Envelope) IsToolCall() bool { return e.Method == MethodToolsCall }
+
+// IsInitialize reports whether this message is the initialize request.
+func (e Envelope) IsInitialize() bool { return e.Method == MethodInitialize }
+
+// ProtocolVersion reads result.protocolVersion from an initialize response, or
+// "" when absent. It is the version the client and server actually agreed on,
+// which is not knowable from the request alone.
+func (e Envelope) ProtocolVersion() string {
+	if len(e.Result) == 0 {
+		return ""
+	}
+	var r struct {
+		ProtocolVersion string `json:"protocolVersion"`
+	}
+	if err := json.Unmarshal(e.Result, &r); err != nil {
+		return ""
+	}
+	return r.ProtocolVersion
+}
 
 // IsResponse reports whether this message answers an earlier request. Responses
 // carry an id and no method.

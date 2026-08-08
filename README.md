@@ -9,8 +9,18 @@ is forwarded byte for byte.
 
 ## Status
 
-Pre-alpha. Nothing here works yet. See `docs/milestones.md` for what is being
-built and in what order.
+Pre-alpha, and so far only an observer. Nim relays and records; it blocks
+nothing, holds no credentials and evaluates no policy. The paragraph above is
+where this is going, not where it is. See `docs/milestones.md` for the order.
+
+What does work: `tools/call` is recorded in a local append-only, hash-chained
+journal. `nim log` shows what happened, `nim verify` walks the chain, `nim
+status` prints its head.
+
+Reporting is asynchronous, so a call that was seen is not guaranteed to have
+been written, and Nim reports only the losses that leave evidence behind.
+`docs/journal-format.md` is explicit about that, and about what the chain does
+and does not detect. It is short, and worth reading before relying on either.
 
 ## Shape
 

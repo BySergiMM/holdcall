@@ -13,7 +13,14 @@ out/
 # Local state: this is where credentials and the journal live. Never commit it.
 .nim/
 *.db
+*.db-shm
+*.db-wal
 *.journal
+
+# The relay rig points NIM_HOME here, so a run leaves a machine-id and a daemon
+# log behind. The machine id is meant to be an opaque local identifier; it has
+# no business in a public repository.
+tools/relay-rig/nim-home/
 
 # Env
 .env

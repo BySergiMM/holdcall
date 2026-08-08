@@ -57,7 +57,7 @@ async def main() -> int:
     direct = StdioTransport(command=sys.executable, args=[SERVER], env=env)
     through = StdioTransport(
         command=NIM,
-        args=["serve", "--target", "rig", "--client", "test-rig", "--", sys.executable, SERVER],
+        args=["serve", "--connector", "rig", "--client", "test-rig", "--", sys.executable, SERVER],
         env=env,
     )
 

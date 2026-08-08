@@ -6,12 +6,14 @@
 package config
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
@@ -108,6 +110,49 @@ func (c Config) Validate() error {
 			n, MaxSocketPath, c.Daemon.Socket, Path())
 	}
 	return nil
+}
+
+// MachineIDPath is the file holding this install's identifier.
+func MachineIDPath() string { return filepath.Join(Home(), "machine-id") }
+
+// ReadMachineID returns the install's identifier, and whether there was one.
+//
+// It never creates the file. That distinction matters: the journal seeds its
+// hash chain with this value, so inventing a replacement for a lost one makes
+// every existing entry fail to verify -- reporting tampering when all that
+// happened is that a file went missing. Losing the material you verify with is
+// not the same as the thing you were verifying being wrong.
+//
+// Only CreateMachineID may bring one into existence, and only when nothing is
+// chained to the old one yet.
+func ReadMachineID() (string, bool) {
+	b, err := os.ReadFile(MachineIDPath())
+	if err != nil || len(b) == 0 {
+		return "", false
+	}
+	return string(b), true
+}
+
+// CreateMachineID writes a new identifier. Callers must first establish that no
+// journal entries depend on the previous one.
+func CreateMachineID() (string, error) {
+	id := NewID()
+	if err := os.MkdirAll(Home(), 0o700); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(MachineIDPath(), []byte(id), 0o600); err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+// NewID is an opaque random identifier, used for machine and session ids.
+func NewID() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(b)
 }
 
 // LogPath is where a daemon started in the background writes its diagnostics.
