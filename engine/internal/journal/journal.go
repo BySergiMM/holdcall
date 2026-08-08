@@ -14,6 +14,7 @@ package journal
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -178,6 +179,11 @@ type Journal struct {
 	genesis   string
 	seedKnown bool
 
+	// readOnly journals refuse to write before SQLite gets the chance to. The
+	// database would reject it anyway; refusing here turns an obscure driver
+	// error into a statement about what this handle is for.
+	readOnly bool
+
 	// One writer, one chain. The daemon serves each shim on its own goroutine,
 	// so without this two appends could read the same head and both claim the
 	// next chain_seq.
@@ -231,6 +237,54 @@ func Open(path, machineID string) (*Journal, error) {
 	return j, nil
 }
 
+// OpenReadOnly opens an existing journal for reading and nothing else.
+//
+// SQLite itself refuses writes on this handle, so a reader cannot alter the
+// record even by mistake -- which matters because the things that will read a
+// journal (a console, a report, someone looking at a machine after the fact)
+// have no business changing it, and because Open creates and migrates as a side
+// effect of being called.
+//
+// It does not create, migrate or repair anything. A journal that has never been
+// written is an error here rather than an empty one brought into existence: the
+// daemon owns that.
+//
+// machineID seeds the chain and may be "" when it could not be read, exactly as
+// in Open.
+func OpenReadOnly(path, machineID string) (*Journal, error) {
+	// No _txlock and no journal_mode: neither has meaning without writes, and
+	// setting journal_mode on a read-only handle would itself be one.
+	dsn := "file:" + path + "?mode=ro&_pragma=busy_timeout(5000)"
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, err
+	}
+
+	var name string
+	err = db.QueryRow(
+		`select name from sqlite_master where type = 'table' and name = 'nim_journal'`).Scan(&name)
+	if err == sql.ErrNoRows {
+		db.Close()
+		return nil, fmt.Errorf(
+			"%s has no journal in it yet: the daemon creates one the first time it records something", path)
+	}
+	if err != nil {
+		db.Close()
+		return nil, fmt.Errorf("reading %s: %w", path, err)
+	}
+
+	j := &Journal{db: db, readOnly: true, seedKnown: machineID != ""}
+	if j.seedKnown {
+		j.genesis = genesisHash(machineID)
+	}
+	return j, nil
+}
+
+// ReadOnly reports whether this handle can write.
+func (j *Journal) ReadOnly() bool { return j.readOnly }
+
+var errReadOnly = errors.New("this journal was opened for reading only")
+
 // AdoptSeed records the seed for a journal that has none yet.
 //
 // It refuses once there are entries: those were chained from a seed this one is
@@ -240,6 +294,9 @@ func (j *Journal) AdoptSeed(machineID string) error {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 
+	if j.readOnly {
+		return errReadOnly
+	}
 	var n int64
 	if err := j.db.QueryRow(`select count(*) from nim_journal`).Scan(&n); err != nil {
 		return err
@@ -290,6 +347,9 @@ func (j *Journal) Append(e Entry) error {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 
+	if j.readOnly {
+		return errReadOnly
+	}
 	tx, err := j.db.Begin()
 	if err != nil {
 		return err

@@ -3,6 +3,7 @@ package journal
 import (
 	"database/sql"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -737,6 +738,173 @@ func TestLogOrderFollowsTheChainNotTheClock(t *testing.T) {
 	}
 	if calls[0].ChainSeq <= calls[1].ChainSeq {
 		t.Error("rows are not in descending chain_seq order")
+	}
+}
+
+// A reader must not be able to change the record, and must not bring one into
+// existence either: Open creates and migrates as a side effect of being called,
+// which is the wrong thing for a console to do to a machine it is inspecting.
+func TestOpenReadOnlyCannotWrite(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nim.db")
+
+	writer, err := Open(path, "the-machine")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Append(session("s1", "github")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Append(call("s1", 1, "create_issue")); err != nil {
+		t.Fatal(err)
+	}
+	if writer.ReadOnly() {
+		t.Error("a journal opened with Open must be writable")
+	}
+	writer.Close()
+
+	reader, err := OpenReadOnly(path, "the-machine")
+	if err != nil {
+		t.Fatalf("OpenReadOnly: %v", err)
+	}
+	defer reader.Close()
+
+	if !reader.ReadOnly() {
+		t.Error("ReadOnly() must report what the handle is for")
+	}
+	if err := reader.Append(call("s1", 2, "t")); err == nil {
+		t.Fatal("a read-only journal accepted an entry")
+	}
+	if err := reader.AdoptSeed("someone-else"); err == nil {
+		t.Fatal("a read-only journal accepted a seed")
+	}
+
+	// Reading still works, and the refusals left nothing behind.
+	length, _, err := reader.Head()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if length != 2 {
+		t.Fatalf("read %d entries, want 2", length)
+	}
+	rep, err := reader.Verify("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rep.OK {
+		t.Fatalf("a read-only handle could not verify: %s", rep.Problem)
+	}
+}
+
+// Opening a journal that does not exist must fail rather than create one.
+func TestOpenReadOnlyRefusesAJournalThatIsNotThere(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nim.db")
+
+	if _, err := OpenReadOnly(path, "m"); err == nil {
+		t.Fatal("OpenReadOnly created or accepted a journal that does not exist")
+	}
+	if _, err := os.Stat(path); err == nil {
+		t.Fatal("OpenReadOnly left a database file behind")
+	}
+}
+
+// The cursor: chain_seq is monotonic and gapless, so a reader remembers the
+// last position it saw and asks for what came after. This is the whole of the
+// streaming mechanism, and it has to resume exactly.
+func TestEntriesSinceIsACursor(t *testing.T) {
+	j, _ := openTemp(t)
+	if err := j.Append(session("s1", "github")); err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i <= 5; i++ {
+		if err := j.Append(call("s1", int64(i), fmt.Sprintf("tool%d", i))); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// From the beginning.
+	all, err := j.EntriesSince(0, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 6 {
+		t.Fatalf("got %d entries from the start, want 6", len(all))
+	}
+	for i, e := range all {
+		if e.ChainSeq != int64(i+1) {
+			t.Fatalf("entry %d has chain_seq %d: the stream must be in journal order", i, e.ChainSeq)
+		}
+	}
+
+	// Paging: two reads of three must equal one read of six, with no overlap
+	// and nothing skipped.
+	first, err := j.EntriesSince(0, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first) != 3 {
+		t.Fatalf("first page has %d entries, want 3", len(first))
+	}
+	second, err := j.EntriesSince(first[len(first)-1].ChainSeq, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(second) != 3 {
+		t.Fatalf("second page has %d entries, want 3", len(second))
+	}
+	joined := append(append([]Entry{}, first...), second...)
+	for i := range joined {
+		if joined[i].ChainSeq != all[i].ChainSeq {
+			t.Fatalf("paging lost or repeated an entry at %d", i)
+		}
+	}
+
+	// At the head, nothing comes back -- and asking again after new entries
+	// arrive picks up exactly those.
+	caughtUp, err := j.EntriesSince(6, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(caughtUp) != 0 {
+		t.Fatalf("a cursor at the head returned %d entries", len(caughtUp))
+	}
+	if err := j.Append(call("s1", 6, "later")); err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := j.EntriesSince(6, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fresh) != 1 || fresh[0].Tool == nil || *fresh[0].Tool != "later" {
+		t.Fatalf("resuming from the cursor did not return just the new entry: %+v", fresh)
+	}
+}
+
+func TestEntriesSinceCapsTheRead(t *testing.T) {
+	j, _ := openTemp(t)
+	if err := j.Append(session("s1", "github")); err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i <= 10; i++ {
+		if err := j.Append(call("s1", int64(i), "t")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := j.EntriesSince(0, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 4 {
+		t.Errorf("limit ignored: got %d", len(got))
+	}
+	// Zero and negative mean the cap, not "everything at once".
+	for _, limit := range []int{0, -1, MaxEntriesPerRead + 5000} {
+		got, err := j.EntriesSince(0, limit)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != 11 {
+			t.Errorf("limit %d returned %d entries, want all 11 (under the cap)", limit, len(got))
+		}
 	}
 }
 

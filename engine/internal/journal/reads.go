@@ -90,6 +90,134 @@ func (j *Journal) Anomalies() (map[string]int, error) {
 	return out, rows.Err()
 }
 
+// MaxEntriesPerRead caps one read, so a caller asking for everything gets a
+// page instead of the whole journal in memory. Reads stay short on purpose:
+// a long-running read transaction keeps SQLite from checkpointing the WAL,
+// which would grow the file while the daemon is writing to it.
+const MaxEntriesPerRead = 1000
+
+// EntriesSince returns entries after a chain_seq, oldest first.
+//
+// This is the whole of the streaming mechanism. chain_seq is monotonic and
+// gapless, so it is already a cursor: a reader remembers the last one it saw
+// and asks for what came after. Nothing needs to be published, subscribed to or
+// kept in step -- the journal is the stream, and a reader that stops and comes
+// back later resumes exactly where it was.
+//
+// A limit of zero or less means MaxEntriesPerRead.
+func (j *Journal) EntriesSince(since int64, limit int) ([]Entry, error) {
+	if limit <= 0 || limit > MaxEntriesPerRead {
+		limit = MaxEntriesPerRead
+	}
+	rows, err := j.db.Query(
+		`select chain_seq, schema_version, kind, session_id, seq, connector, tool,
+		        params_digest, decision, ok, duration_ms, anomaly, occurred_at,
+		        machine_id, client, protocol_version, prev_hash, hash
+		   from nim_journal
+		  where chain_seq > ?
+		  order by chain_seq
+		  limit ?`, since, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []Entry
+	for rows.Next() {
+		e, err := scanEntry(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// SessionRow is one session with what the journal knows about it.
+//
+// EndedAt is absent for a session with no session.end. That covers a session
+// running right now and one whose daemon died, and the journal cannot tell them
+// apart -- so neither can anything built on this.
+type SessionRow struct {
+	ChainSeq      int64
+	ID            string
+	MachineID     *string
+	Client        *string
+	Connector     *string
+	StartedAt     string
+	EndedAt       *string
+	CallsRecorded int
+	Outcomes      int
+	Anomalies     int
+}
+
+// Sessions reads the sessions view, newest first by chain_seq.
+func (j *Journal) Sessions(limit int) ([]SessionRow, error) {
+	if limit <= 0 || limit > MaxEntriesPerRead {
+		limit = MaxEntriesPerRead
+	}
+	rows, err := j.db.Query(`
+		select s.chain_seq, s.id, s.machine_id, s.client, s.connector, s.started_at, s.ended_at,
+		       (select count(*) from nim_journal r
+		         where r.kind = 'call.request' and r.session_id = s.id),
+		       (select count(*) from nim_journal o
+		         where o.kind = 'call.outcome' and o.session_id = s.id),
+		       (select count(*) from nim_journal a
+		         where a.kind = 'anomaly'      and a.session_id = s.id)
+		  from nim_sessions s
+		 order by s.chain_seq desc
+		 limit ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []SessionRow
+	for rows.Next() {
+		var s SessionRow
+		var machineID, client, connector, endedAt sql.NullString
+		if err := rows.Scan(&s.ChainSeq, &s.ID, &machineID, &client, &connector,
+			&s.StartedAt, &endedAt, &s.CallsRecorded, &s.Outcomes, &s.Anomalies); err != nil {
+			return nil, err
+		}
+		s.MachineID = nullable(machineID)
+		s.Client = nullable(client)
+		s.Connector = nullable(connector)
+		s.EndedAt = nullable(endedAt)
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+// SessionEntries returns everything recorded for one session, in journal order.
+func (j *Journal) SessionEntries(id string, limit int) ([]Entry, error) {
+	if limit <= 0 || limit > MaxEntriesPerRead {
+		limit = MaxEntriesPerRead
+	}
+	rows, err := j.db.Query(
+		`select chain_seq, schema_version, kind, session_id, seq, connector, tool,
+		        params_digest, decision, ok, duration_ms, anomaly, occurred_at,
+		        machine_id, client, protocol_version, prev_hash, hash
+		   from nim_journal
+		  where session_id = ?
+		  order by chain_seq
+		  limit ?`, id, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []Entry
+	for rows.Next() {
+		e, err := scanEntry(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
 // CallRow is one line of `nim log`.
 type CallRow struct {
 	ChainSeq   int64

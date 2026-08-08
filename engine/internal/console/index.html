@@ -1,0 +1,449 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nim console</title>
+<style>
+:root{
+  --bg:#0e1116; --panel:#151a21; --panel2:#1b212a; --line:#252c37;
+  --fg:#d7dee8; --dim:#8b97a8; --faint:#5d6878;
+  --accent:#5aa9e6; --ok:#5fb87a; --warn:#d6a44c; --bad:#e0665f; --idle:#6b7embed;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);
+  font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+header{display:flex;align-items:center;gap:14px;padding:10px 16px;
+  background:var(--panel);border-bottom:1px solid var(--line)}
+.brand{font-weight:600;letter-spacing:.02em}
+.brand span{color:var(--faint);font-weight:400}
+.badge{font-family:var(--mono);font-size:11px;padding:2px 7px;border-radius:3px;
+  border:1px solid var(--line);color:var(--dim);white-space:nowrap}
+.badge.ro{border-color:#2f3a46;color:var(--faint)}
+.dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px;vertical-align:1px}
+.dot.on{background:var(--ok)} .dot.off{background:var(--faint)}
+.spacer{flex:1}
+nav{display:flex;gap:1px;padding:0 16px;background:var(--panel);border-bottom:1px solid var(--line)}
+nav button{background:none;border:0;border-bottom:2px solid transparent;color:var(--dim);
+  padding:8px 14px;font:inherit;cursor:pointer}
+nav button:hover{color:var(--fg)}
+nav button.sel{color:var(--fg);border-bottom-color:var(--accent)}
+main{padding:16px;display:grid;grid-template-columns:1fr;gap:16px}
+main.split{grid-template-columns:minmax(0,1fr) 420px}
+.view{display:none;min-width:0} .view.sel{display:block}
+h2{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);
+  margin:0 0 8px;font-weight:600}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:5px;margin-bottom:16px}
+.panel>.hd{padding:9px 12px;border-bottom:1px solid var(--line);
+  font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim)}
+.panel>.bd{padding:12px}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:4px 18px;font-size:13px}
+.kv dt{color:var(--dim)} .kv dd{margin:0;font-family:var(--mono);word-break:break-all}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:1px;background:var(--line)}
+.cell{background:var(--panel);padding:11px 12px}
+.cell .n{font-family:var(--mono);font-size:20px;line-height:1.2}
+.cell .l{color:var(--dim);font-size:11px;margin-top:2px}
+.cell .s{color:var(--faint);font-size:11px;margin-top:3px}
+table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:12px}
+th{text-align:left;color:var(--dim);font-weight:500;padding:6px 10px;
+  border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--panel);
+  font-size:11px;text-transform:uppercase;letter-spacing:.05em}
+td{padding:4px 10px;border-bottom:1px solid #1b2029;white-space:nowrap}
+tbody tr{cursor:pointer}
+tbody tr:hover{background:var(--panel2)}
+tbody tr.sel{background:#1d2836}
+.scroll{max-height:calc(100vh - 260px);overflow:auto}
+/* Columns scroll rather than crush: a squeezed table hides the values that
+   matter, and this one is meant to be read. */
+.scroll table{min-width:660px}
+@media (max-width:1100px){ main.split{grid-template-columns:1fr} }
+.num{color:var(--faint)}
+.k{padding:1px 6px;border-radius:3px;font-size:11px;border:1px solid var(--line)}
+.k-session\.start{color:var(--accent)} .k-session\.end{color:var(--dim)}
+.k-call\.request{color:#c9a7e8} .k-call\.outcome{color:var(--ok)}
+.k-anomaly{color:var(--warn);border-color:#4a3d24}
+.ok{color:var(--ok)} .bad{color:var(--bad)} .warn{color:var(--warn)} .dim{color:var(--dim)}
+.note{color:var(--faint);font-size:12px;line-height:1.55;margin:0}
+.note+.note{margin-top:8px}
+.empty{color:var(--faint);padding:22px 12px;text-align:center;font-size:12px}
+.hash{font-family:var(--mono);font-size:11px;color:var(--dim);word-break:break-all}
+.alert{border-left:2px solid var(--warn);padding:8px 12px;background:#191713;margin-bottom:8px}
+.alert.info{border-left-color:var(--accent);background:#12181f}
+.alert .t{color:var(--fg);margin-bottom:3px}
+#detail{position:sticky;top:16px;align-self:start}
+.pill{font-family:var(--mono);font-size:11px;padding:1px 6px;border:1px solid var(--line);border-radius:3px}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">nim <span>console</span></div>
+  <span class="badge ro">read-only</span>
+  <span class="badge" id="daemon"><span class="dot off"></span>daemon —</span>
+  <span class="badge" id="entries">— entries</span>
+  <div class="spacer"></div>
+  <span class="badge" id="head" title="journal head">head —</span>
+</header>
+
+<nav>
+  <button data-v="overview" class="sel">Overview</button>
+  <button data-v="live">Live activity</button>
+  <button data-v="journal">Journal</button>
+  <button data-v="sessions">Sessions</button>
+</nav>
+
+<main id="main">
+<div>
+  <!-- OVERVIEW -->
+  <section class="view sel" id="v-overview">
+    <div id="alerts"></div>
+
+    <div class="panel"><div class="hd">Journal</div>
+      <div class="grid" id="ov-journal"></div>
+    </div>
+
+    <div class="panel"><div class="hd">Detectable gaps</div>
+      <div class="grid" id="ov-gaps"></div>
+      <div class="bd">
+        <p class="note">These are the gaps that leave evidence behind. Reporting from the
+        relay to the daemon is asynchronous and one-way, so an event the daemon accepted and
+        then failed to write leaves nothing to count — it cannot be told apart from no event
+        having been sent. Read these as detected, never as all.</p>
+      </div>
+    </div>
+
+    <div class="panel"><div class="hd">Anomalies by type</div>
+      <div class="bd" id="ov-anomalies"></div>
+    </div>
+  </section>
+
+  <!-- LIVE -->
+  <section class="view" id="v-live">
+    <div class="panel">
+      <div class="hd">Live activity — newest first, ordered by chain_seq</div>
+      <div class="scroll"><table>
+        <thead><tr><th>#</th><th>kind</th><th>session</th><th>seq</th><th>tool</th>
+          <th>decision</th><th>outcome</th><th>ms</th><th>occurred_at</th></tr></thead>
+        <tbody id="live-rows"></tbody>
+      </table></div>
+      <div class="bd"><p class="note" id="live-note">Waiting for the journal…</p></div>
+    </div>
+  </section>
+
+  <!-- JOURNAL -->
+  <section class="view" id="v-journal">
+    <div class="panel">
+      <div class="hd">Journal entries — ordered by chain_seq</div>
+      <div class="scroll"><table>
+        <thead><tr><th>#</th><th>kind</th><th>session</th><th>seq</th><th>detail</th>
+          <th>occurred_at</th></tr></thead>
+        <tbody id="journal-rows"></tbody>
+      </table></div>
+    </div>
+  </section>
+
+  <!-- SESSIONS -->
+  <section class="view" id="v-sessions">
+    <div class="panel">
+      <div class="hd">Sessions — newest first</div>
+      <div class="scroll"><table>
+        <thead><tr><th>#</th><th>session</th><th>state</th><th>connector</th><th>client</th>
+          <th>calls recorded</th><th>outcomes</th><th>anomalies</th><th>started</th></tr></thead>
+        <tbody id="session-rows"></tbody>
+      </table></div>
+      <div class="bd">
+        <p class="note"><b>unfinished</b> means no <code>session.end</code> was recorded. That
+        covers a session running right now and one whose daemon died without writing an end —
+        the journal cannot tell them apart, so neither can this page.</p>
+        <p class="note"><b>connector</b> and <b>client</b> are labels the relay reported for
+        itself. They are self-asserted, not facts Nim established.</p>
+      </div>
+    </div>
+  </section>
+</div>
+
+<aside id="detail" style="display:none">
+  <div class="panel"><div class="hd" id="detail-hd">Entry</div>
+    <div class="bd"><dl class="kv" id="detail-kv"></dl>
+      <p class="note" id="detail-note" style="margin-top:12px"></p>
+    </div>
+  </div>
+</aside>
+</main>
+
+<script>
+"use strict";
+const SNAPSHOT_MS = 3000;   // how often the state of the record is re-read
+const EVENTS_MS   = 1000;   // how often new entries are pulled
+const PAGE        = 200;
+
+const $  = (s) => document.querySelector(s);
+const el = (t, c, txt) => { const e = document.createElement(t);
+  if (c) e.className = c; if (txt !== undefined) e.textContent = txt; return e; };
+
+let cursor = 0;            // highest chain_seq seen; the only client-side state
+let events = [];           // newest first, for rendering only
+let snapshot = null;
+let selected = null;
+
+/* ---------- rendering helpers ---------- */
+const shortId = (s) => s ? s.slice(0, 8) : "";
+const shortHash = (h) => h ? h.slice(0, 16) : "";
+const when = (s) => { if (!s) return ""; const d = new Date(s);
+  return isNaN(d) ? s : d.toLocaleTimeString(undefined, {hour12:false}) +
+    "." + String(d.getMilliseconds()).padStart(3,"0"); };
+
+function kindCell(kind) {
+  const s = el("span", "k k-" + kind.replace(".", "\\."), kind);
+  s.className = "k k-" + kind; return s;
+}
+function cell(n, label, sub, cls) {
+  const c = el("div", "cell");
+  c.appendChild(el("div", "n " + (cls || ""), n));
+  c.appendChild(el("div", "l", label));
+  if (sub) c.appendChild(el("div", "s", sub));
+  return c;
+}
+
+/* ---------- overview ---------- */
+const CHAIN_TEXT = {
+  empty:          ["nothing to check", "dim",
+                   "Nothing recorded yet — nothing to check. This is not a journal that passed verification."],
+  self_consistent:["self-consistent", "ok",
+                   "Every entry hashes to what it stores and links to the one before it. This does not mean nothing was removed: anyone who can write the journal file can recompute the chain, and a shorter chain checks out just as cleanly."],
+  partial:        ["self-consistent from entry 2", "warn",
+                   "Checked from the second entry on. The install identifier that seeds the chain could not be read, so entry 1 has nothing to be compared against."],
+  broken:         ["broken", "bad", ""],
+};
+
+function renderOverview() {
+  const s = snapshot; if (!s) return;
+  const j = s.journal, g = s.gaps;
+
+  const jr = $("#ov-journal"); jr.replaceChildren();
+  jr.appendChild(cell(j.entries, "entries in the journal"));
+  jr.appendChild(cell(j.entries, "current chain_seq", "the journal's own order"));
+  jr.appendChild(cell(s.calls_recorded, "calls recorded",
+    "reached the journal — not calls made or executed"));
+  const [chainLabel, chainCls] = CHAIN_TEXT[j.chain] || ["unknown", "dim"];
+  jr.appendChild(cell(chainLabel, "chain", j.problem || "", chainCls));
+  jr.appendChild(cell(j.verification_material ? "available" : "missing",
+    "verification material", j.verification_material ? "machine-id readable" : "machine-id not readable",
+    j.verification_material ? "ok" : "warn"));
+  jr.appendChild(cell("v" + j.schema_version, "schema version"));
+
+  const gr = $("#ov-gaps"); gr.replaceChildren();
+  gr.appendChild(cell(g.unfinished_sessions, "sessions unfinished", "no session.end recorded",
+    g.unfinished_sessions ? "warn" : ""));
+  gr.appendChild(cell(g.missing_call_entries, "call entries missing",
+    "gaps in a session's seq", g.missing_call_entries ? "warn" : ""));
+  gr.appendChild(cell(g.sessions_with_gaps, "sessions with gaps"));
+  gr.appendChild(cell(g.anomalies_total, "anomalies recorded",
+    "messages relayed without inspection", g.anomalies_total ? "warn" : ""));
+
+  const an = $("#ov-anomalies"); an.replaceChildren();
+  const kinds = Object.keys(g.anomalies || {}).sort();
+  if (!kinds.length) {
+    an.appendChild(el("p", "note", "None of the detectable kinds found."));
+  } else {
+    const dl = el("dl", "kv");
+    for (const k of kinds) {
+      dl.appendChild(el("dt", null, k));
+      dl.appendChild(el("dd", null, String(g.anomalies[k])));
+    }
+    an.appendChild(dl);
+    an.appendChild(el("p", "note",
+      "These messages were relayed without being inspected. Nothing is blocked at this stage; they are counted so the blind spot has a number."));
+  }
+
+  const alerts = $("#alerts"); alerts.replaceChildren();
+  if (j.chain === "broken") {
+    const a = el("div", "alert"); a.appendChild(el("div", "t", "Chain check failed"));
+    a.appendChild(el("div", "note", j.problem || "")); alerts.appendChild(a);
+  }
+  if (!j.verification_material && j.entries > 0) {
+    const a = el("div", "alert");
+    a.appendChild(el("div", "t", "Verification material missing"));
+    a.appendChild(el("div", "note",
+      "machine-id could not be read, so the first entry cannot be checked against anything. " +
+      "This is missing verification material — it is not evidence that the journal was altered. " +
+      "Restore the file and the whole chain can be checked again."));
+    alerts.appendChild(a);
+  }
+  if (j.chain === "empty") {
+    const a = el("div", "alert info");
+    a.appendChild(el("div", "t", "Nothing recorded yet"));
+    a.appendChild(el("div", "note", "The journal has no entries, so there was nothing to check."));
+    alerts.appendChild(a);
+  }
+}
+
+/* ---------- tables ---------- */
+function eventRow(e, mode) {
+  const tr = el("tr"); tr.dataset.seq = e.chain_seq;
+  const add = (v, c) => { const td = el("td", c); if (v instanceof Node) td.appendChild(v);
+    else td.textContent = v === undefined || v === null ? "" : v; tr.appendChild(td); };
+  add(e.chain_seq, "num");
+  add(kindCell(e.kind));
+  add(shortId(e.session_id));
+  add(e.seq);
+  if (mode === "live") {
+    add(e.tool);
+    add(e.decision, "dim");
+    add(e.ok === undefined ? "" : (e.ok ? "ok" : "failed"), e.ok === false ? "bad" : "ok");
+    add(e.duration_ms);
+  } else {
+    add(e.tool || e.connector || e.anomaly || "", e.anomaly ? "warn" : "");
+  }
+  add(when(e.occurred_at), "dim");
+  tr.onclick = () => select(e);
+  if (selected && selected.chain_seq === e.chain_seq) tr.classList.add("sel");
+  return tr;
+}
+
+function renderLive() {
+  const rows = $("#live-rows"); rows.replaceChildren();
+  for (const e of events.slice(0, 500)) rows.appendChild(eventRow(e, "live"));
+  $("#live-note").textContent = events.length
+    ? "Newest first. New entries appear as the daemon writes them; the browser asks only for what came after the last chain_seq it saw."
+    : "Nothing recorded yet — nothing to show.";
+}
+
+function renderJournal() {
+  const rows = $("#journal-rows"); rows.replaceChildren();
+  for (const e of events.slice(0, 1000)) rows.appendChild(eventRow(e, "journal"));
+  if (!events.length) rows.appendChild(el("tr")).appendChild(
+    Object.assign(el("td", "empty"), {colSpan: 6, textContent: "Nothing recorded yet."}));
+}
+
+function renderSessions() {
+  const rows = $("#session-rows"); rows.replaceChildren();
+  const list = (snapshot && snapshot.sessions) || [];
+  if (!list.length) {
+    const tr = el("tr"), td = el("td", "empty", "No sessions recorded.");
+    td.colSpan = 9; tr.appendChild(td); rows.appendChild(tr); return;
+  }
+  for (const s of list) {
+    const tr = el("tr");
+    const add = (v, c) => { const td = el("td", c);
+      td.textContent = v === undefined || v === null ? "" : v; tr.appendChild(td); };
+    add(s.chain_seq, "num");
+    add(shortId(s.id));
+    add(s.state, s.state === "unfinished" ? "warn" : "dim");
+    add(s.connector); add(s.client);
+    add(s.calls_recorded); add(s.outcomes);
+    add(s.anomalies, s.anomalies ? "warn" : "");
+    add(when(s.started_at), "dim");
+    tr.onclick = () => selectSession(s);
+    rows.appendChild(tr);
+  }
+}
+
+/* ---------- detail ---------- */
+function verdictFor(e) {
+  if (!snapshot) return "";
+  const c = snapshot.journal.chain;
+  if (c === "self_consistent") return "Covered by the chain check, which passed for every entry.";
+  if (c === "partial") return e.chain_seq === 1
+    ? "Not checked: the install identifier that seeds the chain could not be read, so this entry has nothing to be compared against."
+    : "Covered by the chain check, which passed from entry 2 on.";
+  if (c === "broken") return "The chain check failed — see Overview for where.";
+  return "";
+}
+
+function select(e) {
+  selected = e;
+  $("#detail-hd").textContent = "Entry #" + e.chain_seq + " — " + e.kind;
+  const dl = $("#detail-kv"); dl.replaceChildren();
+  const row = (k, v, cls) => { if (v === undefined || v === null || v === "") return;
+    dl.appendChild(el("dt", null, k)); dl.appendChild(el("dd", cls, String(v))); };
+  row("chain_seq", e.chain_seq); row("kind", e.kind);
+  row("schema_version", e.schema_version);
+  row("session_id", e.session_id); row("occurred_at", e.occurred_at);
+  row("seq", e.seq); row("connector", e.connector); row("client", e.client);
+  row("machine_id", e.machine_id); row("tool", e.tool);
+  row("params_digest", e.params_digest);
+  row("decision", e.decision);
+  if (e.ok !== undefined) row("ok", e.ok);
+  row("duration_ms", e.duration_ms); row("anomaly", e.anomaly);
+  row("protocol_version", e.protocol_version);
+  row("prev_hash", e.prev_hash, "hash"); row("hash", e.hash, "hash");
+  $("#detail-note").textContent = verdictFor(e) +
+    " Only fields the journal stores are shown: arguments and responses are never recorded.";
+  $("#detail").style.display = ""; $("#main").classList.add("split");
+  render();
+}
+
+async function selectSession(s) {
+  const r = await fetch("/api/sessions/" + encodeURIComponent(s.id));
+  if (!r.ok) return;
+  const d = await r.json();
+  $("#detail-hd").textContent = "Session " + shortId(s.id);
+  const dl = $("#detail-kv"); dl.replaceChildren();
+  const row = (k, v) => { if (v === undefined || v === null || v === "") return;
+    dl.appendChild(el("dt", null, k)); dl.appendChild(el("dd", null, String(v))); };
+  row("session_id", d.session.id); row("state", d.session.state);
+  row("connector", d.session.connector); row("client", d.session.client);
+  row("machine_id", d.session.machine_id);
+  row("started_at", d.session.started_at); row("ended_at", d.session.ended_at);
+  row("calls recorded", d.session.calls_recorded);
+  row("outcomes", d.session.outcomes); row("anomalies", d.session.anomalies);
+  row("entries", d.events.length);
+  $("#detail-note").textContent = d.session.state === "unfinished"
+    ? "No session.end was recorded. That covers a session running now and one whose daemon died — the journal cannot tell them apart."
+    : "A session.end was recorded for this session.";
+  $("#detail").style.display = ""; $("#main").classList.add("split");
+}
+
+/* ---------- polling ---------- */
+function render() {
+  renderOverview();
+  const v = document.querySelector("nav button.sel").dataset.v;
+  if (v === "live") renderLive();
+  if (v === "journal") renderJournal();
+  if (v === "sessions") renderSessions();
+}
+
+async function pullSnapshot() {
+  try {
+    const r = await fetch("/api/snapshot");
+    if (!r.ok) return;
+    snapshot = await r.json();
+    const d = $("#daemon");
+    d.replaceChildren(el("span", "dot " + (snapshot.daemon.running ? "on" : "off")));
+    d.append("daemon " + (snapshot.daemon.running ? "running" : "not running"));
+    $("#entries").textContent = snapshot.journal.entries + " entries";
+    $("#head").textContent = "head " + (shortHash(snapshot.journal.head) || "—");
+    render();
+  } catch (_) { /* the console keeps trying; Nim is unaffected either way */ }
+}
+
+async function pullEvents() {
+  try {
+    // Drain: a full page means there is probably more.
+    for (;;) {
+      const r = await fetch("/api/events?since=" + cursor + "&limit=" + PAGE);
+      if (!r.ok) return;
+      const page = await r.json();
+      if (!page.events.length) break;
+      events = page.events.slice().reverse().concat(events);
+      cursor = page.cursor;
+      if (page.events.length < PAGE) break;
+    }
+    render();
+  } catch (_) { /* ignored */ }
+}
+
+document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
+  document.querySelectorAll("nav button").forEach(x => x.classList.remove("sel"));
+  document.querySelectorAll(".view").forEach(x => x.classList.remove("sel"));
+  b.classList.add("sel"); $("#v-" + b.dataset.v).classList.add("sel"); render();
+});
+
+pullSnapshot(); pullEvents();
+setInterval(pullSnapshot, SNAPSHOT_MS);
+setInterval(pullEvents, EVENTS_MS);
+</script>
+</body>
+</html>

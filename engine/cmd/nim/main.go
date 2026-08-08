@@ -9,17 +9,23 @@
 package main
 
 import (
+	"bufio"
+	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"os"
 	"sort"
 	"text/tabwriter"
 	"time"
 
 	"github.com/BySergiMM/nim/engine/internal/config"
+	"github.com/BySergiMM/nim/engine/internal/console"
 	"github.com/BySergiMM/nim/engine/internal/daemon"
 	"github.com/BySergiMM/nim/engine/internal/journal"
+	"github.com/BySergiMM/nim/engine/internal/readmodel"
 	"github.com/BySergiMM/nim/engine/internal/shim"
 )
 
@@ -40,6 +46,8 @@ func main() {
 		err = runStatus()
 	case "log":
 		err = runLog(os.Args[2:])
+	case "console":
+		err = runConsole(os.Args[2:])
 	case "verify":
 		err = runVerify(os.Args[2:])
 	case "version", "--version", "-v":
@@ -71,8 +79,14 @@ func usage() {
   nim log [-n <count>]
         The calls that have been seen, newest first.
 
+  nim log --follow [--json] [--since <chain_seq>]
+        Every journal entry in the order it was written, as it arrives.
+
   nim verify [--expect-head <hash>]
         Walk the journal's hash chain.
+
+  nim console [--addr 127.0.0.1:7717]
+        Serve a local, read-only view of what has been recorded.
 
 `)
 }
@@ -142,112 +156,119 @@ func runStatus() error {
 		fmt.Println("calls    (no journal yet)")
 		return nil
 	}
-	seed, seedKnown := config.ReadMachineID()
-	j, err := journal.Open(cfg.DatabasePath(), seed)
+	seed, _ := config.ReadMachineID()
+	j, err := journal.OpenReadOnly(cfg.DatabasePath(), seed)
 	if err != nil {
 		return err
 	}
 	defer j.Close()
 
-	calls, err := j.CountCalls()
+	// The same projection the console reads. Both surfaces draw their meaning
+	// from one place, so "calls recorded" cannot come to mean one thing here
+	// and another in a browser.
+	snap, err := readmodel.Take(j)
 	if err != nil {
 		return err
 	}
+	renderStatus(os.Stdout, snap)
+	return nil
+}
+
+// renderStatus writes a snapshot as text. Separate from reading it so a test
+// can render the same projection the console serves and compare the two.
+func renderStatus(w io.Writer, snap readmodel.Snapshot) {
 	// "recorded", not "made": these are the calls that reached the journal, and
-	// §gaps below is the only thing that has anything to say about the rest.
-	fmt.Println("calls    recorded", calls)
+	// the gaps below are the only thing with anything to say about the rest.
+	fmt.Fprintln(w, "calls    recorded", snap.CallsRecorded)
 
-	length, head, err := j.Head()
-	if err != nil {
-		return err
-	}
-	fmt.Println()
-	fmt.Println("journal  schema version", journal.SchemaVersion1)
-	fmt.Println("         entries       ", length)
-	if head == "" {
-		fmt.Println("         head           (none)")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "journal  schema version", snap.Journal.SchemaVersion)
+	fmt.Fprintln(w, "         entries       ", snap.Journal.Entries)
+	if snap.Journal.Head == "" {
+		fmt.Fprintln(w, "         head           (none)")
 	} else {
-		fmt.Println("         head          ", head)
+		fmt.Fprintln(w, "         head          ", snap.Journal.Head)
 	}
 
-	report, err := j.Verify("")
-	if err != nil {
-		return err
-	}
-	switch {
-	case report.Empty:
-		fmt.Println("         chain          nothing recorded yet -- nothing to check")
-	case !report.OK:
-		fmt.Println("         chain          BROKEN:", report.Problem)
-	case report.Partial:
-		fmt.Println("         chain          self-consistent from entry 2 on")
-		fmt.Println("                        entry 1 unchecked:", config.MachineIDPath(), "is missing")
+	switch snap.Journal.Chain {
+	case readmodel.ChainEmpty:
+		fmt.Fprintln(w, "         chain          nothing recorded yet -- nothing to check")
+	case readmodel.ChainBroken:
+		fmt.Fprintln(w, "         chain          BROKEN:", snap.Journal.Problem)
+	case readmodel.ChainPartial:
+		fmt.Fprintln(w, "         chain          self-consistent from entry 2 on")
+		fmt.Fprintln(w, "                        entry 1 unchecked:", config.MachineIDPath(), "is missing")
 	default:
-		fmt.Println("         chain          self-consistent")
+		fmt.Fprintln(w, "         chain          self-consistent")
 	}
 
-	if err := printGaps(j); err != nil {
-		return err
-	}
+	renderGaps(w, snap.Gaps)
 
 	// Said plainly, because the alternative is a user who believes the chain
 	// does more than it does. The remedy is one line, so it is worth printing
 	// next to the limitation rather than burying it in a document.
-	fmt.Println()
-	fmt.Println("Self-consistent means each entry still hashes to what it claims. It does not")
-	fmt.Println("mean nothing was removed, and it does not detect anyone who can write to the")
-	fmt.Println("journal file: nothing here is secret, so they can recompute every hash and a")
-	fmt.Println("shorter chain checks out just as cleanly. To cover that, record the head above")
-	fmt.Println("somewhere else and check it later with:")
-	fmt.Println()
-	if head != "" {
-		fmt.Println("    nim verify --expect-head", head)
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Self-consistent means each entry still hashes to what it claims. It does not")
+	fmt.Fprintln(w, "mean nothing was removed, and it does not detect anyone who can write to the")
+	fmt.Fprintln(w, "journal file: nothing here is secret, so they can recompute every hash and a")
+	fmt.Fprintln(w, "shorter chain checks out just as cleanly. To cover that, record the head above")
+	fmt.Fprintln(w, "somewhere else and check it later with:")
+	fmt.Fprintln(w)
+	if snap.Journal.Head != "" {
+		fmt.Fprintln(w, "    nim verify --expect-head", snap.Journal.Head)
 	} else {
-		fmt.Println("    nim verify --expect-head <hash>")
+		fmt.Fprintln(w, "    nim verify --expect-head <hash>")
 	}
-	if !seedKnown {
-		fmt.Println()
-		fmt.Println("Restore machine-id to check the first entry again. Its absence is why entry 1")
-		fmt.Println("is unchecked; it is not evidence that anything was altered.")
+	if !snap.Journal.VerificationMaterial {
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "Restore machine-id to check the first entry again. Its absence is why entry 1")
+		fmt.Fprintln(w, "is unchecked; it is not evidence that anything was altered.")
 	}
-	return nil
 }
 
-// printGaps reports what the journal can tell about its own incompleteness.
-func printGaps(j *journal.Journal) error {
-	loss, err := j.Loss()
-	if err != nil {
-		return err
-	}
-	anomalies, err := j.Anomalies()
-	if err != nil {
-		return err
-	}
-	if loss.UnfinishedSessions == 0 && loss.SessionsWithGaps == 0 && len(anomalies) == 0 {
+// renderGaps reports what the journal can tell about its own incompleteness.
+func renderGaps(w io.Writer, gaps readmodel.Gaps) {
+	if gaps.UnfinishedSessions == 0 && gaps.SessionsWithGaps == 0 && len(gaps.Anomalies) == 0 {
 		// Not "no gaps": events dropped on the daemon's write path leave no
 		// trace to find, so this can only speak for the ones that do.
-		fmt.Println("         gaps           none of the detectable kinds found")
-		return nil
+		fmt.Fprintln(w, "         gaps           none of the detectable kinds found")
+		return
 	}
-	if loss.MissingCallEntries > 0 {
-		fmt.Printf("         gaps           %d call(s) missing across %d session(s): reported but not recorded\n",
-			loss.MissingCallEntries, loss.SessionsWithGaps)
+	if gaps.MissingCallEntries > 0 {
+		fmt.Fprintf(w, "         gaps           %d call(s) missing across %d session(s): reported but not recorded\n",
+			gaps.MissingCallEntries, gaps.SessionsWithGaps)
 	}
-	if loss.UnfinishedSessions > 0 {
-		fmt.Printf("         unfinished     %d session(s) with no end (a session running now looks the same)\n",
-			loss.UnfinishedSessions)
+	if gaps.UnfinishedSessions > 0 {
+		fmt.Fprintf(w, "         unfinished     %d session(s) with no end (a session running now looks the same)\n",
+			gaps.UnfinishedSessions)
 	}
-	for _, name := range sortedKeys(anomalies) {
-		fmt.Printf("         anomaly        %-16s %d (relayed without inspection)\n", name, anomalies[name])
+	for _, name := range sortedKeys(gaps.Anomalies) {
+		fmt.Fprintf(w, "         anomaly        %-16s %d (relayed without inspection)\n", name, gaps.Anomalies[name])
 	}
-	return nil
 }
 
 func runLog(args []string) error {
 	fs := flag.NewFlagSet("log", flag.ExitOnError)
 	limit := fs.Int("n", 50, "how many calls to show")
+	asJSON := fs.Bool("json", false, "stream journal entries as one JSON object per line")
+	follow := fs.Bool("follow", false, "keep watching for new entries")
+	since := fs.Int64("since", 0, "stream entries after this chain_seq")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+
+	sinceSet := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "since" {
+			sinceSet = true
+		}
+	})
+
+	// --json and --follow both mean "the entry stream", which is a different
+	// view from the default: every kind of entry, in the journal's own order,
+	// oldest first. The plain table stays a table of calls.
+	if *asJSON || *follow {
+		return streamEntries(*asJSON, *follow, *since, sinceSet, *limit)
 	}
 
 	j, err := openJournal()
@@ -299,6 +320,161 @@ func runLog(args []string) error {
 	return nil
 }
 
+// pollInterval is how long the stream waits after catching up. Short enough to
+// feel live, long enough that watching an idle journal costs nothing.
+const pollInterval = 250 * time.Millisecond
+
+// streamEntries reads the journal by cursor and writes what it finds.
+//
+// The cursor is chain_seq, so this needs nothing the journal does not already
+// have: read what came after the last position, remember the new one, ask
+// again. Stopping and restarting resumes cleanly, and so will a console.
+//
+// Without --since, --follow starts at the head and shows only what happens
+// next, the way tail -f does; a plain --json dump starts at the beginning.
+func streamEntries(asJSON, follow bool, since int64, sinceSet bool, limit int) error {
+	j, err := openJournal()
+	if err != nil {
+		return err
+	}
+	defer j.Close()
+
+	cursor := since
+	if follow && !sinceSet {
+		length, _, err := j.Head()
+		if err != nil {
+			return err
+		}
+		cursor = length
+	}
+
+	out := bufio.NewWriter(os.Stdout)
+	defer out.Flush()
+	encoder := json.NewEncoder(out)
+
+	for {
+		// Drain everything available before waiting: a full page means there is
+		// probably more, and a reader that slept between pages would fall
+		// steadily further behind a busy journal.
+		for {
+			page, err := readmodel.Stream(j, cursor, limit)
+			if err != nil {
+				return err
+			}
+			for _, ev := range page.Events {
+				if asJSON {
+					err = encoder.Encode(ev)
+				} else {
+					_, err = fmt.Fprintln(out, formatEvent(ev))
+				}
+				if err != nil {
+					return nil // the reader went away; that is not our error
+				}
+			}
+			cursor = page.Cursor
+			if len(page.Events) < limit {
+				break
+			}
+		}
+		if err := out.Flush(); err != nil {
+			return nil
+		}
+		if !follow {
+			return nil
+		}
+		time.Sleep(pollInterval)
+	}
+}
+
+// formatEvent renders one entry on one line, leading with the position that
+// orders it.
+func formatEvent(ev readmodel.Event) string {
+	line := fmt.Sprintf("%6d  %-14s %s", ev.ChainSeq, ev.Kind, shortID(ev.SessionID))
+	add := func(format string, args ...any) { line += "  " + fmt.Sprintf(format, args...) }
+
+	if ev.Seq != nil {
+		add("seq=%d", *ev.Seq)
+	}
+	if ev.Connector != nil {
+		add("connector=%s", *ev.Connector)
+	}
+	if ev.Client != nil {
+		add("client=%s", *ev.Client)
+	}
+	if ev.Tool != nil {
+		add("tool=%s", *ev.Tool)
+	}
+	if ev.Decision != nil {
+		add("decision=%s", *ev.Decision)
+	}
+	if ev.Anomaly != nil {
+		add("anomaly=%s", *ev.Anomaly)
+	}
+	if ev.OK != nil {
+		if *ev.OK {
+			add("ok")
+		} else {
+			add("failed")
+		}
+	}
+	if ev.DurationMS != nil {
+		add("%dms", *ev.DurationMS)
+	}
+	if ev.ProtocolVersion != nil {
+		add("protocol=%s", *ev.ProtocolVersion)
+	}
+	return line
+}
+
+func shortID(id string) string {
+	if len(id) <= 8 {
+		return id
+	}
+	return id[:8]
+}
+
+// runConsole serves the read-only view.
+//
+// A separate process from the daemon on purpose: the daemon is what will decide
+// things, and it should not also be a web server. Running apart also means the
+// console still works when the daemon does not, which is when someone is most
+// likely to want it.
+func runConsole(args []string) error {
+	fs := flag.NewFlagSet("console", flag.ExitOnError)
+	addr := fs.String("addr", "127.0.0.1:7717", "loopback address to serve on")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	j, err := openJournal()
+	if err != nil {
+		return err
+	}
+	defer j.Close()
+
+	// Belt and braces: openJournal already returns a read-only handle, and this
+	// refuses to serve anything else. A console that could write would be a
+	// different product.
+	if !j.ReadOnly() {
+		return fmt.Errorf("refusing to serve: the journal was not opened read-only")
+	}
+
+	listener, err := console.Listen(*addr)
+	if err != nil {
+		return err
+	}
+	srv := console.New(j, cfg.Daemon.Socket)
+
+	fmt.Println("nim console on http://" + listener.Addr().String())
+	fmt.Println("reading", cfg.DatabasePath())
+	fmt.Println("read-only: this cannot change anything Nim recorded.")
+	return http.Serve(listener, srv.Handler())
+}
+
 func runVerify(args []string) error {
 	fs := flag.NewFlagSet("verify", flag.ExitOnError)
 	expect := fs.String("expect-head", "", "the head hash you recorded earlier")
@@ -312,29 +488,27 @@ func runVerify(args []string) error {
 	}
 	defer j.Close()
 
-	report, err := j.Verify(*expect)
+	// The same four-way reading of the chain the console and `nim status` use.
+	state, err := readmodel.Check(j, *expect)
 	if err != nil {
 		return err
 	}
-	// Keyed on Problem rather than on OK: an empty journal is not OK either,
-	// but it is not a failure, and reporting it as one would say something went
-	// wrong when the truth is that nothing has happened yet.
-	if report.Problem != "" {
+	if state.Chain == readmodel.ChainBroken {
 		fmt.Fprintln(os.Stderr, "journal FAILED verification")
-		fmt.Fprintln(os.Stderr, " ", report.Problem)
+		fmt.Fprintln(os.Stderr, " ", state.Problem)
 		os.Exit(1)
 	}
 
 	// An empty journal is not a verified one. It is indistinguishable from one
 	// whose every entry was lost, and saying "verified" would put those two on
 	// the same footing.
-	if report.Empty {
+	if state.Chain == readmodel.ChainEmpty {
 		fmt.Println("nothing recorded yet: the journal has no entries, so there was nothing to check")
 		return nil
 	}
 
-	if report.Partial {
-		fmt.Printf("journal checked from entry 2 on: %d entries, head %s\n", report.Entries, report.Head)
+	if state.Chain == readmodel.ChainPartial {
+		fmt.Printf("journal checked from entry 2 on: %d entries, head %s\n", state.Entries, state.Head)
 		fmt.Println()
 		fmt.Println("Entry 1 could not be checked because", config.MachineIDPath(), "is missing.")
 		fmt.Println("That file seeds the chain. Its absence is missing verification material, not")
@@ -343,7 +517,7 @@ func runVerify(args []string) error {
 		return nil
 	}
 
-	fmt.Printf("journal self-consistent: %d entries, head %s\n", report.Entries, report.Head)
+	fmt.Printf("journal self-consistent: %d entries, head %s\n", state.Entries, state.Head)
 	if *expect != "" {
 		fmt.Println("head matches the one you recorded, so nothing before it has been rewritten")
 		return nil
@@ -356,9 +530,12 @@ func runVerify(args []string) error {
 	return nil
 }
 
-// openJournal opens the journal for reading. It never creates an install
-// identifier: a read command that invented one would reseed the chain and make
-// the next verification report tampering.
+// openJournal opens the journal for reading and nothing else.
+//
+// Read-only twice over: SQLite refuses writes on the handle, and it never
+// creates an install identifier, because a read command that invented one would
+// reseed the chain and make the next verification report tampering. Reading a
+// record should not be able to change it.
 func openJournal() (*journal.Journal, error) {
 	cfg, err := config.Load()
 	if err != nil {
@@ -368,7 +545,7 @@ func openJournal() (*journal.Journal, error) {
 		return nil, fmt.Errorf("no journal at %s yet", cfg.DatabasePath())
 	}
 	seed, _ := config.ReadMachineID()
-	return journal.Open(cfg.DatabasePath(), seed)
+	return journal.OpenReadOnly(cfg.DatabasePath(), seed)
 }
 
 func sortedKeys(m map[string]int) []string {
