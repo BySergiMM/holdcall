@@ -9,8 +9,10 @@ is forwarded byte for byte.
 
 ## Status
 
-Pre-alpha. Nothing here works yet. See `docs/milestones.md` for what is being
-built and in what order.
+Pre-alpha. The relay and the journal work: every `tools/call` is recorded, and
+a real MCP client cannot tell it is going through Nim. Nothing is blocked,
+budgeted or approved yet -- see `docs/milestones.md` for what is being built
+and in what order.
 
 ## Shape
 

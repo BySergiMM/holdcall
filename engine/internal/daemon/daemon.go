@@ -23,22 +23,23 @@ import (
 	"github.com/BySergiMM/nim/engine/internal/config"
 	"github.com/BySergiMM/nim/engine/internal/journal"
 	"github.com/BySergiMM/nim/engine/internal/mcp"
+	"github.com/BySergiMM/nim/engine/internal/uuid"
 )
 
 // Event is one report from a shim.
 type Event struct {
-	Kind       string  `json:"kind"`
-	SessionID  string  `json:"session_id"`
-	MachineID  string  `json:"machine_id,omitempty"`
-	Client     string  `json:"client,omitempty"`
-	Target     string  `json:"target,omitempty"`
-	Seq        int     `json:"seq,omitempty"`
-	Tool       string  `json:"tool,omitempty"`
-	Digest     string  `json:"params_digest,omitempty"`
-	Decision   string  `json:"decision,omitempty"`
-	OK         *bool   `json:"ok,omitempty"`
-	DurationMS *int    `json:"duration_ms,omitempty"`
-	OccurredAt string  `json:"occurred_at,omitempty"`
+	Kind       string `json:"kind"`
+	SessionID  string `json:"session_id"`
+	MachineID  string `json:"machine_id,omitempty"`
+	Client     string `json:"client,omitempty"`
+	Target     string `json:"target,omitempty"`
+	Seq        int    `json:"seq,omitempty"`
+	Tool       string `json:"tool,omitempty"`
+	Digest     string `json:"params_digest,omitempty"`
+	Decision   string `json:"decision,omitempty"`
+	OK         *bool  `json:"ok,omitempty"`
+	DurationMS *int   `json:"duration_ms,omitempty"`
+	OccurredAt string `json:"occurred_at,omitempty"`
 }
 
 const (
@@ -88,23 +89,45 @@ var errAlreadyRunning = errors.New("another daemon holds the socket")
 
 // listen binds the socket, clearing a stale file left by a crashed daemon but
 // never one a live daemon is using.
+//
+// Several daemons can start at once -- a client spawning several shims after
+// a crash left a stale socket behind all race to reclaim the same path.
+// acquireStartupLock serializes the whole check-and-reclaim sequence below
+// across those processes on unix, which is what actually closes the race: two
+// processes can each observe the socket as stale in the same window, and
+// without the lock one could unlink the socket the other just bound. The
+// retry loop remains underneath it as the fallback on platforms where that
+// lock is a no-op (see lock_windows.go) -- weaker, but still better than a
+// single attempt, and a daemon that ultimately loses backs off cleanly on its
+// next dial rather than unlinking a live socket forever.
 func listen(path string) (net.Listener, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
-	ln, err := net.Listen("unix", path)
-	if err == nil {
-		return ln, nil
+	unlock, err := acquireStartupLock(path + ".lock")
+	if err != nil {
+		return nil, fmt.Errorf("acquiring the startup lock: %w", err)
 	}
-	// Something is at that path. Ask it whether it is alive.
-	if conn, dialErr := net.DialTimeout("unix", path, 500*time.Millisecond); dialErr == nil {
-		conn.Close()
-		return nil, errAlreadyRunning
+	defer unlock()
+
+	const attempts = 3
+	var lastErr error
+	for i := 0; i < attempts; i++ {
+		ln, err := net.Listen("unix", path)
+		if err == nil {
+			return ln, nil
+		}
+		lastErr = err
+		// Something is at that path. Ask it whether it is alive.
+		if conn, dialErr := net.DialTimeout("unix", path, 500*time.Millisecond); dialErr == nil {
+			conn.Close()
+			return nil, errAlreadyRunning
+		}
+		if rmErr := os.Remove(path); rmErr != nil && !os.IsNotExist(rmErr) {
+			return nil, fmt.Errorf("removing stale socket %s: %w", path, rmErr)
+		}
 	}
-	if rmErr := os.Remove(path); rmErr != nil {
-		return nil, err
-	}
-	return net.Listen("unix", path)
+	return nil, fmt.Errorf("could not bind %s: %w", path, lastErr)
 }
 
 func handle(conn net.Conn, j *journal.Journal) {
@@ -141,7 +164,11 @@ func apply(ev Event, j *journal.Journal) error {
 		})
 	case KindCall:
 		return j.RecordCall(journal.Call{
-			ID:           fmt.Sprintf("%s-%d", ev.SessionID, ev.Seq),
+			// The row is keyed for idempotency by (session_id, seq), not by
+			// id (see journal.RecordCall's ON CONFLICT clause), so a fresh id
+			// on every report -- request and response alike -- is safe: only
+			// the first one survives once the update path takes over.
+			ID:           uuid.New(),
 			SessionID:    ev.SessionID,
 			Seq:          ev.Seq,
 			Tool:         ev.Tool,

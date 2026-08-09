@@ -11,8 +11,6 @@
 package shim
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -25,6 +23,7 @@ import (
 	"github.com/BySergiMM/nim/engine/internal/config"
 	"github.com/BySergiMM/nim/engine/internal/daemon"
 	"github.com/BySergiMM/nim/engine/internal/mcp"
+	"github.com/BySergiMM/nim/engine/internal/uuid"
 )
 
 // Options describes one relayed server.
@@ -47,7 +46,7 @@ type Shim struct {
 	sessionID string
 	reporter  *reporter
 
-	mu      sync.Mutex
+	mu       sync.Mutex
 	inFlight map[string]pending
 	seq      int
 }
@@ -69,7 +68,7 @@ func Run(opts Options) error {
 
 	s := &Shim{
 		opts:      opts,
-		sessionID: newID(),
+		sessionID: uuid.New(),
 		reporter:  dialDaemon(opts.Config),
 		inFlight:  make(map[string]pending),
 	}
@@ -91,10 +90,17 @@ func Run(opts Options) error {
 		return fmt.Errorf("cannot start %s: %w", opts.Command[0], err)
 	}
 
+	mid, midErr := machineID()
+	if midErr != nil {
+		// Reported but not fatal: the relay must keep running regardless.
+		// The daemon's own NOT NULL constraint on machine_id is the backstop
+		// that refuses to record this session under a fabricated identity.
+		fmt.Fprintf(os.Stderr, "nim: %v\n", midErr)
+	}
 	s.report(daemon.Event{
 		Kind:       daemon.KindSessionStart,
 		SessionID:  s.sessionID,
-		MachineID:  machineID(),
+		MachineID:  mid,
 		Client:     opts.Client,
 		Target:     opts.Target,
 		OccurredAt: nowRFC3339(),
@@ -252,8 +258,9 @@ func (r *reporter) close() {
 	<-r.done
 }
 
-// startDaemon launches this same binary in daemon mode. Several shims may race;
-// the daemon that loses the socket exits quietly.
+// startDaemon launches this same binary in daemon mode, detached so it
+// outlives the shim's process group and session -- see daemonSysProcAttr.
+// Several shims may race; the daemon that loses the socket exits quietly.
 //
 // Its diagnostics go to a log file rather than nowhere. A daemon that fails to
 // start silently leaves the user believing calls are being recorded when they
@@ -263,32 +270,73 @@ func startDaemon() bool {
 	if err != nil {
 		return false
 	}
-	cmd := exec.Command(self, "daemon")
-	if log, err := os.OpenFile(config.LogPath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600); err == nil {
-		cmd.Stdout, cmd.Stderr = log, log
-	}
-	return cmd.Start() == nil
+	log, _ := os.OpenFile(config.LogPath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	return startDaemonProcess(self, log) == nil
 }
 
 func nowRFC3339() string { return time.Now().UTC().Format(time.RFC3339Nano) }
 
-func newID() string {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		return fmt.Sprintf("%d", time.Now().UnixNano())
-	}
-	return hex.EncodeToString(b)
-}
-
 // machineID is a stable, opaque identifier for this install. It is not a
 // hostname and not a user: the mirror must not carry either.
-func machineID() string {
+//
+// Several shims for several configured MCP servers routinely start at once
+// (see startDaemon's "several shims may race" comment), so on a fresh install
+// this can genuinely be called from more than one process concurrently.
+// os.WriteFile would let each one truncate and overwrite the file with its
+// own id, leaving whichever wrote last as the winner -- silently splitting
+// one machine's history across two ids in the mirror. O_EXCL makes only the
+// first create succeed; every other racer waits for what the winner writes
+// rather than minting a second id of its own.
+//
+// The one case this cannot paper over is the winner dying between creating
+// the file and writing to it: every later caller would find a permanently
+// empty file, unable to either read an id from it or O_EXCL-create it afresh.
+// Minting a fallback id there would be exactly the bug this function exists
+// to prevent -- a second, inconsistent id for one install -- so this reports
+// an error instead. Callers must not paper over that with their own fallback
+// id either; the caller here reports the row without a machine_id rather than
+// inventing one, and the daemon-side NOT NULL constraint refuses to record
+// it under a fabricated identity.
+func machineID() (string, error) {
 	path := config.Home() + string(os.PathSeparator) + "machine-id"
-	if b, err := os.ReadFile(path); err == nil && len(b) > 0 {
-		return string(b)
+	if id, ok := readMachineID(path); ok {
+		return id, nil
 	}
-	id := newID()
-	_ = os.MkdirAll(config.Home(), 0o700)
-	_ = os.WriteFile(path, []byte(id), 0o600)
-	return id
+	if err := os.MkdirAll(config.Home(), 0o700); err != nil {
+		return "", fmt.Errorf("machine id: %w", err)
+	}
+
+	id := uuid.New()
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err == nil {
+		if _, writeErr := f.Write([]byte(id)); writeErr != nil {
+			f.Close()
+			os.Remove(path) // do not leave a permanently unwritable file for the next caller
+			return "", fmt.Errorf("machine id: writing %s: %w", path, writeErr)
+		}
+		f.Close()
+		return id, nil
+	}
+	if !os.IsExist(err) {
+		return "", fmt.Errorf("machine id: creating %s: %w", path, err)
+	}
+
+	// Someone else is creating it. Their write is a handful of bytes and
+	// finishes almost immediately; wait for it rather than returning a
+	// second, inconsistent id for the same install.
+	for i := 0; i < 20; i++ {
+		if got, ok := readMachineID(path); ok {
+			return got, nil
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return "", fmt.Errorf("machine id: %s exists but was never written; a previous process may have died while creating it", path)
+}
+
+func readMachineID(path string) (string, bool) {
+	b, err := os.ReadFile(path)
+	if err != nil || len(b) == 0 {
+		return "", false
+	}
+	return string(b), true
 }

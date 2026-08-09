@@ -57,6 +57,21 @@ func TestValidateExplainsAnOverlongSocket(t *testing.T) {
 	}
 }
 
+// The sqlite driver treats the first '?' in a DSN as the start of a query
+// string and silently drops everything before it from the path, so a data
+// directory containing one would make journal.Open open the wrong file
+// instead of failing loudly.
+func TestValidateRejectsAQuestionMarkInDataDir(t *testing.T) {
+	cfg := Config{Daemon: Daemon{Socket: "/tmp/nim.sock", DataDir: "/tmp/nim?data"}}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("a data_dir containing '?' must be rejected")
+	}
+	if !strings.Contains(err.Error(), "?") {
+		t.Errorf("unhelpful message: %v", err)
+	}
+}
+
 func TestConfigTomlIsOptional(t *testing.T) {
 	t.Setenv(HomeEnvVar, t.TempDir())
 	cfg, err := Load()

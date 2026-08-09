@@ -46,20 +46,21 @@ type Journal struct{ db *sql.DB }
 
 // Open prepares the database. WAL lets the dashboard read while the daemon
 // writes, which matters as soon as anything else looks at this file.
+//
+// journal_mode and foreign_keys are set through the DSN, not a one-time Exec
+// after Open: foreign_keys and busy_timeout are per-connection pragmas in
+// SQLite, and database/sql's pool can open more than one physical connection
+// under concurrent load (one handle() goroutine per shim connection here) --
+// an Exec right after Open only ever reaches the first. A connection opened
+// later without foreign_keys on would silently stop enforcing the reference
+// from nim_calls to nim_sessions. journal_mode itself is persisted in the
+// database file the first time it is set, so it does not strictly need to be
+// per-connection, but there is no reason to special-case it.
 func Open(path string) (*Journal, error) {
-	db, err := sql.Open("sqlite", path)
+	dsn := path + "?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=on"
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
-	}
-	for _, pragma := range []string{
-		`pragma journal_mode=wal`,
-		`pragma busy_timeout=5000`,
-		`pragma foreign_keys=on`,
-	} {
-		if _, err := db.Exec(pragma); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("%s: %w", pragma, err)
-		}
 	}
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()
@@ -107,15 +108,18 @@ func (j *Journal) EndSession(id string, at time.Time) error {
 }
 
 // RecordCall is idempotent on (session_id, seq): a shim that retries after a
-// dropped connection cannot produce duplicates.
+// dropped connection cannot produce duplicates. The update is monotonic --
+// coalesce keeps whatever outcome is already on the row when the incoming
+// report has none -- so a retried request-time report (no outcome yet)
+// arriving after the response-time report already landed cannot erase it.
 func (j *Journal) RecordCall(c Call) error {
 	_, err := j.db.Exec(
 		`insert into nim_calls
 		   (id, session_id, seq, tool, params_digest, decision, ok, duration_ms, occurred_at)
 		 values (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 on conflict (session_id, seq) do update set
-		   ok          = excluded.ok,
-		   duration_ms = excluded.duration_ms`,
+		   ok          = coalesce(excluded.ok, nim_calls.ok),
+		   duration_ms = coalesce(excluded.duration_ms, nim_calls.duration_ms)`,
 		c.ID, c.SessionID, c.Seq, c.Tool, c.ParamsDigest, c.Decision,
 		c.OK, c.DurationMS, c.OccurredAt.UTC().Format(time.RFC3339Nano),
 	)

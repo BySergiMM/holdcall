@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 )
@@ -106,6 +107,16 @@ func (c Config) Validate() error {
 			"socket path is %d characters and the limit is %d: %s\n"+
 				"set a shorter [daemon] socket in %s",
 			n, MaxSocketPath, c.Daemon.Socket, Path())
+	}
+	// The sqlite driver's DSN parser treats the first '?' in a non-"file:"
+	// data source name as the start of a query string, silently truncating
+	// everything before it as the path -- journal.Open would open the wrong
+	// file rather than fail.
+	if strings.ContainsRune(c.Daemon.DataDir, '?') {
+		return fmt.Errorf(
+			"data_dir contains '?', which the sqlite driver reads as the start of a query string: %s\n"+
+				"set a [daemon] data_dir without '?' in %s",
+			c.Daemon.DataDir, Path())
 	}
 	return nil
 }

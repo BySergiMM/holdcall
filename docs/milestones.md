@@ -20,7 +20,7 @@ that needs it.
   read `method`; the buffer is never re-serialised. Re-encoding JSON changes key
   order and whitespace and breaks clients in ways that are hard to reproduce.
 
-## M1 — Pass-through (current)
+## M1 — Pass-through
 
 The shim spawns one downstream MCP server and relays stdio in both directions,
 forwarding every byte untouched. It recognises `tools/call` and reports it to
@@ -52,7 +52,7 @@ Three findings worth keeping:
 The second and third were invisible to unit tests and obvious the moment a real
 client was involved. That is the argument for keeping the rig.
 
-## M2 — Daemon lifetime
+## M2 — Daemon lifetime (current)
 
 On Windows the daemon dies with the process tree that spawned it. State survives
 in SQLite and the next shim restarts it, so M1 stands, but a daemon shared
@@ -60,6 +60,22 @@ across sessions needs proper detachment.
 
 **Why it matters:** budgets, the hash-chained journal and human approval all
 need one writer that outlives any single client session.
+
+**Status: in progress.** The daemon is now started detached from the shim's
+process group and session: `Setsid` on Linux and macOS, `CREATE_BREAKAWAY_FROM_JOB`
++ `DETACHED_PROCESS` (with a fallback for job objects that forbid breakaway) on
+Windows. Verified end to end on macOS: a `nim serve` run inside its own session,
+with the whole session's process group killed, leaves the daemon running. The
+Windows path only cross-compiles here and has not run on real Windows.
+
+Startup is also now safe when several daemons race to reclaim the same stale
+socket left by a crash -- the ordinary case of a client spawning several shims
+at once with no daemon yet alive. An `flock`-based startup lock on Linux and
+macOS serializes the check-and-reclaim sequence, closing a real split-brain
+window (reproduced directly: without the lock, 8 daemons racing on one stale
+socket produced 2-5 simultaneous "winners"; with it, always exactly 1). No
+verified equivalent exists for Windows yet, so that platform keeps only the
+weaker retry-based mitigation.
 
 ## M3 — Credentials
 
