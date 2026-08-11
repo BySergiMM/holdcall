@@ -38,6 +38,7 @@ import (
 	"github.com/BySergiMM/nim/engine/internal/daemon"
 	"github.com/BySergiMM/nim/engine/internal/journal"
 	"github.com/BySergiMM/nim/engine/internal/mcp"
+	"github.com/BySergiMM/nim/engine/internal/peer"
 )
 
 // decisionTimeout bounds how long a tools/call waits for the daemon.
@@ -533,6 +534,21 @@ func dialDaemon(cfg config.Config) *reporter {
 			}
 		}
 	}
+	// An impostor on the socket is treated as no daemon at all, which by this
+	// relay's own rule means every call is denied. Accepting its answers
+	// instead would hand it the decision: it could allow everything the deny
+	// list refuses, and read every tool name and argument digest as they went
+	// past. Verified before a single byte is sent, so it never learns what
+	// this session was going to ask.
+	if conn != nil && !daemonIsGenuine(conn) {
+		fmt.Fprintf(os.Stderr,
+			"nim: the process listening on %s is not Nim\n"+
+				"nim: refusing to take decisions from it; every tool call in this session will be denied\n",
+			cfg.Daemon.Socket)
+		conn.Close()
+		conn = nil
+	}
+
 	if conn != nil {
 		r.attach(conn)
 	} else {
@@ -546,6 +562,33 @@ func dialDaemon(cfg config.Config) *reporter {
 	}
 	go r.loop()
 	return r
+}
+
+// daemonIsGenuine reports whether the process on the other end of conn is this
+// same binary.
+//
+// Verification used to run in one direction only: the daemon checked its
+// callers, and nothing checked the daemon. Reproduced live -- a plain python
+// process that binds the socket path first becomes the daemon for every shim
+// that starts afterwards. As one it could nominate the command a credential is
+// injected into and have the relay spawn it, allow every call the deny list
+// refuses, and collect every tool name and argument digest that went past. The
+// real daemon, finding the path already bound and answering, concludes another
+// daemon is running and exits, so the impostor is not even competing with it.
+//
+// The socket lives in a per-user directory on macOS, but on Linux without
+// XDG_RUNTIME_DIR it is /tmp, where any local user can create a path first.
+// Either way a downstream MCP server -- code the operator did not write, which
+// is the whole reason peer verification exists -- runs as the same user and
+// can do this between one session and the next.
+//
+// Where the platform cannot answer (Windows, see internal/peer), this reports
+// true, exactly as the daemon's own check treats unsupported as not-a-denial.
+// It cannot invent a guarantee the OS does not offer, and pretending otherwise
+// would only move the gap somewhere less visible.
+func daemonIsGenuine(conn net.Conn) bool {
+	supported, isSelf := peer.IsSelf(conn)
+	return !supported || isSelf
 }
 
 // attach binds the connection and the codecs that read and write it, so they
@@ -824,6 +867,15 @@ func fetchConnector(cfg config.Config, connector string) (injection, error) {
 		}
 	}
 	defer conn.Close()
+
+	// Whoever is on the other end of this decides what command receives a
+	// credential, so it has to be Nim. Refusing to spawn is the only safe
+	// answer here: an impostor's answer is worse than no answer.
+	if !daemonIsGenuine(conn) {
+		return injection{}, fmt.Errorf(
+			"the process listening on %s is not Nim; refusing to ask it for a credential or a command",
+			cfg.Daemon.Socket)
+	}
 
 	conn.SetDeadline(time.Now().Add(2 * time.Second))
 

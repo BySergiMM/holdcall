@@ -1,4 +1,4 @@
-package daemon
+package peer
 
 import "net"
 
@@ -19,6 +19,6 @@ import "net"
 // SO_PEERCRED or Darwin's LOCAL_PEERPID) -- see peer_windows.go. Callers
 // must decide what "not supported" means for their own request; it is not
 // automatically an allow.
-func verifyPeerIsSelf(conn net.Conn) (supported, same bool) {
-	return verifyPeerIsSelfImpl(conn)
+func IsSelf(conn net.Conn) (supported, same bool) {
+	return isSelfImpl(conn)
 }

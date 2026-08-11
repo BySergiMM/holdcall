@@ -1,6 +1,6 @@
 //go:build linux
 
-package daemon
+package peer
 
 import (
 	"fmt"
@@ -9,7 +9,7 @@ import (
 	"syscall"
 )
 
-// verifyPeerIsSelfImpl uses SO_PEERCRED (a standard Linux getsockopt on
+// isSelfImpl uses SO_PEERCRED (a standard Linux getsockopt on
 // AF_UNIX sockets, giving the connecting process's pid/uid/gid with no
 // cooperation or truthfulness required from that process) and then resolves
 // that pid's executable via /proc/<pid>/exe, which the kernel itself
@@ -22,7 +22,7 @@ import (
 // are long-standing, widely-relied-on kernel interfaces (used by systemd,
 // sudo, and most local IPC authentication on Linux), so this is high
 // confidence by inspection, not empirical verification here.
-func verifyPeerIsSelfImpl(conn net.Conn) (supported, same bool) {
+func isSelfImpl(conn net.Conn) (supported, same bool) {
 	uc, ok := conn.(*net.UnixConn)
 	if !ok {
 		return false, false

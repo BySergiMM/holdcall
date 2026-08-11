@@ -1,11 +1,12 @@
 //go:build darwin
 
-package daemon
+package peer
 
 import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -47,7 +48,7 @@ func TestVerifyPeerIsSelfRejectsADifferentBinary(t *testing.T) {
 	client := exec.Command("nc", "-U")
 	conn := acceptOneConn(t, client)
 
-	supported, same := verifyPeerIsSelf(conn)
+	supported, same := IsSelf(conn)
 	if !supported {
 		t.Fatal("peer verification should be supported on darwin")
 	}
@@ -69,7 +70,7 @@ func TestVerifyPeerIsSelfAcceptsTheSameBinary(t *testing.T) {
 	client.Env = append(os.Environ(), "NIM_PEER_TEST_HELPER=1")
 	conn := acceptOneConn(t, client)
 
-	supported, same := verifyPeerIsSelf(conn)
+	supported, same := IsSelf(conn)
 	if !supported {
 		t.Fatal("peer verification should be supported on darwin")
 	}
@@ -114,7 +115,7 @@ func TestVerifyPeerIsSelfFailsClosedOnAClosedConnection(t *testing.T) {
 	}
 	conn.Close() // forces the subsequent raw.Control call to error
 
-	supported, same := verifyPeerIsSelf(conn)
+	supported, same := IsSelf(conn)
 	if !supported {
 		t.Fatal("a Control() error on darwin must be reported as checked (supported=true), not as unsupported -- unsupported is what authorized() treats as an automatic allow")
 	}
@@ -138,4 +139,16 @@ func TestHelperProcessDialAndBlock(t *testing.T) {
 	}
 	defer conn.Close()
 	time.Sleep(2 * time.Second)
+}
+
+// tempSocketPath keeps the path short: an AF_UNIX address is capped near 104
+// bytes and t.TempDir()'s nested test-name directories can overflow that.
+func tempSocketPath(t testing.TB) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "nimp")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	return filepath.Join(dir, "p.sock")
 }

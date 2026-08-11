@@ -1,10 +1,10 @@
 //go:build windows
 
-package daemon
+package peer
 
 import "net"
 
-// verifyPeerIsSelfImpl always reports unsupported: Windows' AF_UNIX
+// isSelfImpl always reports unsupported: Windows' AF_UNIX
 // implementation (afunix.sys) exposes no peer-credential API equivalent to
 // Linux's SO_PEERCRED or Darwin's LOCAL_PEERPID/LOCAL_PEERCRED. This was
 // investigated again, specifically, during the M3 final audit -- not just
@@ -58,6 +58,6 @@ import "net"
 // load-bearing gap, not a theoretical one -- see docs/milestones.md and the
 // M3 final audit report for the READY-WITH-KNOWN-LIMITATION reasoning this
 // feeds into.
-func verifyPeerIsSelfImpl(conn net.Conn) (supported, same bool) {
+func isSelfImpl(conn net.Conn) (supported, same bool) {
 	return false, false
 }

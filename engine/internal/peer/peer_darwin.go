@@ -1,6 +1,6 @@
 //go:build darwin
 
-package daemon
+package peer
 
 import (
 	"net"
@@ -13,7 +13,7 @@ import (
 // golang.org/x/sys/unix.
 const kernProcargs2 = 49
 
-// verifyPeerIsSelfImpl uses LOCAL_PEERPID (a Darwin-specific getsockopt on
+// isSelfImpl uses LOCAL_PEERPID (a Darwin-specific getsockopt on
 // AF_UNIX sockets, giving the connecting process's pid with no cooperation
 // or truthfulness required from that process) and then resolves that pid's
 // executable path via the same kern.procargs2 sysctl `ps` itself uses,
@@ -24,7 +24,7 @@ const kernProcargs2 = 49
 // Verified empirically against a real, separately-exec'd process during
 // development: LOCAL_PEERPID returned the true peer pid, and the sysctl
 // resolved it to that process's real binary path.
-func verifyPeerIsSelfImpl(conn net.Conn) (supported, same bool) {
+func isSelfImpl(conn net.Conn) (supported, same bool) {
 	uc, ok := conn.(*net.UnixConn)
 	if !ok {
 		return false, false

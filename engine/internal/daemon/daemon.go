@@ -31,6 +31,7 @@ import (
 	"github.com/BySergiMM/nim/engine/internal/config"
 	"github.com/BySergiMM/nim/engine/internal/credential"
 	"github.com/BySergiMM/nim/engine/internal/journal"
+	"github.com/BySergiMM/nim/engine/internal/peer"
 )
 
 // Event is one report from a shim.
@@ -267,7 +268,7 @@ func handle(conn net.Conn, j *journal.Journal, policy config.Policy, store crede
 	// keeps delivering buffered bytes after the writer has exited, so a
 	// client that writes and leaves could otherwise be read from after its
 	// pid was gone and denied for being fast.
-	if supported, isSelf := verifyPeerIsSelf(conn); supported && !isSelf {
+	if supported, isSelf := peer.IsSelf(conn); supported && !isSelf {
 		log.Printf("refusing a connection from an unverified peer")
 		return
 	}
