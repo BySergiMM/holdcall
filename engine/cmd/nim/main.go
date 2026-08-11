@@ -103,10 +103,12 @@ func runServe(args []string) error {
 	if *connector == "" {
 		return fmt.Errorf("--connector is required")
 	}
+	// The command may be omitted when the connector has one registered: the
+	// daemon then supplies the one it authorized, and that is the documented
+	// way to run a connector that holds a credential. Only shim.Run knows
+	// whether the daemon answered with one, so the "neither side has a
+	// command" case is reported there rather than guessed at here.
 	command := fs.Args()
-	if len(command) == 0 {
-		return fmt.Errorf("give the downstream server after --, e.g. -- npx -y some-mcp-server")
-	}
 
 	cfg, err := config.Load()
 	if err != nil {

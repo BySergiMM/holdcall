@@ -1,6 +1,8 @@
 package main
 
 import (
+	"flag"
+	"io"
 	"slices"
 	"testing"
 )
@@ -108,4 +110,32 @@ func TestParseConnectorSetArgsRejectsAValueInTheEnvFlag(t *testing.T) {
 			t.Errorf("expected an error for args %v (old KEY=value form)", args)
 		}
 	}
+}
+
+// runServe used to reject a missing command before the daemon was ever asked.
+// That broke the documented way to run a connector that holds a credential --
+// `nim serve --connector github`, with no `--` at all -- because the command
+// it should run lives with the connector, and only shim.Run knows whether the
+// daemon supplied one. Caught after the merge, by running the form the README
+// tells people to use.
+//
+// This asserts the parsing contract rather than spawning anything: a serve
+// invocation with no trailing command must be accepted here and left for
+// shim.Run to resolve.
+func TestServeAcceptsNoCommandSoAConnectorCanSupplyIt(t *testing.T) {
+	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	connector := fs.String("connector", "", "")
+	_ = fs.String("client", "", "")
+	if err := fs.Parse([]string{"--connector", "github"}); err != nil {
+		t.Fatalf("parsing: %v", err)
+	}
+	if *connector != "github" {
+		t.Fatalf("connector = %q, want github", *connector)
+	}
+	if got := fs.Args(); len(got) != 0 {
+		t.Fatalf("expected no trailing command, got %v", got)
+	}
+	// The guard that used to live here is gone; the only thing that may
+	// refuse is shim.Run, once it knows what the daemon answered.
 }
