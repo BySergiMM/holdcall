@@ -27,6 +27,13 @@ type Request struct {
 	// that receives a secret -- that is precisely the hole this field exists
 	// to close. See handleCredentialGet.
 	Command []string `json:"command,omitempty"`
+
+	// AgentName and AgentPath belong to the agent.* kinds. The path is what
+	// the operator typed; the daemon resolves it to an executable identity
+	// itself rather than accepting one from the caller, for the same reason
+	// it returns a connector's command rather than accepting one.
+	AgentName string `json:"agent_name,omitempty"`
+	AgentPath string `json:"agent_path,omitempty"`
 }
 
 const (
@@ -34,6 +41,10 @@ const (
 	KindConnectorSet    = "connector.set"
 	KindConnectorList   = "connector.list"
 	KindConnectorRemove = "connector.remove"
+
+	KindAgentAdd    = "agent.add"
+	KindAgentList   = "agent.list"
+	KindAgentRemove = "agent.remove"
 )
 
 // String redacts Secret so that even a future fmt.Printf/log.Printf("%v", req)
@@ -67,6 +78,9 @@ type Response struct {
 
 	// connector.list
 	Connectors []ConnectorInfo `json:"connectors,omitempty"`
+
+	// agent.list
+	Agents []AgentInfo `json:"agents,omitempty"`
 }
 
 // ConnectorInfo is non-secret connector metadata: which env var name a
@@ -78,13 +92,30 @@ type ConnectorInfo struct {
 	UpdatedAt string   `json:"updated_at"`
 }
 
+// AgentInfo is one enrolment as reported to the CLI. ExecDev and ExecIno are
+// the identity; ExecPath is what the operator enrolled and is shown so the
+// enrolment can be recognised, never so it can be matched on.
+type AgentInfo struct {
+	Name       string `json:"name"`
+	ExecDev    uint64 `json:"exec_dev"`
+	ExecIno    uint64 `json:"exec_ino"`
+	ExecPath   string `json:"exec_path"`
+	EnrolledAt string `json:"enrolled_at"`
+	// Current reports whether the file at ExecPath is still the enrolled one.
+	// False is not an error and not a security finding: a device number can
+	// change across a reboot and an application that updates itself becomes a
+	// different file. It means this enrolment no longer matches anything and
+	// should be repeated.
+	Current bool `json:"current"`
+}
+
 func (r Response) String() string {
 	env := "<none>"
 	if len(r.Env) > 0 {
 		env = "<redacted>"
 	}
-	return fmt.Sprintf("Response{ID:%s Error:%q Found:%v Env:%s Connectors:%d}",
-		r.ID, r.Error, r.Found, env, len(r.Connectors))
+	return fmt.Sprintf("Response{ID:%s Error:%q Found:%v Env:%s Connectors:%d Agents:%d}",
+		r.ID, r.Error, r.Found, env, len(r.Connectors), len(r.Agents))
 }
 
 // SendRequest writes req and reads back its Response on conn. Used by the

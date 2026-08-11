@@ -139,3 +139,48 @@ func TestServeAcceptsNoCommandSoAConnectorCanSupplyIt(t *testing.T) {
 	// The guard that used to live here is gone; the only thing that may
 	// refuse is shim.Run, once it knows what the daemon answered.
 }
+
+// An agent is identified by one executable file, so the invocation is two
+// positionals rather than nim serve's `--` convention, which would suggest
+// arguments that are never used.
+func TestParseAgentAddArgs(t *testing.T) {
+	abs := func(p string) (string, error) { return "/abs/" + p, nil }
+
+	name, path, err := parseAgentAddArgs([]string{"claude-code", "Claude"}, abs)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if name != "claude-code" || path != "/abs/Claude" {
+		t.Fatalf("got (%q, %q)", name, path)
+	}
+
+	for _, args := range [][]string{
+		{},
+		{"only-a-name"},
+		{"a", "b", "c"},
+		{"--exec", "/bin/sh"},
+	} {
+		if _, _, err := parseAgentAddArgs(args, abs); err == nil {
+			t.Errorf("expected an error for %v", args)
+		}
+	}
+}
+
+// The path is made absolute against the operator's own directory, because that
+// is the only place a relative path means what they think. The daemon runs
+// somewhere else and refuses anything relative.
+func TestAgentAddResolvesThePathBeforeSendingIt(t *testing.T) {
+	called := ""
+	abs := func(p string) (string, error) { called = p; return "/resolved" + p, nil }
+
+	_, path, err := parseAgentAddArgs([]string{"claude-code", "./Claude"}, abs)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if called != "./Claude" {
+		t.Fatalf("the raw path was not resolved, got %q", called)
+	}
+	if path != "/resolved./Claude" {
+		t.Fatalf("the resolved path was not used, got %q", path)
+	}
+}

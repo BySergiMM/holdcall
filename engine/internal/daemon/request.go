@@ -19,6 +19,9 @@ var requestKinds = map[string]bool{
 	KindConnectorSet:    true,
 	KindConnectorList:   true,
 	KindConnectorRemove: true,
+	KindAgentAdd:        true,
+	KindAgentList:       true,
+	KindAgentRemove:     true,
 }
 
 // requestState is the per-connection authorization state the Request family
@@ -26,13 +29,13 @@ var requestKinds = map[string]bool{
 //
 // kind and boundTarget are a second layer, independent of peer identity: a
 // connection commits to exactly one purpose on its first request -- asking for
-// its own target's credential, or managing connectors -- and to exactly one
-// target if that purpose is credential.get. A real shim only ever does one or
+// its own target's credential, managing connectors, or managing agents -- and
+// to exactly one target if that purpose is credential.get. A real shim only ever does one or
 // the other. Anything that mixes them, or pivots to a second target on one
 // connection, gets "unauthorized" rather than a more specific reason: specific
 // reasons are exactly the oracle an attacker iterating on this protocol wants.
 type requestState struct {
-	kind        string // "" | "credential" | "connector"
+	kind        string // "" | "credential" | "connector" | "agent"
 	boundTarget string // meaningful only once kind == "credential"
 }
 
@@ -70,6 +73,8 @@ func handleRequest(
 		thisKind = "credential"
 	case KindConnectorSet, KindConnectorList, KindConnectorRemove:
 		thisKind = "connector"
+	case KindAgentAdd, KindAgentList, KindAgentRemove:
+		thisKind = "agent"
 	default:
 		return Response{ID: req.ID, Error: fmt.Sprintf("unknown request kind %q", req.Kind)}
 	}
@@ -88,6 +93,12 @@ func handleRequest(
 		return handleConnectorList(req, j)
 	case KindConnectorRemove:
 		return handleConnectorRemove(req, j, store, locks)
+	case KindAgentAdd:
+		return handleAgentAdd(req, j)
+	case KindAgentList:
+		return handleAgentList(req, j)
+	case KindAgentRemove:
+		return handleAgentRemove(req, j)
 	default:
 		panic("unreachable: the switch above is exhaustive for req.Kind")
 	}

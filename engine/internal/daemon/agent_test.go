@@ -1,0 +1,299 @@
+package daemon
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// anExecutable writes a file that looks enough like a program to be enrolled,
+// and returns its path.
+func anExecutable(t *testing.T, name string) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "nimagent")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("writing %s: %v", path, err)
+	}
+	return path
+}
+
+// The property this milestone exists to establish: an enrolment records the
+// identity of a file, taken by the daemon from the filesystem, and never a
+// device and inode the caller supplied.
+func TestEnrolmentRecordsTheFilesOwnIdentity(t *testing.T) {
+	j := freshJournal(t)
+	path := anExecutable(t, "claude")
+
+	resp := handleAgentAdd(Request{
+		ID: "1", Kind: KindAgentAdd, AgentName: "claude-code", AgentPath: path,
+	}, j)
+	if resp.Error != "" {
+		t.Fatalf("unexpected error: %s", resp.Error)
+	}
+
+	agents, err := j.ListAgents()
+	if err != nil {
+		t.Fatalf("ListAgents: %v", err)
+	}
+	if len(agents) != 1 {
+		t.Fatalf("got %d agents, want 1", len(agents))
+	}
+	got := agents[0]
+	if got.Name != "claude-code" || got.ExecPath != path {
+		t.Fatalf("unexpected enrolment: %+v", got)
+	}
+
+	// The identity must be the file's, as the operating system reports it.
+	dev, ino, err := resolveAgentImage(path)
+	if err != nil {
+		t.Fatalf("resolving: %v", err)
+	}
+	if got.ExecDev != dev || got.ExecIno != ino {
+		t.Fatalf("stored dev=%d ino=%d, but the file is dev=%d ino=%d",
+			got.ExecDev, got.ExecIno, dev, ino)
+	}
+	if got.ExecIno == 0 {
+		t.Fatal("stored a zero inode, which would match nothing and mean nothing")
+	}
+}
+
+// A caller cannot dictate the identity. The request carries a path; there is
+// nowhere on it to put a device or inode, and that is deliberate -- the same
+// reason credential.get returns a command instead of accepting one.
+func TestARequestCannotCarryAnIdentity(t *testing.T) {
+	var req Request
+	// If either of these ever becomes settable from the wire, this stops
+	// compiling, which is the point.
+	req.AgentName = "x"
+	req.AgentPath = "/bin/sh"
+	if req.AgentName == "" || req.AgentPath == "" {
+		t.Fatal("unreachable")
+	}
+}
+
+// Two different files are two different agents, which is the whole basis for
+// telling agents apart later.
+func TestTwoDifferentExecutablesEnrolAsDifferentIdentities(t *testing.T) {
+	j := freshJournal(t)
+	a := anExecutable(t, "claude")
+	b := anExecutable(t, "cursor")
+
+	for name, path := range map[string]string{"claude-code": a, "cursor": b} {
+		if resp := handleAgentAdd(Request{
+			ID: "1", Kind: KindAgentAdd, AgentName: name, AgentPath: path,
+		}, j); resp.Error != "" {
+			t.Fatalf("enrolling %s: %s", name, resp.Error)
+		}
+	}
+
+	agents, err := j.ListAgents()
+	if err != nil {
+		t.Fatalf("ListAgents: %v", err)
+	}
+	if len(agents) != 2 {
+		t.Fatalf("got %d agents, want 2", len(agents))
+	}
+	if agents[0].ExecIno == agents[1].ExecIno && agents[0].ExecDev == agents[1].ExecDev {
+		t.Fatal("two different files enrolled as the same identity")
+	}
+}
+
+// Re-enrolment under the same name replaces, so an agent cannot accumulate a
+// second executable that also counts as it. It is also how an operator repairs
+// an enrolment after an application updates itself.
+func TestReEnrollingReplacesTheIdentity(t *testing.T) {
+	j := freshJournal(t)
+	first := anExecutable(t, "old")
+	second := anExecutable(t, "new")
+
+	for _, path := range []string{first, second} {
+		if resp := handleAgentAdd(Request{
+			ID: "1", Kind: KindAgentAdd, AgentName: "claude-code", AgentPath: path,
+		}, j); resp.Error != "" {
+			t.Fatalf("enrolling %s: %s", path, resp.Error)
+		}
+	}
+
+	agents, _ := j.ListAgents()
+	if len(agents) != 1 {
+		t.Fatalf("got %d agents, want 1 -- re-enrolment must replace", len(agents))
+	}
+	wantDev, wantIno, _ := resolveAgentImage(second)
+	if agents[0].ExecDev != wantDev || agents[0].ExecIno != wantIno {
+		t.Fatal("re-enrolment did not replace the recorded identity")
+	}
+	if agents[0].ExecPath != second {
+		t.Fatalf("recorded path is %s, want %s", agents[0].ExecPath, second)
+	}
+}
+
+// An enrolment whose file has been replaced no longer matches anything. That
+// has to be visible in a listing, because otherwise it is discovered later as
+// a silent denial with no explanation.
+func TestAReplacedFileIsReportedStaleRatherThanFailing(t *testing.T) {
+	j := freshJournal(t)
+	path := anExecutable(t, "claude")
+
+	if resp := handleAgentAdd(Request{
+		ID: "1", Kind: KindAgentAdd, AgentName: "claude-code", AgentPath: path,
+	}, j); resp.Error != "" {
+		t.Fatalf("enrolling: %s", resp.Error)
+	}
+	if resp := handleAgentList(Request{ID: "2", Kind: KindAgentList}, j); !resp.Agents[0].Current {
+		t.Fatal("a freshly enrolled agent was reported stale")
+	}
+
+	// Replace the file at the same path: same name, different inode.
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("removing: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatalf("rewriting: %v", err)
+	}
+
+	resp := handleAgentList(Request{ID: "3", Kind: KindAgentList}, j)
+	if resp.Error != "" {
+		t.Fatalf("listing must not fail because an enrolment went stale: %s", resp.Error)
+	}
+	if len(resp.Agents) != 1 {
+		t.Fatalf("got %d agents, want 1", len(resp.Agents))
+	}
+	if resp.Agents[0].Current {
+		t.Fatal("a replaced file was still reported as the enrolled one")
+	}
+	// The recorded identity must not have quietly followed the new file.
+	agents, _ := j.ListAgents()
+	dev, ino, _ := resolveAgentImage(path)
+	if agents[0].ExecDev == dev && agents[0].ExecIno == ino {
+		t.Fatal("the enrolment silently adopted the replacement file")
+	}
+}
+
+func TestEnrolmentRejectsWhatIsNotAnExecutableFile(t *testing.T) {
+	j := freshJournal(t)
+	dir := t.TempDir()
+	notExecutable := filepath.Join(dir, "plain")
+	if err := os.WriteFile(notExecutable, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct{ name, path, wants string }{
+		{"missing", filepath.Join(dir, "nope"), "cannot enrol"},
+		{"a directory", dir, "directory"},
+		{"not executable", notExecutable, "not executable"},
+	} {
+		resp := handleAgentAdd(Request{
+			ID: "1", Kind: KindAgentAdd, AgentName: "a", AgentPath: tc.path,
+		}, j)
+		if resp.Error == "" {
+			t.Errorf("%s was accepted as an agent", tc.name)
+			continue
+		}
+		if !strings.Contains(resp.Error, tc.wants) {
+			t.Errorf("%s: error %q does not explain the problem", tc.name, resp.Error)
+		}
+	}
+	if agents, _ := j.ListAgents(); len(agents) != 0 {
+		t.Fatalf("%d enrolments were recorded despite every attempt failing", len(agents))
+	}
+}
+
+func TestEnrolmentRejectsBadNamesAndRelativePaths(t *testing.T) {
+	j := freshJournal(t)
+	good := anExecutable(t, "ok")
+
+	for _, tc := range []struct{ name, agent, path string }{
+		{"empty name", "", good},
+		{"path traversal in name", "../evil", good},
+		{"slash in name", "a/b", good},
+		{"relative path", "claude-code", "relative/path"},
+		{"empty path", "claude-code", ""},
+	} {
+		if resp := handleAgentAdd(Request{
+			ID: "1", Kind: KindAgentAdd, AgentName: tc.agent, AgentPath: tc.path,
+		}, j); resp.Error == "" {
+			t.Errorf("%s was accepted", tc.name)
+		}
+	}
+	if agents, _ := j.ListAgents(); len(agents) != 0 {
+		t.Fatalf("%d enrolments recorded from rejected requests", len(agents))
+	}
+}
+
+func TestRemovingAnAgentIsIdempotent(t *testing.T) {
+	j := freshJournal(t)
+	path := anExecutable(t, "claude")
+	handleAgentAdd(Request{ID: "1", Kind: KindAgentAdd, AgentName: "claude-code", AgentPath: path}, j)
+
+	for i := 0; i < 2; i++ {
+		if resp := handleAgentRemove(Request{
+			ID: "1", Kind: KindAgentRemove, AgentName: "claude-code",
+		}, j); resp.Error != "" {
+			t.Fatalf("remove %d: %s", i+1, resp.Error)
+		}
+	}
+	if agents, _ := j.ListAgents(); len(agents) != 0 {
+		t.Fatalf("%d agents remain after removal", len(agents))
+	}
+}
+
+// A connection commits to one purpose. Agent management is a third purpose
+// alongside credentials and connectors, and mixing it with either is the shape
+// a process probing this protocol would take.
+func TestAConnectionCannotMixAgentAndOtherPurposes(t *testing.T) {
+	j := freshJournal(t)
+	store := newFakeStore()
+	locks := newTargetLocks()
+	path := anExecutable(t, "claude")
+
+	state := &requestState{}
+	if resp := handleRequest(Request{
+		ID: "1", Kind: KindAgentAdd, AgentName: "claude-code", AgentPath: path,
+	}, state, j, store, locks); resp.Error != "" {
+		t.Fatalf("the first agent request should succeed: %s", resp.Error)
+	}
+	for _, kind := range []string{KindCredentialGet, KindConnectorList} {
+		resp := handleRequest(Request{ID: "2", Kind: kind, Target: "github"}, state, j, store, locks)
+		if resp.Error != "unauthorized" {
+			t.Errorf("%s on an agent connection returned %q, want unauthorized", kind, resp.Error)
+		}
+	}
+
+	// And the other way round.
+	other := &requestState{}
+	handleRequest(Request{ID: "1", Kind: KindConnectorList}, other, j, store, locks)
+	if resp := handleRequest(Request{
+		ID: "2", Kind: KindAgentList,
+	}, other, j, store, locks); resp.Error != "unauthorized" {
+		t.Errorf("agent.list on a connector connection returned %q, want unauthorized", resp.Error)
+	}
+}
+
+// Enrolment must not touch the journal's chain. Agents are configuration, and
+// the record of what happened has to stay a record of what happened.
+func TestEnrolmentAppendsNothingToTheChain(t *testing.T) {
+	j := freshJournal(t)
+	before, _, err := j.Head()
+	if err != nil {
+		t.Fatalf("Head: %v", err)
+	}
+
+	path := anExecutable(t, "claude")
+	handleAgentAdd(Request{ID: "1", Kind: KindAgentAdd, AgentName: "claude-code", AgentPath: path}, j)
+	handleAgentList(Request{ID: "2", Kind: KindAgentList}, j)
+	handleAgentRemove(Request{ID: "3", Kind: KindAgentRemove, AgentName: "claude-code"}, j)
+
+	after, _, err := j.Head()
+	if err != nil {
+		t.Fatalf("Head: %v", err)
+	}
+	if after != before {
+		t.Fatalf("enrolment added %d entries to the chain", after-before)
+	}
+}

@@ -50,6 +50,8 @@ func main() {
 		err = runConsole(os.Args[2:])
 	case "connector":
 		err = runConnector(os.Args[2:])
+	case "agent":
+		err = runAgent(os.Args[2:])
 	case "verify":
 		err = runVerify(os.Args[2:])
 	case "version", "--version", "-v":

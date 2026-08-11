@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"fmt"
+	"path/filepath"
 	"regexp"
 )
 
@@ -105,6 +106,51 @@ func validateSecret(secret string) error {
 	}
 	if len(secret) > MaxSecretLen {
 		return fmt.Errorf("secret is %d bytes, over the %d limit", len(secret), MaxSecretLen)
+	}
+	return nil
+}
+
+// MaxAgentNameLen and MaxAgentPathLen bound the two agent fields. A name is an
+// identifier the operator chooses; a path is a filesystem path.
+const (
+	MaxAgentNameLen = 128
+	MaxAgentPathLen = 4096
+)
+
+// agentNamePattern is the same strict allowlist validateTarget uses, and for
+// the same reason: it is easier to prove a pattern that only accepts a safe
+// alphabet excludes ".", "..", "/" and whitespace than to enumerate what a
+// blacklist has to catch.
+var agentNamePattern = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9_-]{0,126}[A-Za-z0-9])?$`)
+
+func validateAgentName(name string) error {
+	if len(name) > MaxAgentNameLen {
+		return fmt.Errorf("agent name is %d characters, over the %d limit", len(name), MaxAgentNameLen)
+	}
+	if !agentNamePattern.MatchString(name) {
+		return fmt.Errorf(
+			"agent name %q is invalid: must be 1-127 characters, start and end with a letter or digit, "+
+				"and contain only letters, digits, '-' or '_'", name)
+	}
+	return nil
+}
+
+// validateAgentPath checks the shape of the path only. Whether it names a real
+// executable is decided by resolving it, which the daemon does itself -- this
+// is the cheap rejection before touching the filesystem.
+//
+// The path must be absolute. A relative one would be resolved against whatever
+// directory the daemon happens to be running in, which is not what the
+// operator meant and is not something they can see.
+func validateAgentPath(path string) error {
+	if path == "" {
+		return fmt.Errorf("an agent needs the executable to identify it by: nim agent add <name> <path>")
+	}
+	if len(path) > MaxAgentPathLen {
+		return fmt.Errorf("agent path is %d bytes, over the %d limit", len(path), MaxAgentPathLen)
+	}
+	if !filepath.IsAbs(path) {
+		return fmt.Errorf("agent path %q must be absolute, so it means the same thing wherever the daemon runs", path)
 	}
 	return nil
 }

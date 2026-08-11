@@ -107,6 +107,31 @@ create table if not exists nim_connectors (
     command     text,
     updated_at  text    not null
 );
+
+-- Enrolled agents. Configuration, like nim_connectors and for the same reason:
+-- the chain records what happened, this decides what may happen, and a mutable
+-- row has no business inside an append-only record.
+--
+-- An agent is identified by the executable its process is running, as the
+-- kernel reports it -- exec_dev and exec_ino, never a path. A path is text and
+-- the file at one belongs to whoever owns the directory; identifying by path
+-- is the mistake internal/peer exists to avoid.
+--
+-- exec_path is kept for diagnostics only: to show the operator what they
+-- enrolled and to let 'nim agent list' say when the file at that path is no
+-- longer the enrolled one. It is never consulted to decide whether a running
+-- process is this agent.
+--
+-- No uid column. Nim runs entirely as one OS user today, so pinning an agent
+-- to one would add a column nothing reads. It can be added when there is a
+-- reason.
+create table if not exists nim_agents (
+    name        text primary key,
+    exec_dev    integer not null,
+    exec_ino    integer not null,
+    exec_path   text    not null,
+    enrolled_at text    not null
+);
 `
 
 // migrations are additive statements applied after schema, each of which must
@@ -651,5 +676,76 @@ func (j *Journal) DeleteConnector(target string) error {
 		return errReadOnly
 	}
 	_, err := j.db.Exec(`delete from nim_connectors where target = ?`, target)
+	return err
+}
+
+// Agent is an enrolled client program: the thing that spawns a relay.
+//
+// ExecDev and ExecIno are the identity, taken from the kernel at enrolment.
+// ExecPath is what the operator typed, kept so the enrolment can be explained
+// and repeated -- it is never what an identity is matched on.
+type Agent struct {
+	Name       string
+	ExecDev    uint64
+	ExecIno    uint64
+	ExecPath   string
+	EnrolledAt time.Time
+}
+
+// SetAgent enrols an agent, replacing any enrolment under the same name.
+//
+// Replacing is deliberate and is how re-enrolment works. It is needed more
+// often than it looks: an inode survives, but a device number can change when
+// filesystems are mounted differently across a reboot, and an application that
+// updates itself becomes a different file. Both leave an enrolment that no
+// longer matches anything, which must be repairable without deleting and
+// re-adding.
+func (j *Journal) SetAgent(a Agent) error {
+	if j.readOnly {
+		return errReadOnly
+	}
+	_, err := j.db.Exec(
+		`insert into nim_agents (name, exec_dev, exec_ino, exec_path, enrolled_at)
+		 values (?, ?, ?, ?, ?)
+		 on conflict (name) do update set
+		   exec_dev    = excluded.exec_dev,
+		   exec_ino    = excluded.exec_ino,
+		   exec_path   = excluded.exec_path,
+		   enrolled_at = excluded.enrolled_at`,
+		a.Name, a.ExecDev, a.ExecIno, a.ExecPath,
+		a.EnrolledAt.UTC().Format(time.RFC3339Nano),
+	)
+	return err
+}
+
+// ListAgents returns every enrolment, ordered by name.
+func (j *Journal) ListAgents() ([]Agent, error) {
+	rows, err := j.db.Query(
+		`select name, exec_dev, exec_ino, exec_path, enrolled_at from nim_agents order by name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []Agent
+	for rows.Next() {
+		var a Agent
+		var enrolledAt string
+		if err := rows.Scan(&a.Name, &a.ExecDev, &a.ExecIno, &a.ExecPath, &enrolledAt); err != nil {
+			return nil, err
+		}
+		a.EnrolledAt, _ = time.Parse(time.RFC3339Nano, enrolledAt)
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// DeleteAgent removes an enrolment. Removing one that was never enrolled is
+// not an error, so a caller that only wants it gone need not check first.
+func (j *Journal) DeleteAgent(name string) error {
+	if j.readOnly {
+		return errReadOnly
+	}
+	_, err := j.db.Exec(`delete from nim_agents where name = ?`, name)
 	return err
 }
