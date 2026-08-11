@@ -10,7 +10,7 @@ import (
 )
 
 // Several shims for several configured MCP servers routinely start at once
-// (see startDaemon's "several shims may race" comment), so a fresh install's
+// (see StartDaemon's "several shims may race" comment), so a fresh install's
 // very first machineID call can genuinely happen from more than one process
 // concurrently. All of them must agree on one id -- the mirror groups
 // sessions by machine_id, and two different ids for the same install would

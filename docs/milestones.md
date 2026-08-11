@@ -82,6 +82,45 @@ weaker retry-based mitigation.
 The daemon holds the downstream servers' credentials and injects them at spawn
 time. They leave the client's configuration file.
 
+**Status: done, READY WITH KNOWN LIMITATION (Windows).** Secrets live in the OS
+credential store (Keychain / DPAPI / Secret Service), never in SQLite, never in
+argv (`nim connector set <target> --env KEY` reads the value from stdin, not a
+command-line argument). Two independent authorization layers gate the socket:
+peer-process identity (kernel-verified on darwin/linux -- `LOCAL_PEERPID` /
+`SO_PEERCRED`, resolved to an executable path and compared to the daemon's own
+by file identity, not by name or content) and per-connection target-binding
+(a connection may only ever ask for the one target its first `credential.get`
+named, closing off a downstream MCP server pivoting to another target's
+secret even from a connection that did pass peer verification). Verified live
+on macOS with an adversarial suite: raw-socket and Python clients denied
+outright, symlinked/copied/renamed binaries still denied (compared by inode,
+not path), pivot/reconnect/duplicate-JSON-key tricks all denied, a real
+"malicious downstream" (a legitimately-spawned `nim serve` session) denied
+when it tried to reach another target's credential directly. Two additional
+issues were found and fixed during the same audit: an unbounded per-line
+socket read let any local process (pre-authorization) grow the daemon's
+memory without limit, and `credential.get`'s metadata+secret read was not
+serialized against a concurrent `connector.set`, producing a torn env-key/
+secret pairing under load; both are now bounded/locked and covered by
+regression tests, including one reproducing the original race live.
+
+Windows has no peer-credential API for AF_UNIX sockets (`afunix.sys` exposes
+nothing equivalent to `SO_PEERCRED`/`LOCAL_PEERPID`), investigated again
+specifically during this audit with no workaround found -- see
+`peer_windows.go`'s comment for what was considered (named pipes, a
+capability token, file-ACL checks) and why each either just moves the
+problem or requires reversing this document's own M1 "unix sockets on
+Windows" standing decision. Target-binding still holds there (it does not
+depend on peer identity), but nothing can verify the caller is genuinely this
+binary, and `config.go`'s `EnsureDirs` also does not set a real Windows ACL
+on the socket's directory (`os.Chmod`/`os.MkdirAll`'s mode argument only
+toggles the read-only attribute on Windows, never an ACL) -- confidentiality
+there rests on the OS's own default temp-directory permissions, not on
+anything Nim verifies. Closing this for real needs a named-pipe transport
+with `GetNamedPipeClientProcessId` and an explicit DACL, which is a real
+architecture change or none of this has been run on real Windows; only
+cross-compilation (`windows/amd64`) has been checked.
+
 ## M4 — Grants (Cedar)
 
 Allow / deny per (agent, connector, tool). Preceded by a one-day spike to verify

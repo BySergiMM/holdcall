@@ -9,6 +9,7 @@ package journal
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -40,6 +41,17 @@ create table if not exists nim_calls (
 
 create index if not exists nim_calls_session_seq_idx on nim_calls (session_id, seq);
 create index if not exists nim_calls_occurred_at_idx on nim_calls (occurred_at desc);
+
+-- No secret column, deliberately: the credential value itself lives in the
+-- OS credential store (see internal/credential), never here. This table only
+-- records which env var name a target's credential is injected under, so
+-- connector list and the daemon's own lookup at spawn time have something
+-- to read without ever touching the secret.
+create table if not exists nim_connectors (
+    target      text primary key,
+    env_key     text    not null,
+    updated_at  text    not null
+);
 `
 
 type Journal struct{ db *sql.DB }
@@ -131,6 +143,72 @@ func (j *Journal) CountCalls() (int, error) {
 	var n int
 	err := j.db.QueryRow(`select count(*) from nim_calls`).Scan(&n)
 	return n, err
+}
+
+// Connector is non-secret connector metadata: which env var a target's
+// credential is injected under. The credential value itself is never here --
+// see internal/credential.
+type Connector struct {
+	Target    string
+	EnvKey    string
+	UpdatedAt time.Time
+}
+
+// SetConnector is an upsert: setting a connector that already exists
+// replaces its env key, exactly like the credential store's own Set.
+func (j *Journal) SetConnector(target, envKey string, at time.Time) error {
+	_, err := j.db.Exec(
+		`insert into nim_connectors (target, env_key, updated_at) values (?, ?, ?)
+		 on conflict (target) do update set env_key = excluded.env_key, updated_at = excluded.updated_at`,
+		target, envKey, at.UTC().Format(time.RFC3339Nano),
+	)
+	return err
+}
+
+// ConnectorInfo looks up one target. found is false, with no error, if no
+// connector is configured for it -- the ordinary case for most targets,
+// not a failure.
+func (j *Journal) ConnectorInfo(target string) (c Connector, found bool, err error) {
+	var updatedAt string
+	err = j.db.QueryRow(`select target, env_key, updated_at from nim_connectors where target = ?`, target).
+		Scan(&c.Target, &c.EnvKey, &updatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Connector{}, false, nil
+	}
+	if err != nil {
+		return Connector{}, false, err
+	}
+	c.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedAt)
+	return c, true, nil
+}
+
+// ListConnectors returns every configured connector, ordered by target.
+func (j *Journal) ListConnectors() ([]Connector, error) {
+	rows, err := j.db.Query(`select target, env_key, updated_at from nim_connectors order by target`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []Connector
+	for rows.Next() {
+		var c Connector
+		var updatedAt string
+		if err := rows.Scan(&c.Target, &c.EnvKey, &updatedAt); err != nil {
+			return nil, err
+		}
+		c.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedAt)
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// DeleteConnector removes a target's metadata. It is not an error to remove
+// one that was never configured -- callers that only want removal to be
+// idempotent do not need to check first.
+func (j *Journal) DeleteConnector(target string) error {
+	_, err := j.db.Exec(`delete from nim_connectors where target = ?`, target)
+	return err
 }
 
 func nullable(s string) any {

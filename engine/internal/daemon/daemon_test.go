@@ -181,6 +181,56 @@ func TestListenReportsAnAlreadyRunningDaemon(t *testing.T) {
 	}
 }
 
+// M3 non-negotiable: credential.get answers with real secret material on
+// this socket, so it must not be connectable by any other local user.
+// net.Listen alone leaves the file at whatever the umask allows -- verified
+// separately to be group/other-readable under a common 022 umask -- so
+// listen() must chmod it explicitly rather than relying on directory
+// permissions holding in every environment.
+func TestListenRestrictsSocketPermissionsTo0600(t *testing.T) {
+	path := tempSocketPath(t)
+	ln, err := listen(path)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat socket: %v", err)
+	}
+	if got := fi.Mode().Perm(); got != 0o600 {
+		t.Fatalf("socket permissions = %v, want 0600", got)
+	}
+}
+
+// The reclaimed-stale-socket path binds via the same net.Listen call as the
+// fresh case, but it is worth confirming explicitly: this is the more
+// common real-world path (a crash leaves a socket behind, the next daemon
+// reclaims it) and must not regress separately from the fresh-install case.
+func TestListenRestrictsPermissionsAfterReclaimingAStaleSocket(t *testing.T) {
+	path := tempSocketPath(t)
+	stale, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatalf("creating a stale socket: %v", err)
+	}
+	stale.Close()
+
+	ln, err := listen(path)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat socket: %v", err)
+	}
+	if got := fi.Mode().Perm(); got != 0o600 {
+		t.Fatalf("socket permissions after reclaim = %v, want 0600", got)
+	}
+}
+
 func TestHandleAppliesEvents(t *testing.T) {
 	j := openJournal(t)
 	client, server := net.Pipe()
@@ -188,7 +238,7 @@ func TestHandleAppliesEvents(t *testing.T) {
 	// handle's goroutine blocked in a read forever.
 	t.Cleanup(func() { client.Close(); server.Close() })
 	done := make(chan struct{})
-	go func() { handle(server, j); close(done) }()
+	go func() { handle(server, j, nil, newTargetLocks()); close(done) }()
 
 	enc := json.NewEncoder(client)
 	if err := enc.Encode(Event{Kind: KindSessionStart, SessionID: "s1", Target: "github", OccurredAt: nowRFC()}); err != nil {
@@ -223,7 +273,7 @@ func TestHandleSkipsMalformedEventsAndKeepsReading(t *testing.T) {
 	// handle's goroutine blocked in a read forever.
 	t.Cleanup(func() { client.Close(); server.Close() })
 	done := make(chan struct{})
-	go func() { handle(server, j); close(done) }()
+	go func() { handle(server, j, nil, newTargetLocks()); close(done) }()
 
 	if _, err := client.Write([]byte("not json at all\n")); err != nil {
 		t.Fatalf("write malformed line: %v", err)
@@ -249,5 +299,60 @@ func TestHandleSkipsMalformedEventsAndKeepsReading(t *testing.T) {
 	}
 	if n != 1 {
 		t.Fatalf("a malformed line must not stop later valid events from being recorded; got %d calls, want 1", n)
+	}
+}
+
+// The M3 final audit found that handle() used to read connections with an
+// unbounded line reader (mcp.Reader), reachable by any process able to open
+// the socket -- before peer verification and before MaxRequestBytes ever
+// run, since both require the full line first. A single unauthenticated
+// connection sending 200 MiB with no newline grew the live daemon's RSS by
+// the same amount with no pushback at all. This is the live regression
+// test: a real net.Listen/Accept connection sending well over maxLineBytes
+// with no newline must be disconnected, not served indefinitely.
+func TestHandleDisconnectsAConnectionSendingAnOversizedLine(t *testing.T) {
+	j := openJournal(t)
+	path := tempSocketPath(t)
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { ln.Close() })
+
+	done := make(chan struct{})
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		handle(conn, j, nil, newTargetLocks())
+		close(done)
+	}()
+
+	client, err := net.Dial("unix", path)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer client.Close()
+
+	// Comfortably over maxLineBytes, with no newline anywhere in it.
+	chunk := make([]byte, 64*1024)
+	for i := range chunk {
+		chunk[i] = 'A'
+	}
+	go func() {
+		for i := 0; i < 64; i++ { // 4 MiB total, 4x maxLineBytes
+			if _, err := client.Write(chunk); err != nil {
+				return
+			}
+		}
+	}()
+
+	select {
+	case <-done:
+		// handle() returned on its own: the oversized line was rejected and
+		// the connection closed from the daemon side, exactly as intended.
+	case <-time.After(5 * time.Second):
+		t.Fatal("handle() did not disconnect a connection sending an oversized line -- it is still buffering it")
 	}
 }

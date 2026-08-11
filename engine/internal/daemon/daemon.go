@@ -2,14 +2,19 @@
 //
 // A client spawns one shim per configured MCP server, so budgets, the journal
 // and (later) human approval need a single writer. The shims report here; this
-// process is the only one that touches SQLite.
+// process is the only one that touches SQLite, and the only one that talks to
+// the OS credential store.
 //
-// The wire protocol is deliberately one-way. A shim never waits for an answer,
-// because the relay must never stall on bookkeeping: if the daemon is slow,
-// absent or wedged, tool calls still flow.
+// The wire protocol is one-way for Event: a shim never waits for an answer
+// reporting a tools/call, because the relay must never stall on bookkeeping.
+// Request/Response is the one deliberate exception -- a shim blocks briefly
+// on credential.get before spawning a downstream -- and is a structurally
+// separate message family so a credential can never flow through the Event
+// path, which gets logged and journaled.
 package daemon
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,8 +26,8 @@ import (
 	"time"
 
 	"github.com/BySergiMM/nim/engine/internal/config"
+	"github.com/BySergiMM/nim/engine/internal/credential"
 	"github.com/BySergiMM/nim/engine/internal/journal"
-	"github.com/BySergiMM/nim/engine/internal/mcp"
 	"github.com/BySergiMM/nim/engine/internal/uuid"
 )
 
@@ -75,13 +80,26 @@ func Run(cfg config.Config) error {
 	}
 	defer j.Close()
 
+	// A missing credential store must not take the whole daemon down: event
+	// recording (M1/M2) has nothing to do with connectors, and must keep
+	// working regardless. Only credential.get/connector.* requests need
+	// store to be non-nil; handleRequest reports its absence to those
+	// specifically, once, rather than refusing to start at all.
+	store, err := credential.New()
+	if err != nil {
+		log.Printf("credential store unavailable, connector commands will fail: %v", err)
+		store = nil
+	}
+
+	locks := newTargetLocks()
+
 	log.Printf("nim daemon listening on %s (journal: %s)", cfg.Daemon.Socket, cfg.DatabasePath())
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
 			return err
 		}
-		go handle(conn, j)
+		go handle(conn, j, store, locks)
 	}
 }
 
@@ -115,6 +133,16 @@ func listen(path string) (net.Listener, error) {
 	for i := 0; i < attempts; i++ {
 		ln, err := net.Listen("unix", path)
 		if err == nil {
+			// net.Listen creates the socket file with whatever the process
+			// umask leaves it -- often group/other-readable, which is
+			// connectable by any local user (verified: 022 umask gives
+			// srwxr-xr-x). That was a low-severity gap while this socket
+			// only carried call metadata; it is not acceptable now that
+			// credential.get answers with real secret material on it.
+			if err := os.Chmod(path, 0o600); err != nil {
+				ln.Close()
+				return nil, fmt.Errorf("restricting socket permissions: %w", err)
+			}
 			return ln, nil
 		}
 		lastErr = err
@@ -130,17 +158,111 @@ func listen(path string) (net.Listener, error) {
 	return nil, fmt.Errorf("could not bind %s: %w", path, lastErr)
 }
 
-func handle(conn net.Conn, j *journal.Journal) {
+// requestKinds distinguishes a Request from an Event on the wire: both carry
+// a "kind" field, but the two vocabularies never overlap, so a cheap peek at
+// just that field is enough to route the rest of the message correctly
+// without needing an extra discriminator field.
+var requestKinds = map[string]bool{
+	KindCredentialGet:   true,
+	KindConnectorSet:    true,
+	KindConnectorList:   true,
+	KindConnectorRemove: true,
+}
+
+// connState is per-connection authorization state, computed lazily and
+// cached for the life of the connection: peer identity does not change
+// mid-connection, so it is checked once, not once per request.
+//
+// kind and boundTarget are the second authorization layer, independent of
+// peer identity: a connection is committed to exactly one purpose (either
+// asking for its own target's credential, or being a connector-management
+// client) on its first request, and exactly one target if that purpose is
+// credential.get. A real shim only ever does one or the other; anything
+// that tries to mix them, or pivot credential.get to a second target on the
+// same connection, gets "unauthorized" instead of a more specific reason --
+// specific reasons are exactly the kind of oracle an attacker iterating on
+// this protocol would want.
+type connState struct {
+	conn net.Conn
+
+	peerChecked   bool
+	peerSupported bool
+	peerIsSelf    bool
+
+	kind        string // "" | "credential" | "connector"
+	boundTarget string // meaningful only once kind == "credential"
+}
+
+// authorized reports whether this connection's peer may make Request-kind
+// calls at all. Where peer verification is supported (macOS, Linux), the
+// peer must be running this exact binary -- a claim inside the request
+// itself proves nothing, since an attacker can write the same claim. Where
+// it is not supported (Windows, see peer_windows.go), this cannot add
+// anything beyond the socket's own permissions; that is a real, documented
+// gap, not a silent one.
+func (s *connState) authorized() bool {
+	if !s.peerChecked {
+		s.peerSupported, s.peerIsSelf = verifyPeerIsSelf(s.conn)
+		s.peerChecked = true
+	}
+	if s.peerSupported {
+		return s.peerIsSelf
+	}
+	return true
+}
+
+func handle(conn net.Conn, j *journal.Journal, store credential.Store, locks *targetLocks) {
 	defer conn.Close()
-	r := mcp.NewReader(conn)
+	br := bufio.NewReaderSize(conn, 4096)
+	enc := json.NewEncoder(conn)
+	state := &connState{conn: conn}
 	for {
-		raw, err := r.ReadRaw()
+		raw, err := boundedReadRaw(br, maxLineBytes)
 		if err != nil {
 			if err != io.EOF {
 				log.Printf("shim connection: %v", err)
 			}
 			return
 		}
+
+		// id is captured here too so an oversized-request rejection can
+		// still echo it, without the full Request unmarshal below -- which
+		// is what would allocate a Go string for a multi-megabyte Secret
+		// field this message is about to be rejected for anyway.
+		var peek struct {
+			ID   string `json:"id"`
+			Kind string `json:"kind"`
+		}
+		if err := json.Unmarshal(raw, &peek); err != nil {
+			log.Printf("malformed message: %v", err)
+			continue
+		}
+
+		if requestKinds[peek.Kind] {
+			if len(raw) > MaxRequestBytes {
+				resp := Response{ID: peek.ID, Error: fmt.Sprintf("request exceeds %d byte limit", MaxRequestBytes)}
+				if err := enc.Encode(resp); err != nil {
+					log.Printf("writing response: %v", err)
+					return
+				}
+				continue
+			}
+			var req Request
+			if err := json.Unmarshal(raw, &req); err != nil {
+				// Never log req here: it failed to fully decode, but a
+				// partial/garbled connector.set payload could still carry
+				// enough of a secret fragment to be worth not printing.
+				log.Printf("malformed request (kind=%s)", peek.Kind)
+				continue
+			}
+			resp := handleRequest(req, state, j, store, locks)
+			if err := enc.Encode(resp); err != nil {
+				log.Printf("writing response: %v", err)
+				return
+			}
+			continue
+		}
+
 		var ev Event
 		if err := json.Unmarshal(raw, &ev); err != nil {
 			log.Printf("malformed event: %v", err)
@@ -150,6 +272,167 @@ func handle(conn net.Conn, j *journal.Journal) {
 			log.Printf("%s: %v", ev.Kind, err)
 		}
 	}
+}
+
+// handleRequest enforces both authorization layers before dispatching, then
+// routes to the specific handler. None of the handlers below may log req or
+// any secret-bearing value they compute -- Response.Error is the only
+// channel back to the caller, and must describe the failure without ever
+// including a credential value.
+func handleRequest(req Request, state *connState, j *journal.Journal, store credential.Store, locks *targetLocks) Response {
+	var thisKind string
+	switch req.Kind {
+	case KindCredentialGet:
+		thisKind = "credential"
+	case KindConnectorSet, KindConnectorList, KindConnectorRemove:
+		thisKind = "connector"
+	default:
+		return Response{ID: req.ID, Error: fmt.Sprintf("unknown request kind %q", req.Kind)}
+	}
+	if state.kind == "" {
+		state.kind = thisKind
+	} else if state.kind != thisKind {
+		return Response{ID: req.ID, Error: "unauthorized"}
+	}
+	if !state.authorized() {
+		return Response{ID: req.ID, Error: "unauthorized"}
+	}
+
+	switch req.Kind {
+	case KindCredentialGet:
+		return handleCredentialGet(req, state, j, store, locks)
+	case KindConnectorSet:
+		return handleConnectorSet(req, j, store, locks)
+	case KindConnectorList:
+		return handleConnectorList(req, j)
+	case KindConnectorRemove:
+		return handleConnectorRemove(req, j, store, locks)
+	default:
+		panic("unreachable: thisKind switch above is exhaustive for req.Kind")
+	}
+}
+
+// handleCredentialGet is the shim's spawn-time lookup. Found=false with no
+// error is the ordinary case for a target with no connector configured, and
+// the shim must treat it exactly like today: spawn with no env changes.
+// Found=true with a non-empty Error is the fail-closed case: a connector IS
+// configured but the secret could not be retrieved, and the shim must refuse
+// to spawn rather than start the downstream under a partial configuration.
+//
+// A connection is bound to the target of its first credential.get and may
+// never ask for a different one: nothing about a shim's own session
+// legitimately needs more than its own --target's credential, and this is
+// what stops a connection from pivoting to ask for someone else's.
+//
+// The metadata lookup and the secret lookup below are two separate reads,
+// not one atomic operation, so this takes the same per-target lock
+// connector.set/remove use: without it, a connector.set renaming a target's
+// env_key concurrently with this call can interleave between the two reads
+// and hand back one generation's env_key paired with a different
+// generation's secret value -- reproduced live during the M3 final audit
+// (thousands of torn reads out of 20000 iterations under -race). The
+// secret's value is always a genuine credential for this exact target
+// either way, so this was never a cross-target leak, but it is a real
+// atomicity bug the lock exists to prevent on the write side already; the
+// read side needs the same guarantee.
+func handleCredentialGet(req Request, state *connState, j *journal.Journal, store credential.Store, locks *targetLocks) Response {
+	if err := validateTarget(req.Target); err != nil {
+		return Response{ID: req.ID, Error: err.Error()}
+	}
+	if state.boundTarget == "" {
+		state.boundTarget = req.Target
+	} else if state.boundTarget != req.Target {
+		return Response{ID: req.ID, Error: "unauthorized"}
+	}
+
+	unlock := locks.Lock(req.Target)
+	defer unlock()
+
+	info, found, err := j.ConnectorInfo(req.Target)
+	if err != nil {
+		return Response{ID: req.ID, Error: fmt.Sprintf("looking up connector metadata: %v", err)}
+	}
+	if !found {
+		return Response{ID: req.ID, Found: false}
+	}
+	if store == nil {
+		return Response{ID: req.ID, Found: true, Error: "credential store unavailable"}
+	}
+	secret, err := store.Get(req.Target)
+	if err != nil {
+		return Response{ID: req.ID, Found: true, Error: fmt.Sprintf("retrieving secret for connector %q: %v", req.Target, err)}
+	}
+	return Response{ID: req.ID, Found: true, Env: map[string]string{info.EnvKey: secret}}
+}
+
+func handleConnectorSet(req Request, j *journal.Journal, store credential.Store, locks *targetLocks) Response {
+	if err := validateTarget(req.Target); err != nil {
+		return Response{ID: req.ID, Error: err.Error()}
+	}
+	if err := validateEnvKey(req.EnvKey); err != nil {
+		return Response{ID: req.ID, Error: err.Error()}
+	}
+	if err := validateSecret(req.Secret); err != nil {
+		return Response{ID: req.ID, Error: err.Error()}
+	}
+	if store == nil {
+		return Response{ID: req.ID, Error: "credential store unavailable"}
+	}
+
+	unlock := locks.Lock(req.Target)
+	defer unlock()
+
+	if err := store.Set(req.Target, req.Secret); err != nil {
+		return Response{ID: req.ID, Error: fmt.Sprintf("storing secret: %v", err)}
+	}
+	if err := j.SetConnector(req.Target, req.EnvKey, time.Now()); err != nil {
+		// The keychain write succeeded but the metadata write did not: undo
+		// it so the two do not silently drift apart -- an orphaned keychain
+		// entry with no matching metadata would be invisible to
+		// connector.list but still retrievable by anyone who guesses the
+		// target name.
+		_ = store.Delete(req.Target)
+		return Response{ID: req.ID, Error: fmt.Sprintf("storing connector metadata: %v", err)}
+	}
+	return Response{ID: req.ID}
+}
+
+func handleConnectorList(req Request, j *journal.Journal) Response {
+	list, err := j.ListConnectors()
+	if err != nil {
+		return Response{ID: req.ID, Error: fmt.Sprintf("listing connectors: %v", err)}
+	}
+	infos := make([]ConnectorInfo, len(list))
+	for i, c := range list {
+		infos[i] = ConnectorInfo{Target: c.Target, EnvKey: c.EnvKey, UpdatedAt: c.UpdatedAt.Format(time.RFC3339Nano)}
+	}
+	return Response{ID: req.ID, Connectors: infos}
+}
+
+// The secret is removed before the metadata, deliberately the mirror image
+// of handleConnectorSet's ordering: if the secret delete fails partway
+// through, leaving the metadata in place means the connector still shows up
+// as configured and the next credential.get correctly fails closed on it,
+// rather than the secret quietly surviving in the store with nothing left
+// pointing at it. The lock is the same per-target lock connector.set uses,
+// so a set and a remove for the same target can never interleave either.
+func handleConnectorRemove(req Request, j *journal.Journal, store credential.Store, locks *targetLocks) Response {
+	if err := validateTarget(req.Target); err != nil {
+		return Response{ID: req.ID, Error: err.Error()}
+	}
+
+	unlock := locks.Lock(req.Target)
+	defer unlock()
+
+	if store != nil {
+		if err := store.Delete(req.Target); err != nil && !errors.Is(err, credential.ErrNotFound) {
+			return Response{ID: req.ID, Error: fmt.Sprintf("removing secret: %v", err)}
+		}
+	}
+	if err := j.DeleteConnector(req.Target); err != nil {
+		return Response{ID: req.ID, Error: fmt.Sprintf("removing connector metadata: %v", err)}
+	}
+	return Response{ID: req.ID}
 }
 
 func apply(ev Event, j *journal.Journal) error {

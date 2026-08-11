@@ -66,15 +66,30 @@ func Run(opts Options) error {
 		fmt.Fprintf(os.Stderr, "nim: %v\n", err)
 	}
 
+	conn := dialDaemon(opts.Config)
+
+	// This is the one deliberate blocking round-trip in the whole relay: a
+	// target with a connector configured must have its credential injected
+	// before the downstream starts, or not start at all. A target with none
+	// configured -- the ordinary case -- costs nothing extra; see
+	// fetchConnectorEnv for exactly which outcomes fail open vs. closed.
+	env, err := fetchConnectorEnv(conn, opts.Target)
+	if err != nil {
+		if conn != nil {
+			conn.Close() // never handed to a reporter, so nothing else owns it
+		}
+		return err
+	}
+
 	s := &Shim{
 		opts:      opts,
 		sessionID: uuid.New(),
-		reporter:  dialDaemon(opts.Config),
+		reporter:  newReporter(conn),
 		inFlight:  make(map[string]pending),
 	}
 	defer s.reporter.close()
 
-	cmd := exec.Command(opts.Command[0], opts.Command[1:]...)
+	cmd := buildDownstreamCmd(opts.Command, env)
 	downIn, err := cmd.StdinPipe()
 	if err != nil {
 		return err
@@ -206,6 +221,64 @@ func (s *Shim) noteResponse(env mcp.Envelope) {
 
 func (s *Shim) report(ev daemon.Event) { s.reporter.send(ev) }
 
+// buildDownstreamCmd is split out from Run so a test can inspect cmd.Args
+// and cmd.Env directly: a credential must reach the downstream only through
+// the latter, never the former, where it would be visible to any local user
+// via ps.
+func buildDownstreamCmd(command []string, env []string) *exec.Cmd {
+	cmd := exec.Command(command[0], command[1:]...)
+	if len(env) > 0 {
+		cmd.Env = append(os.Environ(), env...)
+	}
+	return cmd
+}
+
+// fetchConnectorEnv asks the daemon what to inject into the downstream's
+// environment for target, before it is spawned. There are three outcomes:
+//
+//   - conn is nil, or the request could not complete (daemon unreachable,
+//     timed out mid-request): treated the same as "no connector configured"
+//     -- fail open. A target the operator never configured a connector for
+//     must keep working exactly as it does without M3 at all, even if the
+//     daemon that would have told us so is down; that matches M1/M2's
+//     existing guarantee that a missing daemon never blocks the relay.
+//   - the daemon answers Found=false: no connector configured for target.
+//     Same outcome as above, this time confirmed rather than assumed.
+//   - the daemon answers Found=true with Error set: a connector IS
+//     configured but its secret could not be retrieved. This is the one
+//     case that fails closed -- returning an error here means Run refuses
+//     to spawn the downstream under a partial configuration, rather than
+//     starting it without the credential it was set up to need.
+func fetchConnectorEnv(conn net.Conn, target string) ([]string, error) {
+	if conn == nil {
+		return nil, nil
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	if err := conn.SetDeadline(deadline); err == nil {
+		defer conn.SetDeadline(time.Time{})
+	}
+
+	resp, err := daemon.SendRequest(conn, daemon.Request{
+		ID:     uuid.New(),
+		Kind:   daemon.KindCredentialGet,
+		Target: target,
+	})
+	if err != nil {
+		return nil, nil // could not ask; fail open, see above
+	}
+	if !resp.Found {
+		return nil, nil
+	}
+	if resp.Error != "" {
+		return nil, fmt.Errorf("connector %q is configured but its credential could not be retrieved: %s", target, resp.Error)
+	}
+	pairs := make([]string, 0, len(resp.Env))
+	for k, v := range resp.Env {
+		pairs = append(pairs, k+"="+v)
+	}
+	return pairs, nil
+}
+
 // reporter delivers events to the daemon without ever blocking the relay.
 type reporter struct {
 	conn net.Conn
@@ -213,18 +286,31 @@ type reporter struct {
 	done chan struct{}
 }
 
-func dialDaemon(cfg config.Config) *reporter {
-	r := &reporter{ch: make(chan daemon.Event, 256), done: make(chan struct{})}
+// dialDaemon connects to the daemon, starting it if it is not already
+// running. It returns nil, not an error, if the daemon still could not be
+// reached: every caller here treats "no daemon" as something to route
+// around, not something to fail on.
+//
+// This returns the raw connection rather than a *reporter so a caller that
+// needs a synchronous round-trip first -- fetchConnectorEnv, before the
+// downstream is spawned -- can use it before reporter.loop ever touches it.
+// Handing the same conn to newReporter afterward starts that async,
+// fire-and-forget use of it.
+func dialDaemon(cfg config.Config) net.Conn {
 	conn, err := net.DialTimeout("unix", cfg.Daemon.Socket, 300*time.Millisecond)
 	if err != nil {
-		if startDaemon() {
+		if StartDaemon() {
 			for i := 0; i < 20 && conn == nil; i++ {
 				time.Sleep(100 * time.Millisecond)
 				conn, _ = net.DialTimeout("unix", cfg.Daemon.Socket, 300*time.Millisecond)
 			}
 		}
 	}
-	r.conn = conn
+	return conn
+}
+
+func newReporter(conn net.Conn) *reporter {
+	r := &reporter{conn: conn, ch: make(chan daemon.Event, 256), done: make(chan struct{})}
 	go r.loop()
 	return r
 }
@@ -258,14 +344,16 @@ func (r *reporter) close() {
 	<-r.done
 }
 
-// startDaemon launches this same binary in daemon mode, detached so it
+// StartDaemon launches this same binary in daemon mode, detached so it
 // outlives the shim's process group and session -- see daemonSysProcAttr.
 // Several shims may race; the daemon that loses the socket exits quietly.
+// Exported so connector management commands, which also need the daemon
+// running, can reuse it instead of duplicating process-spawn logic.
 //
 // Its diagnostics go to a log file rather than nowhere. A daemon that fails to
 // start silently leaves the user believing calls are being recorded when they
 // are not, which is the one failure this tool must never have.
-func startDaemon() bool {
+func StartDaemon() bool {
 	self, err := os.Executable()
 	if err != nil {
 		return false
@@ -280,7 +368,7 @@ func nowRFC3339() string { return time.Now().UTC().Format(time.RFC3339Nano) }
 // hostname and not a user: the mirror must not carry either.
 //
 // Several shims for several configured MCP servers routinely start at once
-// (see startDaemon's "several shims may race" comment), so on a fresh install
+// (see StartDaemon's "several shims may race" comment), so on a fresh install
 // this can genuinely be called from more than one process concurrently.
 // os.WriteFile would let each one truncate and overwrite the file with its
 // own id, leaving whichever wrote last as the winner -- silently splitting

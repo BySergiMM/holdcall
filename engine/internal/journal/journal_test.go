@@ -281,3 +281,115 @@ func TestStartSessionStoresAnEmptyClientAsNull(t *testing.T) {
 		t.Errorf("client = %q, want NULL for an unset label", *client)
 	}
 }
+
+func TestConnectorInfoOnAnUnconfiguredTargetIsNotFoundNotError(t *testing.T) {
+	j := open(t)
+	_, found, err := j.ConnectorInfo("github")
+	if err != nil {
+		t.Fatalf("ConnectorInfo: %v", err)
+	}
+	if found {
+		t.Fatal("an unconfigured target must report found=false, not an error")
+	}
+}
+
+func TestSetConnectorIsAnUpsert(t *testing.T) {
+	j := open(t)
+	first := time.Now().UTC()
+	if err := j.SetConnector("github", "GITHUB_TOKEN", first); err != nil {
+		t.Fatalf("first SetConnector: %v", err)
+	}
+	second := first.Add(time.Hour)
+	if err := j.SetConnector("github", "GH_TOKEN", second); err != nil {
+		t.Fatalf("second SetConnector: %v", err)
+	}
+
+	c, found, err := j.ConnectorInfo("github")
+	if err != nil {
+		t.Fatalf("ConnectorInfo: %v", err)
+	}
+	if !found {
+		t.Fatal("expected a connector to be found")
+	}
+	if c.EnvKey != "GH_TOKEN" {
+		t.Errorf("env_key = %q, want the second Set's value GH_TOKEN", c.EnvKey)
+	}
+	if !c.UpdatedAt.Equal(second) {
+		t.Errorf("updated_at = %v, want %v", c.UpdatedAt, second)
+	}
+
+	list, err := j.ListConnectors()
+	if err != nil {
+		t.Fatalf("ListConnectors: %v", err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("got %d connectors, want 1 (an upsert must not create a second row)", len(list))
+	}
+}
+
+func TestListConnectorsIsOrderedAndExcludesNothingSecret(t *testing.T) {
+	j := open(t)
+	now := time.Now().UTC()
+	if err := j.SetConnector("slack", "SLACK_TOKEN", now); err != nil {
+		t.Fatalf("SetConnector(slack): %v", err)
+	}
+	if err := j.SetConnector("github", "GITHUB_TOKEN", now); err != nil {
+		t.Fatalf("SetConnector(github): %v", err)
+	}
+
+	list, err := j.ListConnectors()
+	if err != nil {
+		t.Fatalf("ListConnectors: %v", err)
+	}
+	if len(list) != 2 || list[0].Target != "github" || list[1].Target != "slack" {
+		t.Fatalf("got %+v, want [github slack] in that order", list)
+	}
+}
+
+// The whole point of nim_connectors: it is structurally impossible for a
+// secret to end up in this table, because there is no column for one.
+func TestNimConnectorsHasNoSecretColumn(t *testing.T) {
+	j := open(t)
+	rows, err := j.db.Query(`select * from nim_connectors`)
+	if err != nil {
+		t.Fatalf("querying nim_connectors: %v", err)
+	}
+	defer rows.Close()
+	cols, err := rows.Columns()
+	if err != nil {
+		t.Fatalf("Columns: %v", err)
+	}
+	want := map[string]bool{"target": true, "env_key": true, "updated_at": true}
+	if len(cols) != len(want) {
+		t.Fatalf("nim_connectors columns = %v, want exactly %v", cols, want)
+	}
+	for _, c := range cols {
+		if !want[c] {
+			t.Errorf("unexpected column %q in nim_connectors", c)
+		}
+	}
+}
+
+func TestDeleteConnectorRemovesIt(t *testing.T) {
+	j := open(t)
+	if err := j.SetConnector("github", "GITHUB_TOKEN", time.Now()); err != nil {
+		t.Fatalf("SetConnector: %v", err)
+	}
+	if err := j.DeleteConnector("github"); err != nil {
+		t.Fatalf("DeleteConnector: %v", err)
+	}
+	_, found, err := j.ConnectorInfo("github")
+	if err != nil {
+		t.Fatalf("ConnectorInfo: %v", err)
+	}
+	if found {
+		t.Fatal("connector should be gone after DeleteConnector")
+	}
+}
+
+func TestDeleteConnectorOnAnUnconfiguredTargetIsANoOp(t *testing.T) {
+	j := open(t)
+	if err := j.DeleteConnector("never-configured"); err != nil {
+		t.Fatalf("DeleteConnector on an unconfigured target must not error: %v", err)
+	}
+}

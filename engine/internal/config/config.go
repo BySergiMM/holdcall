@@ -128,7 +128,21 @@ func LogPath() string { return filepath.Join(Home(), "daemon.log") }
 
 func (c Config) DatabasePath() string { return filepath.Join(c.Daemon.DataDir, "nim.db") }
 
-// EnsureDirs creates the layout with owner-only permissions.
+// EnsureDirs creates the layout with owner-only permissions -- on darwin and
+// linux. On Windows, os.MkdirAll's mode argument has no such effect: per the
+// os package's own documentation, Windows only inspects the 0200 bit to
+// toggle the read-only attribute, never an ACL restricting which accounts
+// can read the directory. The same is true of listen()'s os.Chmod(path,
+// 0o600) call on the socket file itself. Confidentiality of the socket path
+// on Windows therefore rests entirely on the OS's own default ACL
+// inheritance for its temp/LOCALAPPDATA directory (normally restricted to
+// the owning user, SYSTEM, and Administrators) -- not on anything this
+// function actively verifies or enforces, unlike the real chmod calls on
+// darwin/linux. Found and documented, not fixed, during the M3 final audit:
+// closing it for real needs either a verified Windows ACL (SetNamedSecurityInfo)
+// applied to these paths, or the named-pipe transport change discussed in
+// peer_windows.go, neither of which this audit implements without a real
+// Windows environment to verify against. See docs/milestones.md.
 func (c Config) EnsureDirs() error {
 	for _, dir := range []string{Home(), c.Daemon.DataDir, filepath.Dir(c.Daemon.Socket)} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
