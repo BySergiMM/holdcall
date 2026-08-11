@@ -186,25 +186,73 @@ where r.kind = 'call.request'`},
 // syncViews recreates only the views whose stored definition no longer matches
 // this build's. In the steady state it is a read, so opening the journal to
 // look at it does not contend with the daemon writing to it.
+//
+// The drop and the create are one transaction, and the check is repeated
+// inside it. Without that, two handles opening the same database at once both
+// see the view as absent or drifted, both drop it, and then the second create
+// fails with "view nim_calls already exists" -- which takes down whichever
+// process was opening the journal. Found by CI rather than locally: it needs
+// two opens of one file to interleave, which a laptop run happened not to do.
+//
+// The DSN sets _txlock=immediate, so Begin takes the write lock up front
+// rather than discovering it is needed halfway through -- the same reason
+// Append does, and the same failure (BUSY_SNAPSHOT, which busy_timeout does
+// not retry) if it did not.
 func syncViews(db *sql.DB) error {
 	for _, v := range views {
+		if current, err := viewMatches(db, v.name, v.ddl); err != nil {
+			return err
+		} else if current {
+			continue
+		}
+
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("replacing view %s: %w", v.name, err)
+		}
+		// Re-check under the write lock: another handle may have done this
+		// between the read above and the lock being granted, and recreating a
+		// view that is already correct is how the collision happened.
 		var stored sql.NullString
-		err := db.QueryRow(
+		err = tx.QueryRow(
 			`select sql from sqlite_master where type = 'view' and name = ?`, v.name).Scan(&stored)
 		if err != nil && err != sql.ErrNoRows {
+			tx.Rollback()
 			return err
 		}
 		if err == nil && stored.Valid && stored.String == v.ddl {
+			tx.Rollback()
 			continue
 		}
-		if _, err := db.Exec(`drop view if exists ` + v.name); err != nil {
+		if _, err := tx.Exec(`drop view if exists ` + v.name); err != nil {
+			tx.Rollback()
 			return fmt.Errorf("replacing view %s: %w", v.name, err)
 		}
-		if _, err := db.Exec(v.ddl); err != nil {
+		if _, err := tx.Exec(v.ddl); err != nil {
+			tx.Rollback()
 			return fmt.Errorf("creating view %s: %w", v.name, err)
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("replacing view %s: %w", v.name, err)
 		}
 	}
 	return nil
+}
+
+// viewMatches reports whether the stored definition of name is already ddl.
+// Split out so the common case -- every view current -- stays a plain read
+// that takes no write lock at all.
+func viewMatches(db *sql.DB, name, ddl string) (bool, error) {
+	var stored sql.NullString
+	err := db.QueryRow(
+		`select sql from sqlite_master where type = 'view' and name = ?`, name).Scan(&stored)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return stored.Valid && stored.String == ddl, nil
 }
 
 // Entry is one immutable record. Nullable fields are pointers so that an absent

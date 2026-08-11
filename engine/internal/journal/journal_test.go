@@ -916,3 +916,69 @@ func contains(haystack, needle string) bool {
 	}
 	return false
 }
+
+// TestConcurrentOpensDoNotCollideOnViews reproduces a failure CI found and a
+// laptop did not: two handles opening the same database at once both saw a
+// view as absent, both dropped it, and the second create failed with "view
+// nim_calls already exists", taking down whichever process was opening the
+// journal.
+//
+// It is not a contrived case. The daemon opens the journal to write, and a
+// second daemon racing to start does the same before one of them loses the
+// socket -- so this is exactly the window the startup lock exists around.
+func TestConcurrentOpensDoNotCollideOnViews(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nim.db")
+
+	// Seed the file so every opener below races on the same existing database
+	// rather than on creating it.
+	seed, err := Open(path, "machine")
+	if err != nil {
+		t.Fatalf("seeding: %v", err)
+	}
+	seed.Close()
+
+	// Drop a view, so every opener agrees it has to be recreated: that is the
+	// state in which the drop-then-create actually runs.
+	drop, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatalf("open for drop: %v", err)
+	}
+	if _, err := drop.Exec(`drop view if exists nim_calls`); err != nil {
+		t.Fatalf("dropping the view: %v", err)
+	}
+	drop.Close()
+
+	const openers = 8
+	errs := make(chan error, openers)
+	var start sync.WaitGroup
+	start.Add(1)
+	for i := 0; i < openers; i++ {
+		go func() {
+			start.Wait()
+			j, err := Open(path, "machine")
+			if err != nil {
+				errs <- err
+				return
+			}
+			j.Close()
+			errs <- nil
+		}()
+	}
+	start.Done()
+
+	for i := 0; i < openers; i++ {
+		if err := <-errs; err != nil {
+			t.Fatalf("concurrent Open failed: %v", err)
+		}
+	}
+
+	// And the view is usable afterwards, not merely un-erroring.
+	j, err := Open(path, "machine")
+	if err != nil {
+		t.Fatalf("reopening: %v", err)
+	}
+	defer j.Close()
+	if _, err := j.db.Query(`select * from nim_calls limit 1`); err != nil {
+		t.Fatalf("nim_calls is not usable after the race: %v", err)
+	}
+}
