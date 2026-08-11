@@ -71,6 +71,40 @@ jobs:
       - name: go test -race
         run: go test -race -count=1 ./...
 
+  # The dashboard makes claims about this repository, so its build is a check
+  # on those claims rather than a packaging step: scripts/generate.mjs exits
+  # non-zero if a guarantee or an attack cites a test that is not in the tree.
+  #
+  # That means this job fails when a test is RENAMED or DELETED, which is the
+  # whole point -- otherwise the page would keep displaying a security property
+  # as verified after the thing verifying it had gone.
+  dashboard:
+    name: dashboard
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dashboard
+    steps:
+      # Full history: the generator reads git for the commit it describes, and
+      # a shallow clone would make the commit count wrong rather than absent.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+
+      - run: npm ci
+
+      # Runs the generator, the mutation tests that prove the generator's
+      # refusals actually bite, and the type check.
+      - run: npm run check
+
+      - run: npm run build
+
   # The engine claims to build for three platforms with no C toolchain, which
   # is why modernc.org/sqlite is used instead of mattn/go-sqlite3. That claim
   # is worth checking on every push rather than at release time.
