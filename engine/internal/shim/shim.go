@@ -122,9 +122,8 @@ func (c *clientOut) Write(p []byte) (int, error) {
 
 // Run relays until the client closes stdin or the downstream server exits.
 func Run(opts Options) error {
-	if len(opts.Command) == 0 {
-		return fmt.Errorf("no downstream command given")
-	}
+	// The downstream command is not checked here. A connector can supply it,
+	// and which one wins is only known once the daemon has answered.
 
 	// A configuration that cannot work is worth one line on stderr, where the
 	// client will show it, rather than a relay that quietly records nothing.
@@ -133,6 +132,36 @@ func Run(opts Options) error {
 	}
 	if err := opts.Config.EnsureDirs(); err != nil {
 		fmt.Fprintf(os.Stderr, "nim: %v\n", err)
+	}
+
+	// The one blocking round-trip before anything is spawned: a connector with
+	// a credential must have it injected, or the downstream must not start.
+	// This uses its own short-lived connection rather than the reporter's,
+	// because a connection commits to one purpose on the daemon side and a
+	// credential has no business sharing the one that carries events.
+	inj, err := fetchConnector(opts.Config, opts.Connector)
+	if err != nil {
+		return err
+	}
+
+	// When a credential is being injected, the daemon decides what receives
+	// it. Taking the command from opts instead is what made this a credential
+	// oracle: any caller could name a connector and its own command and be
+	// handed the secret.
+	command := opts.Command
+	if len(inj.command) > 0 {
+		if len(opts.Command) > 0 && !slices.Equal(opts.Command, inj.command) {
+			fmt.Fprintf(os.Stderr,
+				"nim: ignoring the command given on the command line; connector %q is registered to run %s\n"+
+					"nim: the daemon decides what a credential may be injected into, not the caller\n",
+				opts.Connector, strings.Join(inj.command, " "))
+		}
+		command = inj.command
+	}
+	if len(command) == 0 {
+		return fmt.Errorf(
+			"no downstream command: give one after --, or register one with "+
+				"nim connector set %s --env KEY -- <command> [args...]", opts.Connector)
 	}
 
 	s := &Shim{
@@ -163,7 +192,7 @@ func Run(opts Options) error {
 		os.Exit(0)
 	}()
 
-	cmd := exec.Command(opts.Command[0], opts.Command[1:]...)
+	cmd := buildDownstreamCmd(command, inj.env)
 	downIn, err := cmd.StdinPipe()
 	if err != nil {
 		return err
@@ -176,7 +205,7 @@ func Run(opts Options) error {
 	// passed straight through rather than captured.
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("cannot start %s: %w", opts.Command[0], err)
+		return fmt.Errorf("cannot start %s: %w", command[0], err)
 	}
 
 	// Read, never create: replacing a lost identifier would reseed the journal's
@@ -497,7 +526,7 @@ func dialDaemon(cfg config.Config) *reporter {
 	r := &reporter{ch: make(chan item, 256), done: make(chan struct{})}
 	conn, err := net.DialTimeout("unix", cfg.Daemon.Socket, 300*time.Millisecond)
 	if err != nil {
-		if startDaemon() {
+		if StartDaemon() {
 			for i := 0; i < 20 && conn == nil; i++ {
 				time.Sleep(100 * time.Millisecond)
 				conn, _ = net.DialTimeout("unix", cfg.Daemon.Socket, 300*time.Millisecond)
@@ -714,22 +743,120 @@ func (r *reporter) close() {
 	<-r.done
 }
 
-// startDaemon launches this same binary in daemon mode. Several shims may race;
-// the daemon that loses the socket exits quietly.
+// StartDaemon launches this same binary in daemon mode, detached so it
+// outlives the shim's process group and session -- see daemonSysProcAttr.
+//
+// Detachment matters more here than it did when the daemon only recorded. A
+// terminal SIGINT reaches the whole foreground process group, and a daemon
+// that dies with the client session takes enforcement down with it: every
+// shim still running would then deny every call, because that is what an
+// unreachable daemon means. The daemon has to outlive any single session for
+// the fail-closed default to be a safety net rather than an outage.
+//
+// Several shims may race; the daemon that loses the socket exits quietly.
+// Exported so connector management commands, which also need the daemon
+// running, can reuse it instead of duplicating process-spawn logic.
 //
 // Its diagnostics go to a log file rather than nowhere. A daemon that fails to
 // start silently leaves the user believing calls are being recorded when they
 // are not, which is the one failure this tool must never have.
-func startDaemon() bool {
+func StartDaemon() bool {
 	self, err := os.Executable()
 	if err != nil {
 		return false
 	}
-	cmd := exec.Command(self, "daemon")
-	if log, err := os.OpenFile(config.LogPath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600); err == nil {
-		cmd.Stdout, cmd.Stderr = log, log
-	}
-	return cmd.Start() == nil
+	log, _ := os.OpenFile(config.LogPath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	return startDaemonProcess(self, log) == nil
 }
 
 func nowRFC3339() string { return time.Now().UTC().Format(time.RFC3339Nano) }
+
+// injection is what the daemon authorized for one connector: the environment
+// to add, and the command that environment may be added to. Both or neither --
+// a credential is never separable from the process allowed to receive it.
+type injection struct {
+	env     []string
+	command []string
+}
+
+// buildDownstreamCmd is split out so a test can inspect cmd.Args and cmd.Env
+// directly: a credential must reach the downstream only through the latter,
+// never the former, where it would be visible to any local user via ps.
+func buildDownstreamCmd(command []string, env []string) *exec.Cmd {
+	cmd := exec.Command(command[0], command[1:]...)
+	if len(env) > 0 {
+		cmd.Env = append(os.Environ(), env...)
+	}
+	return cmd
+}
+
+// fetchConnector asks the daemon what to inject for connector, and into what,
+// before anything is spawned. Four outcomes, and which of them is open and
+// which is closed is argued in docs/decisions/0001-failure-behaviour.md:
+//
+//   - the daemon cannot be reached at all: treated as "no connector", so the
+//     relay still starts. Nothing is leaked by this -- there is no credential
+//     to leak -- and every tools/call in that session is denied anyway,
+//     because an unreachable daemon is a denial. A server that starts and
+//     refuses tools tells the operator what is wrong; one that fails to start
+//     does not.
+//   - the daemon answers Found=false: no connector configured. The ordinary
+//     case for most connectors, and not a failure.
+//   - Found=true with Error set: a connector IS configured but its credential
+//     cannot be released. Fails closed -- Run refuses to spawn rather than
+//     start the downstream under a partial configuration. A connector
+//     registered before commands existed lands here, deliberately.
+//   - Found=true with no error: the env to inject and the one command it may
+//     be injected into. A response carrying a credential but no command is
+//     itself refused; that pairing is the whole authorization.
+func fetchConnector(cfg config.Config, connector string) (injection, error) {
+	conn, err := net.DialTimeout("unix", cfg.Daemon.Socket, 300*time.Millisecond)
+	if err != nil {
+		if !StartDaemon() {
+			return injection{}, nil
+		}
+		for i := 0; i < 20 && conn == nil; i++ {
+			time.Sleep(100 * time.Millisecond)
+			conn, _ = net.DialTimeout("unix", cfg.Daemon.Socket, 300*time.Millisecond)
+		}
+		if conn == nil {
+			return injection{}, nil
+		}
+	}
+	defer conn.Close()
+
+	conn.SetDeadline(time.Now().Add(2 * time.Second))
+
+	if err := json.NewEncoder(conn).Encode(daemon.Request{
+		ID:     config.NewID(),
+		Kind:   daemon.KindCredentialGet,
+		Target: connector,
+	}); err != nil {
+		return injection{}, nil // could not ask; see above
+	}
+	var resp daemon.Response
+	if err := json.NewDecoder(conn).Decode(&resp); err != nil {
+		return injection{}, nil
+	}
+
+	if !resp.Found {
+		return injection{}, nil
+	}
+	if resp.Error != "" {
+		return injection{}, fmt.Errorf(
+			"connector %q is configured but its credential could not be retrieved: %s", connector, resp.Error)
+	}
+	if len(resp.Env) > 0 && len(resp.Command) == 0 {
+		// The daemon should never send this. Refusing rather than falling back
+		// to the caller's own command means a future daemon bug cannot quietly
+		// reopen the oracle this pairing exists to close.
+		return injection{}, fmt.Errorf(
+			"connector %q returned a credential with no authorized command; refusing to spawn", connector)
+	}
+
+	pairs := make([]string, 0, len(resp.Env))
+	for k, v := range resp.Env {
+		pairs = append(pairs, k+"="+v)
+	}
+	return injection{env: pairs, command: resp.Command}, nil
+}

@@ -14,9 +14,12 @@ package journal
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -86,7 +89,45 @@ create index if not exists nim_journal_kind_idx        on nim_journal (kind);
 -- distinct, so those stay unconstrained -- a session can have as many anomalies
 -- as it produces.
 create unique index if not exists nim_journal_entry_idx on nim_journal (session_id, seq, kind);
+
+-- Connector metadata. Not part of the chain, and deliberately so: the chain
+-- records what happened, and this is configuration that decides what may
+-- happen. Mixing the two would put a mutable row inside an append-only record.
+--
+-- No secret column. The credential value lives in the OS credential store (see
+-- internal/credential) and never here. This holds only the env var name it is
+-- injected under and the argv of the one server allowed to receive it.
+--
+-- command is an authorization input, which is why it is in SQLite rather than
+-- config.toml: the standing decision is that SQLite is the only thing an
+-- authorization decision reads, and the daemon is its only writer.
+create table if not exists nim_connectors (
+    target      text primary key,
+    env_key     text    not null,
+    command     text,
+    updated_at  text    not null
+);
 `
+
+// migrations are additive statements applied after schema, each of which must
+// be safe to run against a database that already has it applied.
+//
+// SQLite has no "add column if not exists", and create-table-if-not-exists does
+// nothing to a table that already exists, so a column added to an install that
+// predates it needs this. A duplicate-column error is the expected result on
+// every run after the first and is not a failure.
+var migrations = []string{
+	`alter table nim_connectors add column command text`,
+}
+
+func migrate(db *sql.DB) error {
+	for _, stmt := range migrations {
+		if _, err := db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+			return fmt.Errorf("migration %q: %w", stmt, err)
+		}
+	}
+	return nil
+}
 
 // Views keep the shape the mirror already expects, without letting anything
 // mutable back into the journal.
@@ -243,6 +284,10 @@ func Open(path, machineID string) (*Journal, error) {
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("schema: %w", err)
+	}
+	if err := migrate(db); err != nil {
+		db.Close()
+		return nil, err
 	}
 	if err := syncViews(db); err != nil {
 		db.Close()
@@ -436,4 +481,127 @@ func (j *Journal) CountCalls() (int, error) {
 	err := j.db.QueryRow(
 		`select count(*) from nim_journal where kind = ?`, KindCallRequest).Scan(&n)
 	return n, err
+}
+
+// Connector is non-secret connector metadata: which env var a target's
+// credential is injected under, and the one command that credential may be
+// injected into. The credential value itself is never here -- see
+// internal/credential.
+//
+// Command is nil for a connector registered before commands existed. That is
+// not a connector with "no restriction": it is one whose authorized command is
+// unknown, and the daemon refuses to release its secret at all until it is
+// registered again. See daemon.handleCredentialGet.
+type Connector struct {
+	Target    string
+	EnvKey    string
+	Command   []string
+	UpdatedAt time.Time
+}
+
+// SetConnector is an upsert: setting a connector that already exists replaces
+// its env key and command, exactly as the credential store's own Set replaces
+// the secret.
+func (j *Journal) SetConnector(target, envKey string, command []string, at time.Time) error {
+	if j.readOnly {
+		return errReadOnly
+	}
+	encoded, err := encodeCommand(command)
+	if err != nil {
+		return err
+	}
+	_, err = j.db.Exec(
+		`insert into nim_connectors (target, env_key, command, updated_at) values (?, ?, ?, ?)
+		 on conflict (target) do update set
+		   env_key    = excluded.env_key,
+		   command    = excluded.command,
+		   updated_at = excluded.updated_at`,
+		target, envKey, encoded, at.UTC().Format(time.RFC3339Nano),
+	)
+	return err
+}
+
+// encodeCommand stores argv as JSON rather than a joined string: a command
+// argument can contain a space, and re-splitting on one would silently change
+// what gets spawned. An empty command is stored as NULL, distinctly from an
+// empty argv.
+func encodeCommand(command []string) (any, error) {
+	if len(command) == 0 {
+		return nil, nil
+	}
+	b, err := json.Marshal(command)
+	if err != nil {
+		return nil, fmt.Errorf("encoding connector command: %w", err)
+	}
+	return string(b), nil
+}
+
+func decodeCommand(s sql.NullString) ([]string, error) {
+	if !s.Valid || s.String == "" {
+		return nil, nil
+	}
+	var out []string
+	if err := json.Unmarshal([]byte(s.String), &out); err != nil {
+		return nil, fmt.Errorf("decoding connector command: %w", err)
+	}
+	return out, nil
+}
+
+// ConnectorInfo looks up one target. found is false, with no error, if no
+// connector is configured for it -- the ordinary case for most targets, not a
+// failure. See docs/decisions/0001-failure-behaviour.md.
+func (j *Journal) ConnectorInfo(target string) (c Connector, found bool, err error) {
+	var updatedAt string
+	var command sql.NullString
+	err = j.db.QueryRow(
+		`select target, env_key, command, updated_at from nim_connectors where target = ?`, target).
+		Scan(&c.Target, &c.EnvKey, &command, &updatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Connector{}, false, nil
+	}
+	if err != nil {
+		return Connector{}, false, err
+	}
+	if c.Command, err = decodeCommand(command); err != nil {
+		return Connector{}, false, err
+	}
+	c.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedAt)
+	return c, true, nil
+}
+
+// ListConnectors returns every configured connector, ordered by target.
+func (j *Journal) ListConnectors() ([]Connector, error) {
+	rows, err := j.db.Query(
+		`select target, env_key, command, updated_at from nim_connectors order by target`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []Connector
+	for rows.Next() {
+		var c Connector
+		var updatedAt string
+		var command sql.NullString
+		if err := rows.Scan(&c.Target, &c.EnvKey, &command, &updatedAt); err != nil {
+			return nil, err
+		}
+		if c.Command, err = decodeCommand(command); err != nil {
+			return nil, err
+		}
+		c.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedAt)
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// DeleteConnector removes a target's metadata. It is not an error to remove one
+// that was never configured -- callers that only want removal to be idempotent
+// do not need to check first.
+func (j *Journal) DeleteConnector(target string) error {
+	if j.readOnly {
+		return errReadOnly
+	}
+	_, err := j.db.Exec(`delete from nim_connectors where target = ?`, target)
+	return err
 }
