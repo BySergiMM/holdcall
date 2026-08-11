@@ -149,13 +149,16 @@ tbody tr.sel{background:#1d2836}
       <div class="hd">Sessions — newest first</div>
       <div class="scroll"><table>
         <thead><tr><th>#</th><th>session</th><th>state</th><th>connector</th><th>client</th>
-          <th>calls recorded</th><th>outcomes</th><th>anomalies</th><th>started</th></tr></thead>
+          <th>calls recorded</th><th>denied</th><th>outcomes</th><th>anomalies</th><th>started</th></tr></thead>
         <tbody id="session-rows"></tbody>
       </table></div>
       <div class="bd">
         <p class="note"><b>unfinished</b> means no <code>session.end</code> was recorded. That
         covers a session running right now and one whose daemon died without writing an end —
         the journal cannot tell them apart, so neither can this page.</p>
+        <p class="note"><b>denied</b> counts the calls Nim refused. A refused call never
+        gets an outcome, so <b>calls recorded</b> minus <b>outcomes</b> is not a count of
+        anything that went missing.</p>
         <p class="note"><b>connector</b> and <b>client</b> are labels the relay reported for
         itself. They are self-asserted, not facts Nim established.</p>
       </div>
@@ -322,7 +325,7 @@ function renderSessions() {
   const list = (snapshot && snapshot.sessions) || [];
   if (!list.length) {
     const tr = el("tr"), td = el("td", "empty", "No sessions recorded.");
-    td.colSpan = 9; tr.appendChild(td); rows.appendChild(tr); return;
+    td.colSpan = 10; tr.appendChild(td); rows.appendChild(tr); return;
   }
   for (const s of list) {
     const tr = el("tr");
@@ -332,7 +335,7 @@ function renderSessions() {
     add(shortId(s.id));
     add(s.state, s.state === "unfinished" ? "warn" : "dim");
     add(s.connector); add(s.client);
-    add(s.calls_recorded); add(s.outcomes);
+    add(s.calls_recorded); add(s.denied, s.denied ? "warn" : "dim"); add(s.outcomes);
     add(s.anomalies, s.anomalies ? "warn" : "");
     add(when(s.started_at), "dim");
     tr.onclick = () => selectSession(s);
@@ -387,7 +390,7 @@ async function selectSession(s) {
   row("connector", d.session.connector); row("client", d.session.client);
   row("machine_id", d.session.machine_id);
   row("started_at", d.session.started_at); row("ended_at", d.session.ended_at);
-  row("calls recorded", d.session.calls_recorded);
+  row("calls recorded", d.session.calls_recorded); row("denied", d.session.denied);
   row("outcomes", d.session.outcomes); row("anomalies", d.session.anomalies);
   row("entries", d.events.length);
   $("#detail-note").textContent = d.session.state === "unfinished"

@@ -1,12 +1,19 @@
 // Package daemon owns everything shared between shims.
 //
-// A client spawns one shim per configured MCP server, so budgets, the journal
-// and (later) human approval need a single writer. The shims report here; this
-// process is the only one that touches SQLite.
+// A client spawns one shim per configured MCP server, so decisions, the journal
+// and (later) budgets and human approval need a single writer. The shims report
+// here; this process is the only one that touches SQLite.
 //
-// The wire protocol is deliberately one-way. A shim never waits for an answer,
-// because the relay must never stall on bookkeeping: if the daemon is slow,
-// absent or wedged, tool calls still flow.
+// One report is answered, and only one. A shim asks before it forwards a
+// tools/call and waits, because a call that has been sent cannot be recalled.
+// Everything else -- sessions, outcomes, anomalies -- is still one way and still
+// never stalls the relay.
+//
+// The decision is written before it is sent. A shim is told "allow" only once
+// the entry recording that allowance is in the journal, which is what makes a
+// forwarded call a recorded call. The converse does not follow: an allow in the
+// journal does not mean the call was made, because the shim may have given up
+// waiting first. docs/milestones.md sets out that race.
 package daemon
 
 import (
@@ -45,6 +52,10 @@ type Event struct {
 
 // A call is reported twice, as two immutable entries rather than one row that
 // gets updated: the chain cannot cover a row that changes after it is written.
+//
+// An allowed call is reported twice. A refused one is reported once: there is
+// no outcome to record for something that never ran, and inventing one would
+// put a result in the journal for work nobody did.
 const (
 	KindSessionStart = journal.KindSessionStart
 	KindCallRequest  = journal.KindCallRequest
@@ -52,6 +63,32 @@ const (
 	KindSessionEnd   = journal.KindSessionEnd
 	KindAnomaly      = journal.KindAnomaly
 )
+
+// KindDecision names the daemon's answer to a call.request.
+//
+// Not a journal kind: nothing is ever written under it. The decision itself is
+// recorded on the call.request entry, which is the thing the chain covers.
+const KindDecision = "decision"
+
+// DecisionUndecided answers a call the daemon could not act on at all: the
+// attempt to record it failed, so nothing was journaled and nothing was
+// actually decided. It travels on the wire only -- journal.Decision* are the
+// values a row can hold, and this call never produced one.
+const DecisionUndecided = "undecided"
+
+// Decision is the only message the daemon sends back.
+//
+// It echoes the session and sequence it answers so the shim can check that the
+// reply belongs to the question. Without that, one lost or late message puts the
+// two out of step and every later answer is attributed to the wrong call --
+// which would eventually mean forwarding a call the daemon refused.
+type Decision struct {
+	Kind      string `json:"kind"`
+	SessionID string `json:"session_id"`
+	Seq       int    `json:"seq"`
+	Decision  string `json:"decision"`
+	Reason    string `json:"reason,omitempty"`
+}
 
 // Run serves until the process is stopped. It returns nil when another daemon
 // already holds the socket: two shims racing to start one is normal, and the
@@ -110,7 +147,7 @@ func Run(cfg config.Config) error {
 		if err != nil {
 			return err
 		}
-		go handle(conn, j)
+		go handle(conn, j, cfg.Policy)
 	}
 }
 
@@ -137,7 +174,7 @@ func listen(path string) (net.Listener, error) {
 	return net.Listen("unix", path)
 }
 
-func handle(conn net.Conn, j *journal.Journal) {
+func handle(conn net.Conn, j *journal.Journal, policy config.Policy) {
 	defer conn.Close()
 
 	// Sessions opened on this connection that have not been closed yet.
@@ -178,6 +215,19 @@ func handle(conn net.Conn, j *journal.Journal) {
 			log.Printf("malformed event: %v", err)
 			continue
 		}
+
+		// The one report that is answered. A failure to answer ends the
+		// connection rather than carrying on: the shim is waiting, and a stream
+		// where one question went unanswered can no longer be trusted to pair
+		// the next answer with the right call.
+		if ev.Kind == KindCallRequest {
+			if err := answer(conn, ev, j, policy); err != nil {
+				log.Printf("answering %s seq %d: %v", ev.SessionID, ev.Seq, err)
+				return
+			}
+			continue
+		}
+
 		if err := apply(ev, j); err != nil {
 			log.Printf("%s: %v", ev.Kind, err)
 			continue
@@ -189,6 +239,35 @@ func handle(conn net.Conn, j *journal.Journal) {
 			delete(open, ev.SessionID)
 		}
 	}
+}
+
+// answer decides one call, records the decision, and only then tells the shim.
+//
+// The order is the point. If the entry cannot be written the answer is deny,
+// because allowing a call Nim failed to record would break the one thing this
+// milestone guarantees: that a call which reached a connector is a call the
+// journal knows about.
+func answer(conn net.Conn, ev Event, j *journal.Journal, policy config.Policy) error {
+	decision, reason := journal.DecisionAllow, ""
+	if policy.Denied(ev.Tool) {
+		decision = journal.DecisionDeny
+		reason = "the tool is on the deny list in config.toml"
+	}
+
+	ev.Decision = decision
+	if err := apply(ev, j); err != nil {
+		log.Printf("call.request: %v", err)
+		decision = DecisionUndecided
+		reason = "the call could not be recorded"
+	}
+
+	return json.NewEncoder(conn).Encode(Decision{
+		Kind:      KindDecision,
+		SessionID: ev.SessionID,
+		Seq:       ev.Seq,
+		Decision:  decision,
+		Reason:    reason,
+	})
 }
 
 // apply turns a report into one journal entry. Every kind appends; nothing

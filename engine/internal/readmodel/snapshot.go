@@ -143,6 +143,53 @@ func Take(src SnapshotSource) (Snapshot, error) {
 	return s, nil
 }
 
+// CallState is what the journal says happened to one call.
+//
+// Derived, never stored. A call is two entries, and what it means depends on
+// which of them are there: the same missing outcome is a call still running, or
+// a call that was refused and never had one to miss. Deriving it in one place is
+// the only way `nim log` and the console can agree on which.
+type CallState string
+
+const (
+	// CallCompleted: decided, forwarded, and answered.
+	CallCompleted CallState = "completed"
+	// CallPending: decided, with no outcome recorded. That covers a call running
+	// right now, one whose connector never answered, and one the relay denied
+	// locally after the daemon had already recorded the allowance. The journal
+	// cannot tell them apart, so this never means the call ran.
+	CallPending CallState = "pending"
+	// CallDenied: refused, so it never reached a connector and no outcome was
+	// ever due. This is not a missing entry.
+	CallDenied CallState = "denied"
+	// CallInconsistent: a refused call with an outcome. Nothing should produce
+	// this. It exists so that if anything does, it shows up instead of being
+	// rounded into one of the others.
+	CallInconsistent CallState = "inconsistent"
+)
+
+// CallStateOf reads the state from a decision and whether an outcome exists.
+//
+// "observed" is what was written before anything was decided; it reads like an
+// allowance because that is what the relay did with those calls -- forwarded
+// them. "approved" and "rejected" belong to human approval and are not written
+// yet, but a reader that meets one should not fall over, so they map to the
+// decision they amount to.
+func CallStateOf(decision string, hasOutcome bool) CallState {
+	switch decision {
+	case journal.DecisionDeny, journal.DecisionRejected:
+		if hasOutcome {
+			return CallInconsistent
+		}
+		return CallDenied
+	default: // observed, allow, approved
+		if hasOutcome {
+			return CallCompleted
+		}
+		return CallPending
+	}
+}
+
 // SessionState is what the journal can say about a session's shape.
 type SessionState string
 
@@ -170,8 +217,12 @@ type Session struct {
 	MachineID *string `json:"machine_id,omitempty"`
 
 	CallsRecorded int `json:"calls_recorded"`
-	Outcomes      int `json:"outcomes"`
-	Anomalies     int `json:"anomalies"`
+	// Denied is how many of those were refused. Without it, CallsRecorded and
+	// Outcomes differ for two unrelated reasons -- calls still running, and calls
+	// that never ran -- and a reader would have to guess which.
+	Denied    int `json:"denied"`
+	Outcomes  int `json:"outcomes"`
+	Anomalies int `json:"anomalies"`
 }
 
 // SessionFrom projects one session row.
@@ -186,6 +237,7 @@ func SessionFrom(r journal.SessionRow) Session {
 		Client:        copyString(r.Client),
 		MachineID:     copyString(r.MachineID),
 		CallsRecorded: r.CallsRecorded,
+		Denied:        r.Denied,
 		Outcomes:      r.Outcomes,
 		Anomalies:     r.Anomalies,
 	}

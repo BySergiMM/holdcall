@@ -292,10 +292,14 @@ func runLog(args []string) error {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "#\tWHEN\tCONNECTOR\tTOOL\tDECISION\tRESULT\tMS")
 	for _, c := range calls {
-		result := "(no response)"
-		if c.OK != nil {
+		// The same derivation the console uses, so a call cannot read as refused
+		// in a browser and as unanswered here. A completed call is worth more
+		// than the word "completed": it is the only state that has a result.
+		state := readmodel.CallStateOf(c.Decision, c.HasOutcome)
+		result := string(state)
+		if state == readmodel.CallCompleted {
 			result = "ok"
-			if !*c.OK {
+			if c.OK != nil && !*c.OK {
 				result = "failed"
 			}
 		}

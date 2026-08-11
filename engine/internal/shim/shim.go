@@ -1,18 +1,23 @@
 // Package shim is the relay a client actually spawns.
 //
-// It sits between the client's stdio and a downstream MCP server, forwarding
-// every message untouched. It recognises tools/call, pairs each request with
-// its response by id to learn the outcome and duration, and reports both to the
-// daemon.
+// It sits between the client's stdio and a downstream MCP server. It recognises
+// tools/call, asks the daemon whether the call may proceed, and pairs each
+// allowed request with its response by id to learn the outcome and duration.
 //
-// The relay's first duty is to be invisible. Reporting is best-effort and
-// happens off the critical path: if the daemon is missing or slow, messages
-// still flow and the client notices nothing. Nothing is ever blocked here.
+// A tools/call is the one thing that waits. The relay asks before forwarding
+// and blocks until it has an answer, because a call cannot be unsent. Every way
+// of not getting one -- no daemon, a slow daemon, a closed socket, an answer to
+// a different question -- is a denial. There is no path on which a tools/call
+// reaches a connector without a decision behind it.
 //
-// Best-effort reporting means the record can be incomplete, so the relay counts
-// what it fails to report and says so on stderr. It does not try to recover the
-// lost events: this whole reporting path is replaced when calls start being
-// authorized, and a repair built on top of it would be thrown away with it.
+// Everything else still flows without waiting. Other methods are relayed
+// untouched and never consult the daemon, and sessions, outcomes and anomalies
+// are still reported one way, so bookkeeping cannot stall the relay.
+//
+// A denial that happens because the daemon is unreachable leaves no journal
+// entry, since the only writer is exactly what could not be reached. Those are
+// counted as lost events and reported on stderr, which is as close to a record
+// as there can be.
 package shim
 
 import (
@@ -35,6 +40,20 @@ import (
 	"github.com/BySergiMM/nim/engine/internal/mcp"
 )
 
+// decisionTimeout bounds how long a tools/call waits for the daemon.
+//
+// Measured rather than picked: a socket hop plus a durable write is 0.157 ms at
+// the 99th percentile on this hardware, and 1.5 ms with sixteen relays
+// contending for the single writer. Two seconds is three orders of magnitude
+// past that, so it cannot fire because the daemon is busy -- only because it is
+// wedged or gone.
+//
+// It is shorter than SQLite's five-second busy timeout, which leaves a window: a
+// pathologically contended write can still land after the relay has given up and
+// denied, putting an allow in the journal for a call that never happened. That
+// call reads as pending, never as executed. docs/milestones.md sets it out.
+const decisionTimeout = 2 * time.Second
+
 // Options describes one relayed server.
 type Options struct {
 	Connector string   // name of the downstream server, e.g. "github"
@@ -55,6 +74,9 @@ type Shim struct {
 	sessionID string
 	reporter  *reporter
 
+	// out is everything Nim sends the client, from both pumps. See clientOut.
+	out *clientOut
+
 	mu       sync.Mutex
 	inFlight map[string]pending
 	seq      int
@@ -63,6 +85,29 @@ type Shim struct {
 	protocolVersion string // what the client and server actually agreed on
 
 	finished sync.Once
+	refused  sync.Once
+}
+
+// clientOut serialises everything Nim writes to the client.
+//
+// Two goroutines write here: the one relaying the server's responses, and the
+// one answering a call that was refused. A write to a pipe larger than the
+// kernel's atomic size can be split, and a relayed 512 KiB result with a denial
+// spliced through the middle of it is a corrupt message -- measured, not
+// assumed.
+//
+// Go's *os.File happens to take a lock of its own, which is why this does not
+// already break. That is an implementation detail of one type, and what the
+// relay writes to is an io.Writer.
+type clientOut struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (c *clientOut) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.w.Write(p)
 }
 
 // Run relays until the client closes stdin or the downstream server exits.
@@ -84,6 +129,7 @@ func Run(opts Options) error {
 		opts:      opts,
 		sessionID: config.NewID(),
 		reporter:  dialDaemon(opts.Config),
+		out:       &clientOut{w: os.Stdout},
 		inFlight:  make(map[string]pending),
 	}
 	defer s.finish()
@@ -141,7 +187,7 @@ func Run(opts Options) error {
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() { defer wg.Done(); s.pumpRequests(os.Stdin, downIn) }()
-	go func() { defer wg.Done(); s.pumpResponses(downOut, os.Stdout) }()
+	go func() { defer wg.Done(); s.pumpResponses(downOut, s.out) }()
 	wg.Wait()
 
 	err = cmd.Wait()
@@ -168,7 +214,11 @@ func (s *Shim) finish() {
 	})
 }
 
-// pumpRequests carries client -> server, noting every tools/call on the way.
+// pumpRequests carries client -> server, deciding every tools/call on the way.
+//
+// Three things can stop a message here, and nothing else does: a tools/call the
+// daemon refused, a batch carrying one, and a frame Nim could not read. Anything
+// else goes on as the bytes that arrived.
 func (s *Shim) pumpRequests(in io.Reader, out io.WriteCloser) {
 	defer out.Close()
 	r := mcp.NewReader(in)
@@ -177,22 +227,150 @@ func (s *Shim) pumpRequests(in io.Reader, out io.WriteCloser) {
 		if err != nil {
 			return
 		}
+
 		env, anomaly := mcp.Classify(raw)
-		switch {
-		case anomaly != mcp.AnomalyNone:
+		if anomaly != mcp.AnomalyNone {
 			s.noteAnomaly(anomaly)
+		}
+
+		switch {
+		case anomaly == mcp.AnomalyBatch:
+			if !s.batchMayPass(raw) {
+				continue
+			}
+
+		case anomaly != mcp.AnomalyNone:
+			// Unreadable, so unaccountable. Go rejects JSON that other parsers
+			// accept -- NaN is the easy example -- so a frame Nim cannot parse
+			// may still be a tools/call to the server behind it. There is no id
+			// to answer with, and guessing one would be worse than silence.
+			s.refuse(refusalName(anomaly))
+			continue
+
 		case env.IsToolCall():
-			s.noteRequest(env)
+			if !s.decide(env) {
+				continue // refused; the client has already been told
+			}
+
 		case env.IsInitialize():
 			s.mu.Lock()
 			s.initializeKey = env.Key()
 			s.mu.Unlock()
 		}
+
 		// Byte for byte, whatever it was.
 		if _, err := out.Write(raw); err != nil {
 			return
 		}
 	}
+}
+
+// decide asks the daemon and answers the client itself when the call is refused.
+//
+// Reports whether the original bytes may go on to the server. Nothing is
+// rewritten on the way: a call either travels exactly as it arrived, or it does
+// not travel.
+func (s *Shim) decide(env mcp.Envelope) bool {
+	key := env.Key()
+
+	s.mu.Lock()
+	_, reused := s.inFlight[key]
+	s.seq++
+	p := pending{tool: env.ToolName(), digest: env.ArgumentsDigest(), seq: s.seq, started: time.Now()}
+	s.mu.Unlock()
+
+	// Two calls in flight under one id: the second answer cannot be matched to
+	// the right request, so neither can be trusted to describe what happened.
+	if reused {
+		s.noteAnomaly(anomalyDuplicateID)
+	}
+
+	// No decision field: the shim does not get to say what was decided. It asks,
+	// and the daemon records its own answer.
+	v := s.reporter.ask(daemon.Event{
+		Kind:       daemon.KindCallRequest,
+		SessionID:  s.sessionID,
+		Seq:        p.seq,
+		Tool:       p.tool,
+		Digest:     p.digest,
+		OccurredAt: p.started.UTC().Format(time.RFC3339Nano),
+	})
+
+	if v == verdictAllow {
+		// In flight only now. A refused call never gets an outcome, so it must
+		// not be left waiting for one -- that would look like a call that never
+		// came back.
+		if key != "" {
+			s.mu.Lock()
+			s.inFlight[key] = p
+			s.mu.Unlock()
+		}
+		return true
+	}
+
+	// A tools/call with no id expects no reply, and MCP does not produce one,
+	// but nothing here depends on that being true.
+	if !env.IsNotification() {
+		text := mcp.DeniedNoDecision
+		if v == verdictDeniedByPolicy {
+			text = mcp.DeniedByPolicy
+		}
+		s.toClient(mcp.DenyResponse(env.ID, text))
+	}
+	return false
+}
+
+// batchMayPass reports whether a JSON-RPC batch may be relayed.
+//
+// A batch is all or nothing. Deciding its elements one by one would need a
+// sequence number for each, entries for calls the record has no shape for, and a
+// response reader that understands arrays -- a great deal of machinery for
+// something the current MCP specification removed. So a batch carrying a
+// tools/call is refused whole, and one carrying none is relayed exactly as it
+// arrived, as it always was.
+func (s *Shim) batchMayPass(raw []byte) bool {
+	envs, ok := mcp.BatchElements(raw)
+	if !ok {
+		s.refuse("a batch Nim could not read")
+		return false
+	}
+	if !slices.ContainsFunc(envs, mcp.Envelope.IsToolCall) {
+		return true
+	}
+	s.refuse("a batch carrying a tools/call")
+	s.toClient(mcp.DenyBatch(envs, mcp.DeniedBatch))
+	return false
+}
+
+// toClient writes one complete message to the client, or nothing.
+func (s *Shim) toClient(b []byte) {
+	if len(b) == 0 || s.out == nil {
+		return
+	}
+	s.out.Write(b)
+}
+
+// refusalName describes an unreadable frame in the terms the user will
+// recognise, because "malformed" and "two messages in one line" are different
+// problems on their end.
+func refusalName(a mcp.Anomaly) string {
+	if a == mcp.AnomalyFraming {
+		return "a frame carrying more than one message"
+	}
+	return "a frame that is not valid JSON"
+}
+
+// refuse says once that Nim is dropping frames rather than relaying them.
+//
+// Once, for the same reason the loss warning is: this is on the relay's path,
+// and a line per message would bury the client's own output. The anomaly entries
+// carry the count.
+func (s *Shim) refuse(what string) {
+	s.refused.Do(func() {
+		fmt.Fprintf(os.Stderr,
+			"nim: not relaying %s\nnim: Nim cannot inspect it, and forwarding it would put a call in front of a server unchecked\n",
+			what)
+	})
 }
 
 // pumpResponses carries server -> client, closing the loop on pending calls.
@@ -210,36 +388,6 @@ func (s *Shim) pumpResponses(in io.Reader, out io.Writer) {
 			return
 		}
 	}
-}
-
-func (s *Shim) noteRequest(env mcp.Envelope) {
-	key := env.Key()
-
-	s.mu.Lock()
-	_, reused := s.inFlight[key]
-	s.seq++
-	p := pending{tool: env.ToolName(), digest: env.ArgumentsDigest(), seq: s.seq, started: time.Now()}
-	if key != "" {
-		s.inFlight[key] = p
-	}
-	s.mu.Unlock()
-
-	// Two calls in flight under one id: the second answer cannot be matched to
-	// the right request, so neither can be trusted to describe what happened.
-	if reused {
-		s.noteAnomaly(anomalyDuplicateID)
-	}
-
-	// Recorded on the way out, so a call that never returns is still on record.
-	s.report(daemon.Event{
-		Kind:       daemon.KindCallRequest,
-		SessionID:  s.sessionID,
-		Seq:        p.seq,
-		Tool:       p.tool,
-		Digest:     p.digest,
-		Decision:   journal.DecisionObserved, // nothing is authorized here
-		OccurredAt: p.started.UTC().Format(time.RFC3339Nano),
-	})
 }
 
 func (s *Shim) noteResponse(env mcp.Envelope) {
@@ -284,11 +432,46 @@ func (s *Shim) noteAnomaly(a mcp.Anomaly) {
 
 func (s *Shim) report(ev daemon.Event) { s.reporter.send(ev) }
 
-// reporter delivers events to the daemon without ever blocking the relay.
+// verdict is what a tools/call gets back from the daemon.
+//
+// The zero value is the safe default: anything that is not an explicit allow
+// or an explicit policy denial is treated as no decision at all, so a
+// tools/call refused this way reads as retryable, not as ruled against.
+type verdict int
+
+const (
+	verdictNoDecision verdict = iota
+	verdictAllow
+	verdictDeniedByPolicy
+)
+
+// item is one thing to send. reply is nil for the reports that expect no answer.
+type item struct {
+	ev       daemon.Event
+	reply    chan verdict
+	deadline time.Time
+}
+
+// reporter carries events to the daemon and brings decisions back.
+//
+// One goroutine owns the connection in both directions. That is not tidiness: a
+// decision arrives on the same socket the events leave by, so a second writer
+// could interleave bytes between a question and its answer, and a second reader
+// could take an answer meant for someone else.
 type reporter struct {
 	conn net.Conn
-	ch   chan daemon.Event
+	enc  *json.Encoder
+	dec  *mcp.Reader
+
+	ch   chan item
 	done chan struct{}
+
+	// sendMu guards the channel against being closed while something is still
+	// putting work on it. A tools/call can be waiting for up to decisionTimeout
+	// when a signal arrives and ends the session, and a send on a closed channel
+	// is a panic rather than a lost event.
+	sendMu sync.Mutex
+	closed bool
 
 	mu     sync.Mutex
 	lost   int
@@ -301,7 +484,7 @@ type reporter struct {
 }
 
 func dialDaemon(cfg config.Config) *reporter {
-	r := &reporter{ch: make(chan daemon.Event, 256), done: make(chan struct{})}
+	r := &reporter{ch: make(chan item, 256), done: make(chan struct{})}
 	conn, err := net.DialTimeout("unix", cfg.Daemon.Socket, 300*time.Millisecond)
 	if err != nil {
 		if startDaemon() {
@@ -311,24 +494,35 @@ func dialDaemon(cfg config.Config) *reporter {
 			}
 		}
 	}
-	r.conn = conn
+	if conn != nil {
+		r.attach(conn)
+	} else {
+		// Worth two lines rather than the usual one. With no daemon there is
+		// nothing to record a call against, so every call in this session will
+		// be refused -- and a user who is not told that will read the refusals
+		// as the tools being broken.
+		fmt.Fprintf(os.Stderr,
+			"nim: no daemon is listening on %s\nnim: a call Nim cannot record is a call Nim will not forward, so every tool call in this session will be denied\n",
+			cfg.Daemon.Socket)
+	}
 	go r.loop()
 	return r
 }
 
+// attach binds the connection and the codecs that read and write it, so they
+// are never out of step with each other.
+func (r *reporter) attach(conn net.Conn) {
+	r.conn, r.enc, r.dec = conn, json.NewEncoder(conn), mcp.NewReader(conn)
+}
+
 func (r *reporter) loop() {
 	defer close(r.done)
-	enc := json.NewEncoder(r.conn)
-	for ev := range r.ch {
-		if r.conn == nil {
-			r.miss("no daemon is listening")
+	for it := range r.ch {
+		if it.reply == nil {
+			r.post(it.ev)
 			continue
 		}
-		if err := enc.Encode(ev); err != nil {
-			r.conn.Close()
-			r.conn = nil
-			r.miss("the daemon stopped accepting events mid-session")
-		}
+		it.reply <- r.exchange(it)
 	}
 	if r.conn != nil {
 		r.conn.Close()
@@ -336,13 +530,131 @@ func (r *reporter) loop() {
 	r.summarise()
 }
 
-func (r *reporter) send(ev daemon.Event) {
+// post sends one event and expects nothing back.
+func (r *reporter) post(ev daemon.Event) {
+	if r.conn == nil {
+		r.miss("no daemon is listening")
+		return
+	}
+	r.conn.SetWriteDeadline(time.Now().Add(decisionTimeout))
+	if err := r.enc.Encode(ev); err != nil {
+		r.drop("the daemon stopped accepting events mid-session")
+	}
+}
+
+// exchange sends a call.request and waits for the answer to that exact call.
+//
+// Every failure returns the zero verdict, which is a denial. The queue, the
+// socket, the clock and the daemon all get to say no; only one specific reply
+// says yes.
+func (r *reporter) exchange(it item) verdict {
+	if r.conn == nil {
+		r.miss("there was no daemon to decide a call, so it was denied")
+		return verdictNoDecision
+	}
+
+	r.conn.SetWriteDeadline(it.deadline)
+	if err := r.enc.Encode(it.ev); err != nil {
+		r.drop("the daemon stopped accepting events mid-session")
+		return verdictNoDecision
+	}
+
+	r.conn.SetReadDeadline(it.deadline)
+	raw, err := r.dec.ReadRaw()
+	if err != nil {
+		r.drop("the daemon did not decide a call within " + decisionTimeout.String())
+		return verdictNoDecision
+	}
+
+	var d daemon.Decision
+	if err := json.Unmarshal(raw, &d); err != nil {
+		r.drop("the daemon sent something that was not a decision")
+		return verdictNoDecision
+	}
+
+	// The answer has to be to the question that was asked. A reply that does not
+	// match means the two are out of step, and the next answer would be read as
+	// belonging to a different call -- which is how a refusal turns into an
+	// allowance.
+	if d.Kind != daemon.KindDecision || d.SessionID != it.ev.SessionID || d.Seq != it.ev.Seq {
+		r.drop("the daemon answered a different call")
+		return verdictNoDecision
+	}
+
+	switch d.Decision {
+	case journal.DecisionAllow:
+		return verdictAllow
+	case journal.DecisionDeny:
+		return verdictDeniedByPolicy
+	case daemon.DecisionUndecided:
+		return verdictNoDecision
+	}
+	r.drop("the daemon sent a decision Nim does not understand")
+	return verdictNoDecision
+}
+
+// drop closes the connection for good and counts what it cost.
+//
+// Terminal on purpose. Reconnecting would mean guessing whether the events on
+// either side of the gap belong to the same story, and a relay that keeps trying
+// waits the full timeout on every call while denying all of them anyway. Once
+// this has happened, the rest of the session denies immediately.
+func (r *reporter) drop(reason string) {
+	if r.conn != nil {
+		r.conn.Close()
+	}
+	r.conn, r.enc, r.dec = nil, nil, nil
+	r.miss(reason)
+}
+
+// ask sends a call.request and waits for the daemon's decision.
+//
+// The clock starts here rather than at the write, so time spent queued behind
+// other reports counts against the same budget. A caller cannot wait longer than
+// decisionTimeout whatever the reporter is doing.
+func (r *reporter) ask(ev daemon.Event) verdict {
+	reply := make(chan verdict, 1)
+	deadline := time.Now().Add(decisionTimeout)
+
+	if !r.offer(item{ev: ev, reply: reply, deadline: deadline}) {
+		// A full queue is not a reason to let a call through, and waiting for
+		// room would stall behind whatever filled it. Denying is the only answer
+		// that is both bounded and safe.
+		r.miss("a call needed a decision and there was no room to ask for one")
+		return verdictNoDecision
+	}
+
 	select {
-	case r.ch <- ev:
-	default:
+	case v := <-reply:
+		return v
+	case <-time.After(time.Until(deadline)):
+		// The loop sets its own deadlines, so this should be unreachable. It is
+		// here because "should be" is not a bound.
+		return verdictNoDecision
+	}
+}
+
+func (r *reporter) send(ev daemon.Event) {
+	if !r.offer(item{ev: ev}) {
 		// The queue is full: drop rather than stall a tool call. Counted, so
 		// the record does not end up quietly short.
 		r.miss("events were produced faster than the daemon accepted them")
+	}
+}
+
+// offer puts work on the queue without ever blocking, and reports whether it
+// got there.
+func (r *reporter) offer(it item) bool {
+	r.sendMu.Lock()
+	defer r.sendMu.Unlock()
+	if r.closed {
+		return false
+	}
+	select {
+	case r.ch <- it:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -377,8 +689,18 @@ func (r *reporter) summarise() {
 		lost, strings.Join(causes, "; then "))
 }
 
+// close stops the reporter and waits for what is already queued to be sent.
+//
+// Anything still on the queue is delivered first, including a call waiting for a
+// decision: closing the channel ends the range loop only once it is drained, so
+// a call in flight when a signal arrives still gets its answer.
 func (r *reporter) close() {
-	close(r.ch)
+	r.sendMu.Lock()
+	if !r.closed {
+		r.closed = true
+		close(r.ch)
+	}
+	r.sendMu.Unlock()
 	<-r.done
 }
 

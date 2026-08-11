@@ -3,20 +3,22 @@
 // The transport is newline-delimited JSON: one message per line. Two rules
 // govern everything here.
 //
-// Messages are forwarded as the exact bytes that arrived. Parsing and
-// re-encoding JSON reorders keys and rewrites whitespace, which breaks clients
-// in ways that are hard to reproduce, so a message is never re-serialised --
-// it is inspected on the side and passed through untouched.
+// A message that is relayed is relayed as the exact bytes that arrived. Parsing
+// and re-encoding JSON reorders keys and rewrites whitespace, which breaks
+// clients in ways that are hard to reproduce, so a message is never
+// re-serialised -- it is inspected on the side and passed through untouched, or
+// it does not pass through at all.
 //
-// Nothing is assumed about a message beyond JSON-RPC's own envelope. Anything
-// that fails to parse, or that carries a method Nim does not know, is still
-// relayed. Nim only has to act on tools/call; the rest of the protocol is not
-// its business and must keep working as the specification evolves.
+// Nothing is assumed about a message beyond JSON-RPC's own envelope. A method
+// Nim does not know is still relayed: only tools/call is Nim's business, and
+// the rest of the protocol must keep working as the specification evolves.
 //
-// Relaying a message Nim did not understand is still relaying it unmediated, so
-// the ones it cannot account for are classified and counted -- see Classify.
-// Counting is all that happens here: nothing is rejected while Nim only
-// observes.
+// What is no longer true is that everything is relayed. A frame Nim cannot
+// parse may still be a tools/call to a more forgiving parser downstream -- Go
+// rejects NaN where Python accepts it, which is enough to put a call in front
+// of a server that Nim never saw -- so from M2 an unreadable frame is refused
+// instead of forwarded. Classify names the shapes; what happens to them is the
+// relay's decision, not this package's.
 package mcp
 
 import (
@@ -105,6 +107,31 @@ func Classify(raw []byte) (Envelope, Anomaly) {
 	return env, AnomalyNone
 }
 
+// BatchElements reads the messages a JSON-RPC batch carries.
+//
+// Inspection only: the array is never re-emitted, and a batch that is allowed
+// through travels as the bytes that arrived.
+//
+// ok is false when the frame is not an array, or when any element is not
+// something an envelope can be read from. A batch Nim cannot read completely is
+// one it cannot say anything safe about, and the caller is expected to treat
+// that as a refusal rather than as an empty batch.
+func BatchElements(raw []byte) ([]Envelope, bool) {
+	var items []json.RawMessage
+	if err := json.Unmarshal(bytes.TrimSpace(raw), &items); err != nil {
+		return nil, false
+	}
+	out := make([]Envelope, 0, len(items))
+	for _, item := range items {
+		var env Envelope
+		if err := json.Unmarshal(item, &env); err != nil {
+			return nil, false
+		}
+		out = append(out, env)
+	}
+	return out, true
+}
+
 // Reader yields raw messages from an MCP stdio stream.
 type Reader struct {
 	br *bufio.Reader
@@ -171,6 +198,16 @@ func (e Envelope) ProtocolVersion() string {
 // IsResponse reports whether this message answers an earlier request. Responses
 // carry an id and no method.
 func (e Envelope) IsResponse() bool { return len(e.ID) > 0 && e.Method == "" }
+
+// IsNotification reports whether this message expects no reply.
+//
+// JSON-RPC defines a notification as a Request object without an id member. A
+// present id of null is still a request expecting a reply with id: null --
+// unusual, and the spec itself calls it discouraged, but not the same thing
+// as absent.
+func (e Envelope) IsNotification() bool {
+	return len(e.ID) == 0
+}
 
 // Key returns a stable correlation key for a request id. JSON-RPC allows both
 // strings and numbers, so the raw encoding is used verbatim.

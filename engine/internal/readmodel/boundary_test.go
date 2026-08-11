@@ -85,7 +85,7 @@ func TestReadModelSurfaceIsFrozen(t *testing.T) {
 		}},
 		{"Session", Session{}, []string{
 			"anomalies", "calls_recorded", "chain_seq", "client", "connector",
-			"ended_at", "id", "machine_id", "outcomes", "started_at", "state",
+			"denied", "ended_at", "id", "machine_id", "outcomes", "started_at", "state",
 		}},
 	}
 
@@ -101,24 +101,30 @@ func TestReadModelSurfaceIsFrozen(t *testing.T) {
 	}
 }
 
-// Properties that belong to enforcement, which does not exist. None of them can
-// be expressed today, and none should become expressible by accident.
+// Properties the journal cannot support. None of them can be expressed today,
+// and none should become expressible by accident.
+//
+// The list shrank by exactly one word when enforcement arrived: "denied" is now
+// something the journal records, so the model may say it. Everything else on
+// this list is still a claim nothing in the record can back, and "allowed" is
+// deliberately still here -- the journal holds a decision, not a fact about what
+// then happened, and a field called allowed would invite exactly that reading.
 //
 // This is checked structurally: the question is whether the model has somewhere
 // to put such a value, not whether some string appears in the source.
 func TestReadModelCannotExpressEnforcement(t *testing.T) {
-	// Field names that would mean Nim decided, executed, or identified something.
 	forbidden := map[string]string{
-		"executed":          "the journal records that a call was seen, never that it ran",
+		"executed":          "the journal records a decision and an outcome, never that a call ran",
 		"active":            "a session with no end may be running or dead; the journal cannot tell",
-		"allowed":           "nothing is authorized yet",
-		"denied":            "nothing is authorized yet",
-		"policy":            "there is no policy engine",
+		"allowed":           "an allow is a decision, not evidence the call was made",
+		"blocked":           "Nim refused to forward a call; it did not stop anything else",
+		"policy":            "there is no policy model, only a deny list that is scaffolding",
+		"rule":              "there is no policy model, only a deny list that is scaffolding",
 		"agent":             "there is no agent identity",
 		"agent_id":          "there is no agent identity",
 		"identity":          "there is no agent identity",
-		"connector_reached": "whether a connector was reached is an M2 notion",
-		"reached":           "whether a connector was reached is an M2 notion",
+		"connector_reached": "the journal does not record whether the connector received anything",
+		"reached":           "the journal does not record whether the connector received anything",
 		"credential":        "credentials are never recorded",
 		"credentials":       "credentials are never recorded",
 		"loss_free":         "losses that leave no evidence cannot be ruled out",

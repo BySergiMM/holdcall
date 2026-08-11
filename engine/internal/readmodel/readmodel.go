@@ -76,9 +76,9 @@ type Event struct {
 	Tool         *string `json:"tool,omitempty"`
 	ParamsDigest *string `json:"params_digest,omitempty"`
 
-	// Decision is "observed" for everything written so far: nothing is
-	// authorized yet. The field is here because it is on the entry, not because
-	// it means a decision was made.
+	// Decision is what the daemon decided about this call: allow or deny. In
+	// journals written before enforcement it is "observed", which recorded that
+	// nothing had been decided at all.
 	Decision *string `json:"decision,omitempty"`
 
 	OK         *bool   `json:"ok,omitempty"`

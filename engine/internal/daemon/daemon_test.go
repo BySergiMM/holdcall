@@ -15,6 +15,11 @@ import (
 
 // start brings up a daemon on a private socket and returns a dialler for it.
 func start(t *testing.T) (cfg config.Config, dbPath string) {
+	return startWithPolicy(t, config.Policy{})
+}
+
+// startWithPolicy is the same, with a deny list.
+func startWithPolicy(t *testing.T, policy config.Policy) (cfg config.Config, dbPath string) {
 	t.Helper()
 
 	home := t.TempDir()
@@ -23,7 +28,10 @@ func start(t *testing.T) (cfg config.Config, dbPath string) {
 	sock := filepath.Join(os.TempDir(), fmt.Sprintf("nim-test-%d.sock", time.Now().UnixNano()%1e9))
 	t.Cleanup(func() { os.Remove(sock) })
 
-	cfg = config.Config{Daemon: config.Daemon{Socket: sock, DataDir: filepath.Join(home, "data")}}
+	cfg = config.Config{
+		Daemon: config.Daemon{Socket: sock, DataDir: filepath.Join(home, "data")},
+		Policy: policy,
+	}
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("test socket is unusable: %v", err)
 	}

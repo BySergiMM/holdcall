@@ -1,8 +1,14 @@
 // Package config resolves where Nim keeps its state and reads config.toml.
 //
-// config.toml configures the daemon and nothing else: socket path and data
-// directory. Nothing an authorization decision depends on is stored here --
-// that lives in SQLite, which is the source of truth.
+// config.toml configures the daemon: socket path, data directory, and -- for
+// this milestone only -- a list of tool names to refuse.
+//
+// That list is scaffolding, not the authorization model. It exists so the
+// enforcement path can be exercised end to end against something real, and it
+// gives up the property the rest of this file was written around: any process
+// able to write config.toml can empty it. Authorization belongs somewhere the
+// daemon owns, and until that exists nothing here should grow wildcards,
+// scopes, per-connector rules or an evaluation order. See docs/milestones.md.
 package config
 
 import (
@@ -13,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -25,12 +32,31 @@ const HomeEnvVar = "NIM_HOME"
 // Config is the whole of config.toml.
 type Config struct {
 	Daemon Daemon `toml:"daemon"`
+	Policy Policy `toml:"policy"`
 }
 
 type Daemon struct {
 	Socket  string `toml:"socket"`
 	DataDir string `toml:"data_dir"`
 }
+
+// Policy is a list of tool names to refuse, and nothing more.
+//
+//	[policy]
+//	deny = ["dangerous_tool"]
+//
+// Exact names, compared to params.name as the client sent it. No wildcards, no
+// patterns, no ordering, no per-connector rules: a name is on the list or it is
+// not, and anything not on it is allowed.
+//
+// This is the smallest thing that makes a real denial reachable outside a test.
+// It is not a policy engine and must not become one.
+type Policy struct {
+	Deny []string `toml:"deny"`
+}
+
+// Denied reports whether a tool name is on the deny list.
+func (p Policy) Denied(tool string) bool { return slices.Contains(p.Deny, tool) }
 
 // Home is the single directory Nim owns.
 func Home() string {

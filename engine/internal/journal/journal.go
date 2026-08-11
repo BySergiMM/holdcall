@@ -30,11 +30,23 @@ const (
 	KindAnomaly      = "anomaly"
 )
 
-// DecisionObserved is the only decision this milestone writes. Nothing is
-// authorized here, and recording "allow" would claim a decision that was never
-// made. The other values exist in the schema so the vocabulary does not have to
-// change when decisions arrive.
-const DecisionObserved = "observed"
+// The decisions an entry can carry.
+//
+// DecisionObserved is what M1.5 wrote, when the relay recorded calls without
+// authorizing them; journals from that milestone are full of it, so everything
+// reading the record still has to understand it.
+//
+// From M2 a call.request carries what the daemon actually decided. Approved and
+// rejected belong to human approval and are not written yet -- they are here so
+// the vocabulary a reader must handle is stated in one place rather than
+// scattered as literals.
+const (
+	DecisionObserved = "observed"
+	DecisionAllow    = "allow"
+	DecisionDeny     = "deny"
+	DecisionApproved = "approved"
+	DecisionRejected = "rejected"
+)
 
 const schema = `
 create table if not exists nim_journal (
@@ -102,6 +114,12 @@ select
 from nim_journal s
 where s.kind = 'session.start'`},
 
+	// has_outcome is its own column rather than something a reader infers from
+	// ok being non-null. Those two answer different questions -- whether the call
+	// finished, and whether it succeeded -- and they only happen to agree because
+	// every outcome written so far carries ok. A denied call has no outcome and
+	// never will, so telling "no outcome" apart from "outcome says nothing"
+	// decides whether it reads as refused or as still running.
 	{"nim_calls", `create view nim_calls as
 select
     r.chain_seq     as chain_seq,
@@ -112,6 +130,7 @@ select
     r.tool          as tool,
     r.params_digest as params_digest,
     r.decision      as decision,
+    o.chain_seq is not null as has_outcome,
     o.ok            as ok,
     o.duration_ms   as duration_ms,
     r.occurred_at   as occurred_at

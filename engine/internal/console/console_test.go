@@ -328,8 +328,11 @@ func TestNothingIsInventedForTheBrowser(t *testing.T) {
 	for _, path := range []string{"/api/snapshot", "/api/events?since=0", "/api/sessions/s1"} {
 		_, body := get(t, srv, path)
 		text := string(body)
+		// "denied" left this list when enforcement arrived: it is now a count the
+		// journal holds. The rest still are not, and "allowed" stays out because
+		// an allow is a decision rather than evidence the call was made.
 		for _, forbidden := range []string{
-			"arguments", "response", "executed", "\"active\"", "allowed", "denied",
+			"arguments", "response", "executed", "\"active\"", "allowed",
 			"tamper", "agent_id", "policy", "credential",
 		} {
 			if strings.Contains(strings.ToLower(text), forbidden) {

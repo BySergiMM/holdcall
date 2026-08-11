@@ -10,8 +10,17 @@ that needs it.
   have one writer.
 - **SQLite is the source of truth** for configuration, sessions, grants and the
   journal. It is the only thing an authorization decision reads.
-- **`config.toml` configures the daemon only** — socket path, data directory,
-  which servers to supervise. Nothing an authorization decision depends on.
+- **`config.toml` configures the daemon** — socket path, data directory, which
+  servers to supervise.
+
+  **Weakened in M2, deliberately and temporarily.** M2 reads a deny list from
+  `config.toml` so that the enforcement path can be exercised end to end against
+  something real. The original decision was right and this breaks it: any
+  process able to write `config.toml` can empty the list, which is not a
+  property an authorization input should have. It is scaffolding, kept small on
+  purpose — exact tool names, no wildcards, no scopes, no ordering — and real
+  policy belongs somewhere the daemon owns. Nothing else an authorization
+  decision depends on may go here in the meantime.
 - **Supabase is a mirror, never a dependency.** It receives a copy of the
   journal for the dashboard. If it is unreachable, nothing changes locally.
 - **Every table is prefixed `nim_`**, in SQLite and in Postgres alike, so the
@@ -68,14 +77,15 @@ invisibility.
   than left to whatever a serialiser happens to emit. Each entry carries the
   `schema_version` it was written under, so M2 can change the fields without
   invalidating what is already on disk.
-- **`decision` says `observed`, not `allow`.** Nothing here authorizes anything,
-  and the old value claimed a decision that was never made. The rest of the
-  vocabulary is reserved in the schema so it need not change later.
+- **`decision` said `observed`, not `allow`.** Nothing in this milestone
+  authorized anything, and the old value claimed a decision that was never made.
+  The rest of the vocabulary was reserved in the schema, which is why M2 needed
+  no migration; entries from this milestone still read `observed`.
 - **`target` is now `connector`**, done while there is no history to migrate.
 - **Detectable gaps are counted.** Events are still dropped when the daemon is
-  slow or absent — that path is replaced in M2, so it was not worth repairing —
-  but the relay now says so on stderr, and `nim status` reconstructs what it can
-  from the journal afterwards.
+  slow or absent — M2 replaces that path for `call.request` only, so it was not
+  worth repairing here — but the relay now says so on stderr, and `nim status`
+  reconstructs what it can from the journal afterwards.
 
   **Not all of it.** Reporting is asynchronous and one-way, so a failure on the
   daemon's write path never reaches the shim and leaves nothing in the journal:
@@ -85,8 +95,8 @@ invisibility.
   *"all losses are accounted for"* — see `docs/journal-format.md`.
 - **Batches and unparseable frames are counted.** A JSON-RPC batch slips past
   envelope parsing entirely, so a `tools/call` inside one reached a server with
-  no record at all. It still does; now it leaves an `anomaly` entry. Rejecting
-  it needs the strict reader that comes with enforcement.
+  no record at all. In this milestone it still did, and left an `anomaly` entry
+  saying so. M2 refuses both instead.
 - **`nim log`**, **`nim verify`**, and a `nim status` that prints the chain head.
 
 **What the chain does not do.** It detects corruption and edits that did not
@@ -120,7 +130,65 @@ Two findings worth keeping:
   directory under a running daemon leaves it writing to an unlinked file while
   `nim status` reports it as running. A preview of M2's process-lifetime work.
 
-## M2 — Daemon lifetime
+## M2 — Minimal enforcement
+
+Nim can stop a `tools/call` from reaching a connector. That is the whole
+milestone: one property, demonstrated, with everything it does not yet cover
+written down beside it.
+
+The relay now asks the daemon before it forwards a call and waits for the
+answer. The daemon decides, writes the decision onto the `call.request` entry,
+and only then replies. An allowed call goes on as the exact bytes that arrived;
+a refused one never leaves Nim, and the client is answered with a JSON-RPC
+response carrying `result.isError`.
+
+**Fail-closed, and not for performance reasons.** No daemon, a slow daemon, a
+closed socket, a reply that does not match the question — every one of them is a
+denial. The synchronous hop costs 0.157 ms at the 99th percentile with the
+durable write included, so there was never a performance argument for the
+alternative; the argument would have had to be that a call Nim cannot record
+should proceed anyway, and there isn't one.
+
+**What M2 guarantees, in one direction only:**
+
+> A `tools/call` that reached a connector is a call the journal recorded, with
+> the decision that allowed it.
+
+**The converse does not hold.** An `allow` in the journal does not mean the call
+was made. The relay gives up after two seconds, SQLite's busy timeout is five, so
+a pathologically contended write can land after the relay has already denied.
+Such a call reads as `pending`, which is also what a call still running looks
+like. The journal cannot tell them apart and does not pretend to. Closing that
+window needs machinery this milestone does not buy.
+
+**What M2 does not guarantee:**
+
+- **A refusal Nim could not record is not in the journal.** When the daemon is
+  unreachable the relay denies locally, and the only writer is exactly what
+  could not be reached. Those denials are counted as lost events and reported on
+  stderr; that is all there is. So `decision = deny` in the journal always means
+  a policy refusal, never an inability to decide.
+- **An invalid JSON frame may leave a client with no answer.** Nim will not relay
+  a frame it cannot parse — Go rejects `NaN` where Python accepts it, which is
+  enough to put an unseen `tools/call` in front of a server — and if no id can be
+  recovered, nothing is fabricated to answer with. Deliberate: the alternative is
+  a call reaching a connector unexamined.
+- **A batch carrying a `tools/call` is refused whole.** No element is forwarded,
+  no `call.request` is written and no sequence number is spent on it. Batch
+  elements are not decided one by one. JSON-RPC batching was removed from MCP in
+  2025-06-18, so this closes a bypass rather than dropping a feature.
+- **Nothing is claimed about Linux or Windows.** The relay's lifetime behaviour
+  was measured on darwin/arm64 only. The connector is still a child of the shim,
+  so nothing in M2 depends on the answer; the inversion that would is a later
+  milestone, and the spike belongs with it.
+- **Anything that can write `config.toml` can empty the deny list.** See the
+  standing decision above.
+
+**Scope, stated as exclusions.** No canonicalization of arguments, no credential
+handling, no agent identity, no policy model beyond exact tool names, no human
+approval, no control plane, and no change to how the daemon is supervised.
+
+## M2.5 — Daemon lifetime
 
 On Windows the daemon dies with the process tree that spawned it. State survives
 in SQLite and the next shim restarts it, so M1 stands, but a daemon shared

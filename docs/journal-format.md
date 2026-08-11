@@ -38,9 +38,11 @@ chain, not the content.
 `kind` is one of `session.start`, `call.request`, `call.outcome`, `session.end`,
 `anomaly`.
 
-`decision` is one of `observed`, `allow`, `deny`, `approved`, `rejected`. **This
-milestone only ever writes `observed`**: nothing is authorized here. The other
-four exist so the vocabulary does not change when decisions arrive.
+`decision` is one of `observed`, `allow`, `deny`, `approved`, `rejected`. M2
+writes `allow` and `deny`. `observed` is what earlier milestones wrote, when
+nothing was authorized at all, and it is still what those entries hold — which is
+why enforcement needed no migration. `approved` and `rejected` belong to human
+approval and are not written yet. See *What a decision means* below.
 
 `anomaly` is one of `batch`, `malformed_json`, `framing`, `duplicate_id`.
 
@@ -127,8 +129,9 @@ malformed JSON do not arise here — an entry has no keys and no nesting.
 
 Those questions are real, but they belong to two other places:
 
-- **Anomaly detection** — batch, malformed JSON and framing are observed,
-  counted and recorded as `anomaly` entries. They are not canonicalised.
+- **Anomaly detection** — batch, malformed JSON and framing are counted and
+  recorded as `anomaly` entries, and from M2 the frames that could hide a
+  `tools/call` are refused rather than relayed. They are not canonicalised.
   This is not the full set of JSON ambiguities, and it is not meant to be. In
   particular **duplicate object keys are not detected**: `{"name":"a","name":"b"}`
   is accepted by every parser involved, each picks one, and Go picks the last —
@@ -210,11 +213,17 @@ written, so there is no session to be unfinished and no sequence to skip. That
 run leaves no trace in the journal — only the warning the shim printed at the
 time, and `nim status` reporting that the daemon is not running.
 
-**Losses between 2 and 3 leave nothing.** If the daemon accepts an event and
-then cannot write it, the shim is never told — the protocol has no reply — and
-the journal has no trace, so nothing can tell that case apart from one where no
-event was ever sent. The daemon records the failure in its own log, and that is
-the only place it appears.
+**Losses between 2 and 3 leave nothing, except for `call.request`.** If the
+daemon accepts an event and then cannot write it, the shim is never told and the
+journal has no trace, so nothing can tell that case apart from one where no event
+was ever sent. The daemon records the failure in its own log, and that is the
+only place it appears.
+
+The exception is the one kind that is answered. From M2 the shim waits for the
+daemon's decision before forwarding a `tools/call`, and the daemon answers only
+after the entry is written — so a request the daemon accepted and failed to write
+comes back as a denial rather than vanishing. `session.start`, `call.outcome`,
+`session.end` and `anomaly` are still one-way and still have the blind spot.
 
 The same blind spot covers events lost at the very end of a session that then
 closes normally: with the highest `seq` gone too, there is nothing left for the
@@ -223,13 +232,41 @@ gap check to find a hole in.
 So, precisely:
 
 > Nim records the events it observed, and reports the losses that leave
-> detectable evidence in the journal. Because reporting is asynchronous and
-> one-way, a failure on the daemon's write path can be indistinguishable from no
-> event having been sent. Establishing that every observed event was written
-> needs the reporter to be told whether it was — a reply the protocol does not
-> have yet.
+> detectable evidence in the journal. A `call.request` that was not written
+> cannot have been forwarded. For every other kind, reporting is asynchronous and
+> one-way, so a failure on the daemon's write path can be indistinguishable from
+> no event having been sent.
 
 Do not read `gaps: none of the detectable kinds found` as `no calls were lost`.
+
+## What a decision means, and what it does not
+
+From M2 a `call.request` carries the decision the daemon reached: `allow` or
+`deny`. Entries written before then carry `observed`, which recorded that nothing
+had been decided at all.
+
+One direction holds:
+
+> A call that reached a connector is a call this journal recorded, with the
+> decision that allowed it.
+
+The converse does not. **An `allow` is not evidence the call was made.** The
+relay gives up after two seconds and SQLite's busy timeout is five, so a heavily
+contended write can be committed after the relay has already denied the call and
+answered the client. Nothing distinguishes that entry from a call still running:
+both are an `allow` with no `call.outcome`, and both read as `pending`.
+
+**A refusal produces one entry, not two.** There is no `call.outcome` for work
+that never happened, and its absence is not a gap. A reader deriving state from
+these entries should treat `deny` with no outcome as refused, and `deny` with an
+outcome as inconsistent — nothing should produce the latter.
+
+**Some refusals are not here at all.** When the daemon cannot be reached the
+relay denies the call locally, and the only thing that can write to this journal
+is exactly what could not be reached. Those refusals are counted as lost events
+and printed on stderr by the relay; the journal never learns of them. So
+`decision = deny` in this file always means a policy refusal, never an inability
+to decide.
 
 ## What this does not protect against
 
