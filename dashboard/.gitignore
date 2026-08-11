@@ -1,0 +1,9 @@
+node_modules/
+.next/
+out/
+next-env.d.ts
+# Generated at build time from the repository. Never committed: a stale copy
+# would be exactly the kind of second source of truth this dashboard exists
+# not to be.
+src/data/generated.json
+tsconfig.tsbuildinfo
