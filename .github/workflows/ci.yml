@@ -39,10 +39,15 @@ jobs:
           go-version-file: engine/go.mod
           cache-dependency-path: engine/go.sum
 
-      # libsecret gives linux a real credential store. Without it
-      # credential.New() fails by design rather than falling back to
-      # plaintext, and the store's tests skip -- which would mean CI reported
-      # green on a platform where the package had never run.
+      # secret-tool is what credential.New() looks for on linux. Installing it
+      # means the daemon takes the same startup path CI's linux runner would
+      # otherwise skip -- New() succeeding rather than failing closed.
+      #
+      # It does not mean the linux store is tested. There are no linux
+      # equivalents of store_darwin_test.go, and a runner has no keyring
+      # daemon for secret-tool to talk to even with the binary present, so
+      # Set/Get/Delete on that platform remain unexercised. That gap is real
+      # and this does not close it.
       - name: Install libsecret (linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libsecret-tools
