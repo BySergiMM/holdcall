@@ -21,6 +21,9 @@ tools/relay-rig/nim-home/
 .env.*
 !.env.example
 
+# Agent workspace: local settings and scratch worktrees, never the project's.
+.claude/
+
 # Editors / OS
 .idea/
 .vscode/
