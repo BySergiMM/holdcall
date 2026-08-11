@@ -17,6 +17,7 @@
 package daemon
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -29,7 +30,6 @@ import (
 
 	"github.com/BySergiMM/nim/engine/internal/config"
 	"github.com/BySergiMM/nim/engine/internal/journal"
-	"github.com/BySergiMM/nim/engine/internal/mcp"
 )
 
 // Event is one report from a shim.
@@ -201,9 +201,39 @@ func handle(conn net.Conn, j *journal.Journal, policy config.Policy) {
 		}
 	}()
 
-	r := mcp.NewReader(conn)
+	// Nothing that is not this binary gets to speak here.
+	//
+	// Without this the socket was open to any local process, which on a
+	// milestone that enforces is worse than it was on one that only observed:
+	// a caller could not merely fabricate a record, it could open sessions
+	// and drive the decision path. Ported from the branch where credentials
+	// forced the question. It answers "is the caller Nim", not "is the caller
+	// a shim the operator meant to run" -- anything able to execute this
+	// binary still passes -- so it is a floor, not the authorization model.
+	//
+	// Checked here, at accept, rather than on the first message: a socket
+	// keeps delivering buffered bytes after the writer has exited, so a
+	// client that writes and leaves could otherwise be read from after its
+	// pid was gone and denied for being fast.
+	if supported, isSelf := verifyPeerIsSelf(conn); supported && !isSelf {
+		log.Printf("refusing a connection from an unverified peer")
+		return
+	}
+
+	// bufio.Reader rather than mcp.NewReader: the latter's ReadRaw grows
+	// without bound, which is right for the client<->connector relay, where a
+	// large tool result is legitimate, and wrong here. Every message this
+	// socket carries is small -- a digest is a fixed-length hash, never tool
+	// output. Unbounded, one connection sending a line with no newline grew
+	// the daemon's RSS by 200 MiB in 0.2s (measured on the other branch).
+	//
+	// That is not just an availability nuisance on this milestone. The relay
+	// fails closed, so a daemon killed this way does not degrade recording,
+	// it denies every tools/call on the machine -- one unauthenticated local
+	// process disabling every agent's tools.
+	br := bufio.NewReaderSize(conn, 4096)
 	for {
-		raw, err := r.ReadRaw()
+		raw, err := boundedReadRaw(br, maxLineBytes)
 		if err != nil {
 			if err != io.EOF {
 				log.Printf("shim connection: %v", err)
@@ -214,6 +244,22 @@ func handle(conn net.Conn, j *journal.Journal, policy config.Policy) {
 		if err := json.Unmarshal(raw, &ev); err != nil {
 			log.Printf("malformed event: %v", err)
 			continue
+		}
+
+		// A connection may only speak about sessions it opened. Peer identity
+		// cannot tell one run of Nim from another, so without this any shim
+		// could report calls -- and receive decisions -- under a session
+		// another one opened.
+		//
+		// The connection is closed rather than the message skipped. A
+		// call.request is answered, so skipping one would leave the shim
+		// waiting out its timeout for a reply that is never coming; and by
+		// this milestone's own reasoning a stream with one unanswered
+		// question can no longer be trusted to pair the next answer with the
+		// right call. No legitimate shim reaches this.
+		if ev.SessionID == "" || (ev.Kind != KindSessionStart && !open[ev.SessionID]) {
+			log.Printf("refusing %s for session %q: this connection did not start it", ev.Kind, ev.SessionID)
+			return
 		}
 
 		// The one report that is answered. A failure to answer ends the
