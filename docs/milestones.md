@@ -3,6 +3,18 @@
 Each one ends in something demonstrable. Nothing is built before the milestone
 that needs it.
 
+## Where the work lives
+
+`integration/trunk` is the branch to build on. It is the merge of the two
+lineages that grew from M1 in parallel: the append-only hash-chained journal,
+the console and enforcement from one, credentials and daemon lifetime from the
+other. Neither parent contains the whole engine and neither should be developed
+on further.
+
+The numbering below is the merged one. `M2` means **enforcement**; daemon
+lifetime, which the other lineage had called M2, is folded into M2.5. Anything
+written before the merge that says otherwise is describing one half.
+
 ## Standing decisions
 
 - **Daemon + shim.** One thin relay per configured MCP server, all state in a
@@ -29,7 +41,7 @@ that needs it.
   read `method`; the buffer is never re-serialised. Re-encoding JSON changes key
   order and whitespace and breaks clients in ways that are hard to reproduce.
 
-## M1 — Pass-through (current)
+## M1 — Pass-through
 
 The shim spawns one downstream MCP server and relays stdio in both directions,
 forwarding every byte untouched. It recognises `tools/call` and reports it to
@@ -196,19 +208,78 @@ window needs machinery this milestone does not buy.
 handling, no agent identity, no policy model beyond exact tool names, no human
 approval, no control plane, and no change to how the daemon is supervised.
 
-## M2.5 — Daemon lifetime
+## M2.5 — Daemon lifetime and socket identity
 
-On Windows the daemon dies with the process tree that spawned it. State survives
-in SQLite and the next shim restarts it, so M1 stands, but a daemon shared
-across sessions needs proper detachment.
+**Status: done.** The daemon starts detached from the shim's process group and
+session — `Setsid` on Linux and macOS, `CREATE_BREAKAWAY_FROM_JOB` +
+`DETACHED_PROCESS` (with a fallback for job objects that forbid breakaway) on
+Windows. Verified end to end on macOS: a `nim serve` run inside its own
+session, with the whole session's process group killed, leaves the daemon
+running.
 
-**Why it matters:** budgets, the hash-chained journal and human approval all
-need one writer that outlives any single client session.
+This matters more under enforcement than it did under observation. A daemon
+that dies with the client session takes enforcement with it, and every shim
+still running then denies every call, because that is what an unreachable
+daemon means. Detachment is what makes fail-closed a safety net rather than an
+outage.
+
+An `flock`-based startup lock serializes the stale-socket reclaim across
+racing daemons — the ordinary case of a client spawning several shims at once
+after a crash. Reproduced directly: without it, 8 daemons racing on one stale
+socket produced 2-5 simultaneous winners; with it, always exactly 1. No
+verified equivalent exists on Windows, which keeps only the weaker retry-based
+mitigation.
+
+**Socket identity, both ways.** Verification used to run in one direction: the
+daemon checked its callers and nothing checked the daemon. Any local process
+that bound the socket path first became the daemon for every relay started
+afterwards — and the real daemon, finding the path bound and answering,
+concluded another was running and exited, so the impostor did not even compete
+with it. Reproduced live against the merged binary: as the daemon, a python
+script nominated the command a credential is injected into and the relay
+spawned it, allowed a call the deny list refuses, and collected the tool name
+and argument digest of every call. The shim now verifies before writing a
+single byte, so an impostor learns nothing, and a failed check is treated as
+no daemon at all — which denies every call.
 
 ## M3 — Credentials
 
-The daemon holds the downstream servers' credentials and injects them at spawn
-time. They leave the client's configuration file.
+**Status: done, with two known limitations (Windows; PATH).** The daemon holds
+the downstream servers' credentials and injects them at spawn time. They leave
+the client's configuration file for the OS credential store (Keychain / DPAPI /
+Secret Service), never SQLite, never argv.
+
+**What authorizes a credential is the connector's registered command:**
+
+```
+echo "$GITHUB_TOKEN" | nim connector set github --env GITHUB_TOKEN \
+    -- npx -y @modelcontextprotocol/server-github
+```
+
+The daemon hands that command back rather than accepting one, and the shim
+spawns it. A command given on the command line is ignored when a connector
+supplies one.
+
+This corrects a claim an earlier version made. It said peer identity and
+per-connection target-binding together closed off a downstream server reaching
+another connector's secret. They did not — both passed
+`nim serve --connector github -- /bin/sh -c 'echo $GITHUB_TOKEN'`, reproduced
+live, which printed the real token. Peer identity asks whether the caller is
+this binary, and anything on the machine can be by running it; target binding
+asks whether a connection asked for a *second* connector, and this asks for
+exactly one. Neither constrained what the answer would be injected into, and a
+caller that chooses the process receiving a secret has the secret.
+
+A connector registered before this existed has no authorized command. It fails
+closed: the daemon releases nothing and the relay refuses to spawn, with a
+message saying to register it again. It is not treated as unrestricted.
+
+**PATH is the limitation this does not close.** The registered argv is spawned
+through normal PATH resolution, so a caller that already controls PATH can put
+its own binary in front of the registered name. Closing it needs the daemon to
+spawn the downstream itself and hand the shim a pipe — process inversion,
+which is also what would let a credential stop being handed to the connector
+at all.
 
 ## M4 — Grants (Cedar)
 
@@ -225,7 +296,11 @@ Out-of-band prompt showing real parameters, never a model-generated summary.
 
 ## M7 — Journal
 
-Append-only, hash-chained, with the inputs that produced each decision.
+**Delivered early, as M1.5.** Append-only and hash-chained, with the decision
+recorded on the `call.request` entry. What remains under this heading is the
+part M1.5 did not claim: the *inputs* that produced each decision, which only
+becomes meaningful once there is a policy richer than a list of names to
+record inputs for. Folded into M4.
 
 ## M8 — Dashboard
 
