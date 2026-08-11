@@ -281,10 +281,47 @@ spawn the downstream itself and hand the shim a pipe — process inversion,
 which is also what would let a credential stop being handed to the connector
 at all.
 
-## M4 — Grants (Cedar)
+## M4 — Identity, and policy that lives in SQLite
 
-Allow / deny per (agent, connector, tool). Preceded by a one-day spike to verify
-`cedar-go` is complete enough; if it is not, that decision is reopened with data.
+**Reordered, with reasons.** M4 was "Grants (Cedar)", starting with a spike on
+`cedar-go`. That is the wrong next step, and the merged engine makes it obvious
+why: **a policy language has nothing to talk about yet.**
+
+Every decision Nim makes today is per-tool and global. Two agents against the
+same connector get the same answer, because there is no way to tell them apart
+— the word "agent" appears in this document and nowhere in the schema. Grants
+(M4 as written), budgets (M5) and human approval (M6) all need a subject, and
+none of them can be built until one exists. Choosing a policy language before
+there is a subject to write policies about is picking the syntax before the
+semantics.
+
+Two things belong here, in this order:
+
+1. **Agent identity.** A decision becomes `(agent, connector, tool)` rather
+   than `tool`. The journal records which agent, and the console shows it. The
+   acceptance test is concrete: two agents against one connector receive
+   different verdicts, and the record distinguishes them.
+
+   The hard part is not the schema, it is what an identity *is* and how it is
+   established — a client-supplied label is a claim, not an identity, exactly
+   as `--connector` was before the command binding. Expect this to be most of
+   the milestone.
+
+2. **Policy in SQLite.** The deny list is scaffolding in `config.toml` and
+   says so; anything able to write a file can empty it, and the change leaves
+   no journal entry. Moving it restores the standing decision above, and every
+   policy change becomes an entry in the chain — which is the property that
+   makes an audit of the *rules* possible, not just of the calls.
+
+Cedar is deferred, not rejected. It becomes a real question once there is a
+subject, a resource and an action to express, and the spike should happen then
+with those in hand.
+
+## M4.5 — Grants (Cedar), if it is still the answer
+
+Allow / deny per (agent, connector, tool), expressed in something richer than
+a list. Preceded by the one-day spike on `cedar-go`, now with a real policy
+model to evaluate it against.
 
 ## M5 — Budgets
 
@@ -303,6 +340,15 @@ becomes meaningful once there is a policy richer than a list of names to
 record inputs for. Folded into M4.
 
 ## M8 — Dashboard
+
+**Blocked on something more basic than itself.** Syncing a record whose
+authenticity rests on an unkeyed chain exports a liability rather than
+evidence: anything able to write `nim.db` can rewrite history and the mirror
+would faithfully copy it. Either the journal gains a key the agent cannot
+reach, or the dashboard has to present what it shows as "what this machine
+reported", which is a much weaker claim than the sync contract below implies.
+Decide that before building the viewer.
+
 
 Next.js + Supabase. The engine pushes a copy of the journal; the cloud never
 decides anything.
