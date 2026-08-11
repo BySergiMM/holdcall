@@ -471,7 +471,9 @@ export default function Page() {
               <p style={{ color: "var(--text-2)", fontSize: 14 }}>
                 The Break Nim table lists {summary.attacks.total} attempts someone thought of. It is not the set of
                 attacks that exist. Rows are added when a new one is imagined, which means the table grows when Nim gets
-                more scrutiny, not when it gets worse.
+                more scrutiny, not when it gets worse. The same applies upward: the {summary.guarantees.total}{" "}
+                guarantees are the properties someone chose to write down, so a property nobody listed cannot appear
+                here as unverified.
               </p>
             </div>
           </div>

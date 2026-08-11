@@ -180,6 +180,14 @@ for (const g of state.guarantees) {
 for (const a of state.attacks) {
   const where = `attack "${a.id}"`;
   if (!ATTACK_STATUS.includes(a.status)) fail(`${where}: unknown status "${a.status}"`);
+
+  // Two statuses -- not_applicable and fail -- need no test to be legitimate,
+  // which makes them the cheapest place to park an inconvenient row. They
+  // still have to be argued in prose, so that downgrading something is at
+  // least as much work as defending it and leaves a sentence to disagree with.
+  if (typeof a.evidence !== "string" || a.evidence.trim().length < 40) {
+    fail(`${where}: no written assessment. Every row must argue its status, not just assert it.`);
+  }
   a.evidenceTests = [];
   for (const name of a.tests ?? []) {
     const file = locate(name);
@@ -203,6 +211,13 @@ for (const f of state.findings) {
   const where = `finding "${f.id}"`;
   if (!["critical", "high", "medium", "low"].includes(f.severity)) fail(`${where}: unknown severity`);
   if (!["open", "accepted", "fixed"].includes(f.status)) fail(`${where}: unknown status`);
+  // "accepted" is the status that costs nothing to assign, so it is the one
+  // that has to carry an argument and a way out.
+  for (const field of ["problem", "impact", "evidence", "nextAction"]) {
+    if (typeof f[field] !== "string" || f[field].trim().length < 20) {
+      fail(`${where}: "${field}" is empty or too thin to mean anything`);
+    }
+  }
 }
 
 // Cross-links have to resolve, or a milestone page shows an empty guarantee.

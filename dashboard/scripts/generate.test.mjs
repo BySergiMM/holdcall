@@ -113,6 +113,36 @@ test("an attack marked not_tested cannot also cite tests", () => {
   assert.match(r.out, /marked not_tested but cites/);
 });
 
+// not_applicable and fail need no test to be legitimate, which makes them the
+// cheapest place to park an inconvenient row. Requiring prose means downgrading
+// something costs at least as much as defending it.
+test("a row cannot be downgraded to not_applicable without arguing it", () => {
+  const r = runWith((s) => {
+    const a = s.attacks.find((x) => x.status === "fail");
+    a.status = "not_applicable";
+    a.evidence = "n/a";
+  });
+  assert.equal(r.ok, false, "an inconvenient row was silently parked as not applicable");
+  assert.match(r.out, /no written assessment/);
+});
+
+test("an attack with no written assessment is refused whatever its status", () => {
+  const r = runWith((s) => {
+    s.attacks[0].evidence = "";
+  });
+  assert.equal(r.ok, false);
+  assert.match(r.out, /no written assessment/);
+});
+
+test("a finding cannot be accepted without an impact and a way out", () => {
+  const r = runWith((s) => {
+    const f = s.findings.find((x) => x.status === "accepted");
+    f.nextAction = "n/a";
+  });
+  assert.equal(r.ok, false, "a finding was accepted with no route to fixing it");
+  assert.match(r.out, /nextAction/);
+});
+
 test("an unknown status word is refused rather than rendered as neutral", () => {
   const r = runWith((s) => {
     s.attacks[0].status = "probably_fine";
