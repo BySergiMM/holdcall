@@ -144,10 +144,18 @@ response carrying `result.isError`.
 
 **Fail-closed, and not for performance reasons.** No daemon, a slow daemon, a
 closed socket, a reply that does not match the question — every one of them is a
-denial. The synchronous hop costs 0.157 ms at the 99th percentile with the
-durable write included, so there was never a performance argument for the
-alternative; the argument would have had to be that a call Nim cannot record
-should proceed anyway, and there isn't one.
+denial. The synchronous hop, with the durable write included, costs p99 0.31 ms
+for one relay and p99 1.6 ms with sixteen contending (Apple M5; reproduce with
+`go test -bench BenchmarkDecision -benchtime 2000x ./internal/daemon/`). So
+there was never a performance argument for the alternative; the argument would
+have had to be that a call Nim cannot record should proceed anyway, and there
+isn't one.
+
+An earlier version of this section quoted 0.157 ms, from a measurement that
+left nothing behind to re-run. The benchmark reports about twice that here, and
+there is no way to tell whether the original figure was wrong or the hardware
+was different — which is why the number now comes with the command that
+produces it.
 
 **What M2 guarantees, in one direction only:**
 

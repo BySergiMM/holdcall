@@ -14,12 +14,12 @@ import (
 )
 
 // start brings up a daemon on a private socket and returns a dialler for it.
-func start(t *testing.T) (cfg config.Config, dbPath string) {
+func start(t testing.TB) (cfg config.Config, dbPath string) {
 	return startWithPolicy(t, config.Policy{})
 }
 
 // startWithPolicy is the same, with a deny list.
-func startWithPolicy(t *testing.T, policy config.Policy) (cfg config.Config, dbPath string) {
+func startWithPolicy(t testing.TB, policy config.Policy) (cfg config.Config, dbPath string) {
 	t.Helper()
 
 	home := t.TempDir()
@@ -54,7 +54,7 @@ func startWithPolicy(t *testing.T, policy config.Policy) (cfg config.Config, dbP
 	return cfg, ""
 }
 
-func openJournal(t *testing.T, path string) *journal.Journal {
+func openJournal(t testing.TB, path string) *journal.Journal {
 	t.Helper()
 	seed, _ := config.ReadMachineID()
 	j, err := journal.Open(path, seed)
@@ -65,7 +65,7 @@ func openJournal(t *testing.T, path string) *journal.Journal {
 	return j
 }
 
-func send(t *testing.T, conn net.Conn, events ...Event) {
+func send(t testing.TB, conn net.Conn, events ...Event) {
 	t.Helper()
 	enc := json.NewEncoder(conn)
 	for _, ev := range events {
