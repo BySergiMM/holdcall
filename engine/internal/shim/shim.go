@@ -43,26 +43,22 @@ import (
 
 // decisionTimeout bounds how long a tools/call waits for the daemon.
 //
-// Measured rather than picked, and re-derivable rather than remembered:
+// Measured rather than picked, and re-derivable rather than remembered. The
+// numbers and the commands that produce them are in docs/benchmarks.md; in
+// short, the round trip including the durable journal write is p99 0.27 ms for
+// one relay and 1.6 ms with sixteen contending (Apple M5, darwin/arm64). Two
+// seconds is three orders of magnitude past that, so it cannot fire because
+// the daemon is busy -- only because it is wedged or gone.
 //
-//	go test -bench BenchmarkDecision -benchtime 2000x ./internal/daemon/
+// An earlier version of this comment quoted 0.157 ms from a measurement that
+// left nothing behind to re-run. It could not be checked, and the benchmark
+// that replaced it reports a different figure. That is the argument for the
+// benchmark existing rather than for the number being interesting.
 //
-// A socket hop plus the durable journal write is p50 0.07 ms / p99 0.31 ms for
-// one relay, and p50 1.0 ms / p99 1.6 ms with sixteen contending for the
-// single writer (Apple M5, darwin/arm64). Two seconds is three orders of
-// magnitude past the worst of that, so it cannot fire because the daemon is
-// busy -- only because it is wedged or gone.
-//
-// An earlier version of this comment said 0.157 ms at the 99th percentile.
-// That measurement left no artifact, so it could not be checked; the
-// benchmark now reports roughly twice it on this machine. The figure was
-// wrong or the hardware was different, and there is no way to tell which,
-// which is the argument for the benchmark existing at all.
-//
-// It is shorter than SQLite's five-second busy timeout, which leaves a window: a
-// pathologically contended write can still land after the relay has given up and
-// denied, putting an allow in the journal for a call that never happened. That
-// call reads as pending, never as executed. docs/milestones.md sets it out.
+// It is shorter than SQLite's five-second busy timeout, which leaves a window:
+// a pathologically contended write can still land after the relay has given up
+// and denied, putting an allow in the journal for a call that never happened.
+// That call reads as pending, never as executed. docs/milestones.md sets it out.
 const decisionTimeout = 2 * time.Second
 
 // Options describes one relayed server.

@@ -3,10 +3,14 @@ package daemon
 import (
 	"encoding/json"
 	"fmt"
+	"io"
+	"log"
 	"net"
 	"slices"
 	"sync"
 	"testing"
+
+	"github.com/BySergiMM/nim/engine/internal/config"
 	"time"
 )
 
@@ -34,6 +38,18 @@ import (
 // makes a forwarded call a recorded call, and excluding it would measure
 // something Nim never does.
 
+// quiet silences the daemon's own logging for the duration of a benchmark.
+//
+// Not cosmetic: log writes to the same stream the benchmark reports on, and a
+// "nim daemon listening on ..." line lands in the middle of the result row,
+// which makes the numbers unparseable by benchstat and unreadable by anyone.
+func quiet(b *testing.B) {
+	b.Helper()
+	prev := log.Writer()
+	log.SetOutput(io.Discard)
+	b.Cleanup(func() { log.SetOutput(prev) })
+}
+
 // percentile returns the p'th percentile of sorted, using nearest-rank.
 func percentile(sorted []time.Duration, p float64) time.Duration {
 	if len(sorted) == 0 {
@@ -57,6 +73,7 @@ func reportLatencies(b *testing.B, samples []time.Duration) {
 	slices.Sort(samples)
 	ms := func(d time.Duration) float64 { return float64(d.Nanoseconds()) / 1e6 }
 	b.ReportMetric(ms(percentile(samples, 50)), "p50_ms")
+	b.ReportMetric(ms(percentile(samples, 95)), "p95_ms")
 	b.ReportMetric(ms(percentile(samples, 99)), "p99_ms")
 	b.ReportMetric(ms(samples[len(samples)-1]), "max_ms")
 }
@@ -113,6 +130,7 @@ func (s sockPath) socket() string { return string(s) }
 // BenchmarkDecisionRoundTrip is one relay asking, which is the number
 // decisionTimeout is set against.
 func BenchmarkDecisionRoundTrip(b *testing.B) {
+	quiet(b)
 	cfg, _ := start(b)
 	conn, enc, dec := openSession(b, sockPath(cfg.Daemon.Socket), "bench-session")
 	defer conn.Close()
@@ -130,6 +148,7 @@ func BenchmarkDecisionRoundTrip(b *testing.B) {
 // writer, which is the case the timeout has to survive: a client that spawns
 // one shim per configured MCP server, all deciding at once.
 func BenchmarkDecisionRoundTripContended(b *testing.B) {
+	quiet(b)
 	const relays = 16
 	cfg, _ := start(b)
 
@@ -163,4 +182,67 @@ func BenchmarkDecisionRoundTripContended(b *testing.B) {
 	wg.Wait()
 	b.StopTimer()
 	reportLatencies(b, all)
+}
+
+// BenchmarkDecisionDenied is the refusal path. It should not be slower than
+// allow -- a denial does the same journal write, so if the two diverged it
+// would mean the deny list itself had become the expensive part, which for a
+// list of exact names it must never be.
+func BenchmarkDecisionDenied(b *testing.B) {
+	quiet(b)
+	cfg, _ := startWithPolicy(b, config.Policy{Deny: []string{"denied_tool"}})
+	conn, enc, dec := openSession(b, sockPath(cfg.Daemon.Socket), "bench-deny")
+	defer conn.Close()
+
+	samples := make([]time.Duration, 0, b.N)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ev := Event{
+			Kind: KindCallRequest, SessionID: "bench-deny", Seq: i + 1, Tool: "denied_tool",
+			Digest:     "0000000000000000000000000000000000000000000000000000000000000000",
+			OccurredAt: time.Now().UTC().Format(time.RFC3339Nano),
+		}
+		start := time.Now()
+		if err := enc.Encode(ev); err != nil {
+			b.Fatalf("encode: %v", err)
+		}
+		var d Decision
+		if err := dec.Decode(&d); err != nil {
+			b.Fatalf("decode: %v", err)
+		}
+		samples = append(samples, time.Since(start))
+		if d.Decision != "deny" {
+			b.Fatalf("expected deny, got %q", d.Decision)
+		}
+	}
+	b.StopTimer()
+	reportLatencies(b, samples)
+}
+
+// BenchmarkCredentialLookup is the spawn-time round trip, measured at the
+// handler so it excludes the OS credential store: what is being checked is
+// Nim's own cost, and a real keychain read is the operating system's.
+func BenchmarkCredentialLookup(b *testing.B) {
+	j := freshJournal(b)
+	store := newFakeStore()
+	store.Set("github", "ghp_bench")
+	if err := j.SetConnector("github", "GITHUB_TOKEN", []string{"server", "--flag"}, time.Now()); err != nil {
+		b.Fatalf("SetConnector: %v", err)
+	}
+	locks := newTargetLocks()
+
+	samples := make([]time.Duration, 0, b.N)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		state := &requestState{}
+		start := time.Now()
+		resp := handleCredentialGet(
+			Request{ID: "1", Kind: KindCredentialGet, Target: "github"}, state, j, store, locks)
+		samples = append(samples, time.Since(start))
+		if resp.Error != "" {
+			b.Fatalf("unexpected error: %s", resp.Error)
+		}
+	}
+	b.StopTimer()
+	reportLatencies(b, samples)
 }
