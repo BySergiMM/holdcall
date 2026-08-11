@@ -3,6 +3,29 @@
 Each one ends in something demonstrable. Nothing is built before the milestone
 that needs it.
 
+## Unmerged work, and a name that means two things
+
+**This is the first thing to resolve, before any new milestone.** Two lineages
+grew from M1 in parallel and neither contains the other:
+
+| Branch | Has | Lacks |
+|---|---|---|
+| `m1-bootstrap` (this one) | daemon lifetime, credentials | the hash-chained journal, the console, enforcement |
+| `claude/nim-audit-context-8e6c6c` | the append-only hash-chained journal (M1.5), `nim log` / `nim verify` / `nim console`, and a working enforcement path | daemon lifetime, credentials |
+
+They also disagree on names. **M2 means "daemon lifetime" here and "minimal
+enforcement" there**, where lifetime is renumbered M2.5. Any sentence about
+"M2" is ambiguous until they are merged.
+
+They disagree on behaviour too, in a way a merge has to settle deliberately
+rather than by whichever side wins the diff: when the daemon is unreachable
+this branch fails **open** (spawn without a credential, record nothing) and the
+other fails **closed** (refuse every call). Both are argued for in their own
+context. Only one can survive.
+
+The other branch's journal is the better one and should be the base. This
+branch's daemon detachment and credential work then port onto it.
+
 ## Standing decisions
 
 - **Daemon + shim.** One thin relay per configured MCP server, all state in a
