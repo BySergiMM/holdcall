@@ -18,6 +18,17 @@ type VerifyReport struct {
 	Empty   bool   // there was nothing to check
 	Partial bool   // checked, but the seed was unknown so entry 1 stands unverified
 	Problem string // first failure, naming the chain_seq it was found at
+
+	// ExpectedHeadAt is the chain_seq the head passed to Verify was found at,
+	// or 0 if it was not in the chain at all. Only meaningful when an expected
+	// head was given.
+	//
+	// It exists to tell two very different things apart. A journal that has
+	// grown since the head was recorded no longer *ends* at it, but still
+	// contains it -- and everything up to it is still covered, because each
+	// entry's hash commits to its predecessor. A journal that was truncated
+	// and recomputed does not contain it anywhere.
+	ExpectedHeadAt int64
 }
 
 // Verify walks the chain from the genesis and checks four things, in the order
@@ -25,9 +36,18 @@ type VerifyReport struct {
 // schema_version is one this build understands, that each prev_hash matches the
 // previous entry's hash, and that each hash matches the recomputation.
 //
-// expectHead, when not empty, is compared against the final hash. That
-// comparison is the only check here that catches a chain which has been
-// truncated and recomputed -- see the limitation below.
+// expectHead, when not empty, is looked for in the chain -- not merely
+// compared against the final hash. That is the only check here that catches a
+// chain which has been truncated and recomputed, and looking rather than
+// comparing is what keeps it usable: a journal that has grown since the head
+// was recorded no longer ends at it, and saying "entries have been removed"
+// about ordinary growth is an accusation, not a finding. An operator who is
+// told that every time will stop reading it, which costs the one check that
+// detects the attack.
+//
+// Finding the expected head anywhere in the chain establishes what the check
+// is for: everything up to that point is intact, because each entry's hash
+// commits to its predecessor.
 //
 // What Verify does not detect: an attacker who can write to nim.db can also
 // recompute every hash from the genesis onwards, and the result verifies
@@ -94,6 +114,9 @@ func (j *Journal) Verify(expectHead string) (VerifyReport, error) {
 		prevHash = e.Hash
 		rep.Entries = e.ChainSeq
 		rep.Head = e.Hash
+		if expectHead != "" && e.Hash == expectHead {
+			rep.ExpectedHeadAt = e.ChainSeq
+		}
 		expectedSeq++
 	}
 	if err := rows.Err(); err != nil {
@@ -114,11 +137,11 @@ func (j *Journal) Verify(expectHead string) (VerifyReport, error) {
 		return rep, nil
 	}
 
-	if expectHead != "" && expectHead != rep.Head {
+	if expectHead != "" && expectHead != rep.Head && rep.ExpectedHeadAt == 0 {
 		rep.Problem = fmt.Sprintf(
-			"the chain is internally consistent but its head is %s, not the %s you expected: "+
-				"entries have been removed and the chain recomputed",
-			short(rep.Head), short(expectHead))
+			"the chain is internally consistent but the head %s you expected is nowhere in it, "+
+				"and it now ends at %s: entries have been removed and the chain recomputed",
+			short(expectHead), short(rep.Head))
 		return rep, nil
 	}
 

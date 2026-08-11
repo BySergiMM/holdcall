@@ -527,7 +527,17 @@ func runVerify(args []string) error {
 
 	fmt.Printf("journal self-consistent: %d entries, head %s\n", state.Entries, state.Head)
 	if *expect != "" {
-		fmt.Println("head matches the one you recorded, so nothing before it has been rewritten")
+		if state.ExpectedHeadAt == state.Entries {
+			fmt.Println("head matches the one you recorded, so nothing before it has been rewritten")
+			return nil
+		}
+		// The journal grew, which is the ordinary case for any head recorded
+		// before the agent kept working. Saying so is the difference between a
+		// check an operator keeps running and one they learn to ignore.
+		fmt.Printf("the head you recorded is entry %d of %d, so the journal has grown by %d entries\n",
+			state.ExpectedHeadAt, state.Entries, state.Entries-state.ExpectedHeadAt)
+		fmt.Println("nothing at or before it has been rewritten; the entries after it are covered")
+		fmt.Println("only by the chain itself, so record the new head to cover them too.")
 		return nil
 	}
 	fmt.Println()

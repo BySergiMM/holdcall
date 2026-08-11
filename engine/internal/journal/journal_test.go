@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -980,5 +981,170 @@ func TestConcurrentOpensDoNotCollideOnViews(t *testing.T) {
 	defer j.Close()
 	if _, err := j.db.Query(`select * from nim_calls limit 1`); err != nil {
 		t.Fatalf("nim_calls is not usable after the race: %v", err)
+	}
+}
+
+// seedChain appends n call.request entries and returns the head after each.
+func seedChain(t *testing.T, j *Journal, n int) []string {
+	t.Helper()
+	heads := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		seq := int64(i + 1)
+		tool, digest, decision := "t", "d", DecisionAllow
+		if err := j.Append(Entry{
+			Kind: KindCallRequest, SessionID: "s", Seq: &seq,
+			Tool: &tool, ParamsDigest: &digest, Decision: &decision,
+			OccurredAt: time.Now().UTC().Format(time.RFC3339Nano),
+		}); err != nil {
+			t.Fatalf("Append %d: %v", i, err)
+		}
+		_, head, err := j.Head()
+		if err != nil {
+			t.Fatalf("Head: %v", err)
+		}
+		heads = append(heads, head)
+	}
+	return heads
+}
+
+// A journal that has grown since a head was recorded still contains it, and
+// everything up to it is still covered -- each entry's hash commits to its
+// predecessor. Reporting that as "entries have been removed and the chain
+// recomputed" is an accusation rather than a finding, and it was what --expect-head
+// did for every head recorded before the agent kept working. An operator told
+// that every time stops reading it, which costs the one check that detects the
+// attack this exists for.
+func TestExpectHeadOnAGrownJournalIsNotAnAccusation(t *testing.T) {
+	j, _ := openTemp(t)
+	heads := seedChain(t, j, 5)
+	recorded := heads[2] // three entries in, then the journal kept growing
+
+	rep, err := j.Verify(recorded)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if !rep.OK {
+		t.Fatalf("a journal that merely grew was reported as failing: %s", rep.Problem)
+	}
+	if rep.ExpectedHeadAt != 3 {
+		t.Fatalf("expected head found at %d, want 3", rep.ExpectedHeadAt)
+	}
+	if rep.Head == recorded {
+		t.Fatal("test is wrong: the journal did not actually grow past the recorded head")
+	}
+}
+
+// The attack the check exists for: truncate and recompute. The recorded head
+// is then nowhere in the chain, which is exactly what distinguishes it from
+// growth.
+func TestExpectHeadStillCatchesTruncateAndRecompute(t *testing.T) {
+	j, _ := openTemp(t)
+	heads := seedChain(t, j, 5)
+	recorded := heads[4]
+
+	// Remove the tail and recompute nothing -- the remaining chain is already
+	// internally consistent, which is the whole difficulty.
+	if _, err := j.db.Exec(`delete from nim_journal where chain_seq > 3`); err != nil {
+		t.Fatalf("truncating: %v", err)
+	}
+
+	rep, err := j.Verify(recorded)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if rep.OK {
+		t.Fatal("a truncated journal passed verification against a head it no longer contains")
+	}
+	if rep.ExpectedHeadAt != 0 {
+		t.Fatalf("the removed head was reported as present at %d", rep.ExpectedHeadAt)
+	}
+	if !strings.Contains(rep.Problem, "nowhere in it") {
+		t.Errorf("the problem should say the head is absent, got %q", rep.Problem)
+	}
+}
+
+// Ending exactly at the recorded head is the strongest case and must stay
+// distinguishable from having grown past it.
+func TestExpectHeadMatchingTheTipReportsAtTheTip(t *testing.T) {
+	j, _ := openTemp(t)
+	heads := seedChain(t, j, 3)
+
+	rep, err := j.Verify(heads[2])
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if !rep.OK {
+		t.Fatalf("unexpected failure: %s", rep.Problem)
+	}
+	if rep.ExpectedHeadAt != rep.Entries {
+		t.Fatalf("head found at %d but chain has %d entries; the tip case must match",
+			rep.ExpectedHeadAt, rep.Entries)
+	}
+}
+
+// The rest of the --expect-head matrix. Growth and truncation are covered
+// above; these are the cases where the two must not be confused with a third
+// thing.
+
+// An entry altered *before* the recorded head must fail on its own contents,
+// not be excused by the head still being present further along. Content
+// verification runs first for exactly this reason.
+func TestExpectHeadDoesNotExcuseAnAlteredEarlierEntry(t *testing.T) {
+	j, _ := openTemp(t)
+	heads := seedChain(t, j, 5)
+	recorded := heads[4] // the tip: everything is "covered" by it
+
+	if _, err := j.db.Exec(`update nim_journal set tool = 'rewritten' where chain_seq = 2`); err != nil {
+		t.Fatalf("altering entry 2: %v", err)
+	}
+
+	rep, err := j.Verify(recorded)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if rep.OK {
+		t.Fatal("an altered entry passed because the expected head was still present")
+	}
+	if !strings.Contains(rep.Problem, "entry 2") {
+		t.Errorf("the problem should name the altered entry, got %q", rep.Problem)
+	}
+}
+
+// A head that was never in this chain at all is the plain forgery case: not a
+// truncation, not growth, just wrong.
+func TestExpectHeadThatWasNeverInTheChainFails(t *testing.T) {
+	j, _ := openTemp(t)
+	seedChain(t, j, 3)
+
+	rep, err := j.Verify("00000000000000000000000000000000000000000000000000000000deadbeef")
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if rep.OK {
+		t.Fatal("a head that is nowhere in the chain was accepted")
+	}
+	if rep.ExpectedHeadAt != 0 {
+		t.Fatalf("a head that was never present was located at %d", rep.ExpectedHeadAt)
+	}
+}
+
+// An empty journal cannot have the head you recorded, and saying "verified"
+// about it would put "nothing happened" and "everything was deleted" on the
+// same footing.
+func TestExpectHeadAgainstAnEmptyJournalFails(t *testing.T) {
+	j, _ := openTemp(t)
+
+	rep, err := j.Verify("00000000000000000000000000000000000000000000000000000000deadbeef")
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if rep.OK {
+		t.Fatal("an empty journal was reported as matching a recorded head")
+	}
+	if !rep.Empty {
+		t.Error("an empty journal should report Empty")
+	}
+	if rep.Problem == "" {
+		t.Error("an empty journal with an expected head must report a problem")
 	}
 }

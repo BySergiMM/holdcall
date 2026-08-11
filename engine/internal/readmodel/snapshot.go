@@ -34,6 +34,18 @@ type JournalState struct {
 	// Problem is set only when Chain is broken, naming the entry it was found
 	// at.
 	Problem string `json:"problem,omitempty"`
+
+	// ExpectedHeadAt is where a head passed to Check was found in the chain,
+	// or 0 if it was not there. Only meaningful when one was given.
+	//
+	// It is on this boundary rather than derived by each caller because it is
+	// the difference between two readings that must never be confused: a
+	// journal that grew past the head you recorded (which contains it, and is
+	// therefore intact up to it) and one that no longer contains it at all
+	// (which was rewritten). Deciding that in one place is the whole reason
+	// Check exists.
+	ExpectedHeadAt int64 `json:"expected_head_at,omitempty"`
+
 	// VerificationMaterial reports whether the seed needed to check the first
 	// entry was available. False is a statement about what could be read, never
 	// about whether the journal is sound.
@@ -93,6 +105,7 @@ func Check(src SnapshotSource, expectHead string) (JournalState, error) {
 	if err != nil {
 		return state, err
 	}
+	state.ExpectedHeadAt = report.ExpectedHeadAt
 	switch {
 	case report.Empty && report.Problem == "":
 		state.Chain = ChainEmpty

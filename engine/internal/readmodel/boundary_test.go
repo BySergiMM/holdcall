@@ -71,7 +71,8 @@ func TestReadModelSurfaceIsFrozen(t *testing.T) {
 			"seq", "session_id", "tool",
 		}},
 		{"JournalState", JournalState{}, []string{
-			"chain", "entries", "head", "problem", "schema_version", "verification_material",
+			"chain", "entries", "expected_head_at", "head", "problem", "schema_version",
+			"verification_material",
 		}},
 		{"Gaps", Gaps{}, []string{
 			"anomalies", "anomalies_total", "missing_call_entries",
@@ -79,7 +80,7 @@ func TestReadModelSurfaceIsFrozen(t *testing.T) {
 		}},
 		{"Snapshot", Snapshot{}, []string{
 			"anomalies", "anomalies_total", "calls_recorded", "chain", "entries",
-			"gaps", "head", "journal", "missing_call_entries", "problem",
+			"expected_head_at", "gaps", "head", "journal", "missing_call_entries", "problem",
 			"schema_version", "sessions_with_gaps", "unfinished_sessions",
 			"verification_material",
 		}},
