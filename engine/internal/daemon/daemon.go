@@ -191,15 +191,47 @@ type connState struct {
 
 	kind        string // "" | "credential" | "connector"
 	boundTarget string // meaningful only once kind == "credential"
+
+	// sessions is every session id this connection opened with a
+	// session.start. An event naming any other session is refused: see
+	// ownsSession.
+	sessions map[string]bool
 }
 
-// authorized reports whether this connection's peer may make Request-kind
-// calls at all. Where peer verification is supported (macOS, Linux), the
-// peer must be running this exact binary -- a claim inside the request
-// itself proves nothing, since an attacker can write the same claim. Where
-// it is not supported (Windows, see peer_windows.go), this cannot add
-// anything beyond the socket's own permissions; that is a real, documented
-// gap, not a silent one.
+// ownsSession reports whether this connection may write an event for id.
+//
+// A shim opens one connection and keeps it for the whole session (see the
+// shim's dialDaemon -- the same conn carries the spawn-time credential
+// request and then every event), so a connection legitimately only ever
+// reports on sessions it started itself. Without this check any connection
+// could append entries under another session's id, which is how a record of
+// what one agent did gets attributed to a different one.
+//
+// This is a companion to the peer check, not a substitute: peer identity
+// answers "is this Nim", session ownership answers "is this the same run of
+// Nim that opened the session". Neither alone is enough.
+func (s *connState) ownsSession(id string) bool { return s.sessions[id] }
+
+func (s *connState) claimSession(id string) {
+	if s.sessions == nil {
+		s.sessions = make(map[string]bool)
+	}
+	s.sessions[id] = true
+}
+
+// authorized reports whether this connection's peer may say anything on
+// this socket at all -- events and requests alike. Where peer verification
+// is supported (macOS, Linux), the peer must be running this exact binary --
+// a claim inside the message itself proves nothing, since an attacker can
+// write the same claim. Where it is not supported (Windows, see
+// peer_windows.go), this cannot add anything beyond the socket's own
+// permissions; that is a real, documented gap, not a silent one.
+//
+// What this does NOT establish, on any platform: that the caller is a shim
+// the operator meant to run. Any local process can execute this binary, so
+// passing this check only narrows the caller to "something running Nim's
+// code". Credentials need a stronger answer than that -- see
+// handleCredentialGet and the connector command binding it enforces.
 func (s *connState) authorized() bool {
 	if !s.peerChecked {
 		s.peerSupported, s.peerIsSelf = verifyPeerIsSelf(s.conn)
@@ -216,6 +248,25 @@ func handle(conn net.Conn, j *journal.Journal, store credential.Store, locks *ta
 	br := bufio.NewReaderSize(conn, 4096)
 	enc := json.NewEncoder(conn)
 	state := &connState{conn: conn}
+
+	// Identify the peer now, while it is certainly still alive, rather than
+	// on the first message.
+	//
+	// Both sides of this are real. A socket keeps delivering buffered bytes
+	// after the process that wrote them has exited, so a short-lived
+	// legitimate client -- one that writes its events and leaves -- could be
+	// read from after its pid was gone, and LOCAL_PEERPID would resolve to
+	// nothing: a genuine client denied for being fast. Found by the test
+	// below, which failed exactly that way. The mirror is that a pid can be
+	// recycled in that same window, so a late check can also describe a
+	// different process than the one that connected.
+	//
+	// Checking at accept closes both. The result is cached on connState, so
+	// everything after this reads a decision made when the answer was
+	// certain; the branches below still choose what to DO with it, because a
+	// Request can be answered with a refusal and an Event cannot.
+	state.authorized()
+
 	for {
 		raw, err := boundedReadRaw(br, maxLineBytes)
 		if err != nil {
@@ -263,15 +314,55 @@ func handle(conn net.Conn, j *journal.Journal, store credential.Store, locks *ta
 			continue
 		}
 
+		// The event path is authorized exactly like the request path.
+		//
+		// It was not, until now: verification lived inside handleRequest, so
+		// only credential.get and connector.* were ever checked, and every
+		// Event reached the journal unauthenticated. Reproduced live during
+		// the audit that found it -- a plain python socket client wrote a
+		// fabricated session and a fabricated allowed call to
+		// "delete_repository" into the journal, from a process that is not
+		// this binary. A record anything can write is not a record.
+		//
+		// Unlike a Request, an Event has nothing to answer with: it is
+		// one-way by design, so there is no Response to carry a refusal. The
+		// connection is closed instead, which also stops an unauthorized peer
+		// from continuing to send.
+		if !state.authorized() {
+			log.Printf("refusing events from an unverified peer")
+			return
+		}
+
 		var ev Event
 		if err := json.Unmarshal(raw, &ev); err != nil {
 			log.Printf("malformed event: %v", err)
 			continue
 		}
-		if err := apply(ev, j); err != nil {
+		if err := applyOwned(ev, state, j); err != nil {
 			log.Printf("%s: %v", ev.Kind, err)
 		}
 	}
+}
+
+// applyOwned enforces session ownership, then applies.
+//
+// session.start claims the id for this connection; every later event has to
+// name a session this connection claimed. A shim satisfies that without
+// changing anything -- it opens one connection and starts one session on it.
+func applyOwned(ev Event, state *connState, j *journal.Journal) error {
+	switch ev.Kind {
+	case KindSessionStart:
+		if ev.SessionID == "" {
+			return fmt.Errorf("session.start with no session id")
+		}
+		state.claimSession(ev.SessionID)
+	case KindCall, KindSessionEnd:
+		if !state.ownsSession(ev.SessionID) {
+			return fmt.Errorf(
+				"refusing %s for session %s: this connection did not start it", ev.Kind, ev.SessionID)
+		}
+	}
+	return apply(ev, j)
 }
 
 // handleRequest enforces both authorization layers before dispatching, then
