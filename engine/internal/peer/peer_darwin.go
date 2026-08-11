@@ -13,17 +13,31 @@ import (
 // golang.org/x/sys/unix.
 const kernProcargs2 = 49
 
-// isSelfImpl uses LOCAL_PEERPID (a Darwin-specific getsockopt on
-// AF_UNIX sockets, giving the connecting process's pid with no cooperation
-// or truthfulness required from that process) and then resolves that pid's
-// executable path via the same kern.procargs2 sysctl `ps` itself uses,
-// comparing it to our own os.Executable() by file identity (inode+device,
-// not string equality, so a symlink used to launch one side and not the
-// other still compares equal).
+// isSelfImpl asks the kernel who is on the other end of conn, and whether it
+// is executing the same file we are.
 //
-// Verified empirically against a real, separately-exec'd process during
-// development: LOCAL_PEERPID returned the true peer pid, and the sysctl
-// resolved it to that process's real binary path.
+// LOCAL_PEERPID is a Darwin getsockopt on AF_UNIX sockets giving the
+// connecting process's pid, with no cooperation or truthfulness required from
+// that process. What to do with that pid is the part that matters.
+//
+// Two mechanisms, in order of strength:
+//
+//  1. The vnode of the peer's own mapping of its main image (see
+//     image_darwin.go). This is what the process is actually executing, taken
+//     from the kernel, and it is not affected by anything done to the path it
+//     was launched from. This is the equivalent of linux's /proc/<pid>/exe.
+//
+//  2. Failing that, the path from kern.procargs2, stat'ed and compared by file
+//     identity. This is what this platform did before, and it is weaker in a
+//     specific and demonstrated way: the path belongs to the peer, so it can
+//     replace the file there with a link to our binary and pass. See
+//     pathswap_test.go.
+//
+// The second is reached only when the first cannot be trusted -- when the
+// kernel's answer for our own pid is not our own binary, which is how a change
+// in an internal ABI would show up. Falling back is not a silent downgrade: it
+// is the previous behaviour, and it is the honest response to a mechanism that
+// has just failed to describe something we already know.
 func isSelfImpl(conn net.Conn) (supported, same bool) {
 	uc, ok := conn.(*net.UnixConn)
 	if !ok {
@@ -31,10 +45,10 @@ func isSelfImpl(conn net.Conn) (supported, same bool) {
 	}
 	// A *net.UnixConn whose SyscallConn() itself errors is not "this platform
 	// cannot check" (that is the type-assertion failure above) -- it is a
-	// genuine runtime failure on a socket the daemon does support checking.
-	// Reporting unsupported here would make authorized() default-allow a
-	// connection this code was unable to verify at all; report it as
-	// checked-and-failed instead, the same as every other error below.
+	// genuine runtime failure on a socket we do support checking. Reporting
+	// unsupported would make callers default-allow a connection this code was
+	// unable to verify at all; report it as checked-and-failed instead, the
+	// same as every other error below.
 	raw, err := uc.SyscallConn()
 	if err != nil {
 		return true, false
@@ -49,24 +63,42 @@ func isSelfImpl(conn net.Conn) (supported, same bool) {
 		return true, false
 	}
 
+	if self, trustworthy := selfImageID(); trustworthy {
+		peer, err := regionImage(pid)
+		if err != nil {
+			// The peer exited, or belongs to another user we cannot inspect.
+			// Either way this is not an identity we can confirm.
+			return true, false
+		}
+		return true, peer == self
+	}
+
+	return true, samePathIdentity(pid)
+}
+
+// samePathIdentity is the pre-vnode comparison, kept only as the fallback
+// described above. It compares by inode rather than by string, so a symlink
+// used to launch one side and not the other still compares equal -- but the
+// inode it reaches is whatever is at the peer's launch path now, which is the
+// weakness.
+func samePathIdentity(pid int) bool {
 	peerPath, err := peerExecPath(pid)
 	if err != nil {
-		return true, false
+		return false
 	}
 	selfPath, err := os.Executable()
 	if err != nil {
-		return true, false
+		return false
 	}
-
 	peerInfo, err := os.Stat(peerPath)
 	if err != nil {
-		return true, false
+		return false
 	}
 	selfInfo, err := os.Stat(selfPath)
 	if err != nil {
-		return true, false
+		return false
 	}
-	return true, os.SameFile(peerInfo, selfInfo)
+	return os.SameFile(peerInfo, selfInfo)
 }
 
 // peerExecPath resolves pid's executable path via kern.procargs2: argc

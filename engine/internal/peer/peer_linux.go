@@ -47,20 +47,29 @@ func isSelfImpl(conn net.Conn) (supported, same bool) {
 		return true, false
 	}
 
-	peerPath, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", ucred.Pid))
+	// Stat the magic link itself rather than reading it and stat'ing the
+	// string it yields.
+	//
+	// This is the whole difference between checking the running image and
+	// checking a filename. /proc/<pid>/exe is resolved by the kernel to the
+	// inode the process is actually executing; a path read out of it is just
+	// text, and the file at that path belongs to whoever owns the directory.
+	// An earlier version did readlink-then-stat, which a peer defeated
+	// without any race at all: launch from a path you control, replace the
+	// file there with a link to nim, then connect. The kernel still reports
+	// your original path and the stat lands on nim's inode.
+	//
+	// Demonstrated in pathswap_test.go, which runs on both unix platforms.
+	// Darwin reaches the same guarantee by a different route, because it has
+	// no /proc -- see image_darwin.go.
+	peerInfo, err := os.Stat(fmt.Sprintf("/proc/%d/exe", ucred.Pid))
 	if err != nil {
 		return true, false
 	}
-	selfPath, err := os.Executable()
-	if err != nil {
-		return true, false
-	}
-
-	peerInfo, err := os.Stat(peerPath)
-	if err != nil {
-		return true, false
-	}
-	selfInfo, err := os.Stat(selfPath)
+	// /proc/self/exe for the same reason: os.Executable() also returns a
+	// path, and comparing a kernel-resolved inode against a path-resolved one
+	// would reintroduce the problem on our own side.
+	selfInfo, err := os.Stat("/proc/self/exe")
 	if err != nil {
 		return true, false
 	}
