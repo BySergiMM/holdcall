@@ -386,6 +386,12 @@ export default function Page() {
               A snapshot taken at {ciSnapshot.takenAt}, not a live status. Nothing on this page polls GitHub; a green
               badge that had gone red hours ago would be worse than none.
             </p>
+            <p>
+              Recording a run means committing, and that commit is one CI has not yet run — so a hand-recorded snapshot
+              is <em>structurally</em> at least one commit behind, and will often read as stale. That is the honest
+              state, not a bug to chase: it says CI was green at the named commit and has not yet spoken about this one.
+              Anything that made this box always look current would be doing so by not checking.
+            </p>
           </div>
           <div className="table-wrap">
             <table>
@@ -401,6 +407,11 @@ export default function Page() {
                     <td className="mono">{j.name}</td>
                     <td>
                       <Status value={j.conclusion} />
+                      {j.note && (
+                        <div style={{ fontSize: 12, color: "var(--text-2)", marginTop: "0.3rem", maxWidth: "48ch" }}>
+                          {j.note}
+                        </div>
+                      )}
                     </td>
                   </tr>
                 ))}

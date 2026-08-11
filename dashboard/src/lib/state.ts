@@ -72,7 +72,7 @@ export const state = raw as unknown as {
   project: { name: string; tagline: string; currentMilestone: string; currentPhase: string; statusNote: string };
   ciSnapshot: {
     workflow: string; conclusion: string; commit: string; runId: string; takenAt: string;
-    stale: boolean; jobs: { name: string; conclusion: string }[];
+    stale: boolean; jobs: { name: string; conclusion: string; note?: string }[];
   };
   runtime: { available: boolean; reason: string };
   architecture: {

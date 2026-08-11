@@ -99,6 +99,21 @@ of its security properties are known not to hold there — see
 `docs/benchmarks.md`, with the commands that reproduce every figure. The
 decision a call waits for costs p99 0.27 ms including the durable write.
 
+## Where the project actually stands
+
+`dashboard/` builds a page listing every guarantee alongside what it does *not*
+guarantee, every attack anyone has tried against Nim including the ones that
+worked, and every known weakness. It is generated from this repository and
+refuses to build if a claim cites a test that does not exist — which is how it
+avoids becoming another document that drifts from the code. `docs/dashboard.md`
+explains the design and, more usefully, what it deliberately cannot show.
+
+    cd dashboard && npm install && npm run check && npm run dev
+
+It shows no runtime state and never will: the journal, sessions and enrolled
+agents live on the machine running Nim. `nim console` serves those over
+loopback.
+
 ## Licence
 
 MIT.
