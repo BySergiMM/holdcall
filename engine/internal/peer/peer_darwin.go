@@ -64,13 +64,13 @@ func isSelfImpl(conn net.Conn) (supported, same bool) {
 	}
 
 	if self, trustworthy := selfImageID(); trustworthy {
-		peer, err := regionImage(pid)
+		peer, err := ImageOf(pid)
 		if err != nil {
 			// The peer exited, or belongs to another user we cannot inspect.
 			// Either way this is not an identity we can confirm.
 			return true, false
 		}
-		return true, peer == self
+		return true, peer.Equal(self)
 	}
 
 	return true, samePathIdentity(pid)

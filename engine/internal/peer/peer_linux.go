@@ -3,7 +3,6 @@
 package peer
 
 import (
-	"fmt"
 	"net"
 	"os"
 	"syscall"
@@ -47,31 +46,20 @@ func isSelfImpl(conn net.Conn) (supported, same bool) {
 		return true, false
 	}
 
-	// Stat the magic link itself rather than reading it and stat'ing the
-	// string it yields.
-	//
-	// This is the whole difference between checking the running image and
-	// checking a filename. /proc/<pid>/exe is resolved by the kernel to the
-	// inode the process is actually executing; a path read out of it is just
-	// text, and the file at that path belongs to whoever owns the directory.
-	// An earlier version did readlink-then-stat, which a peer defeated
-	// without any race at all: launch from a path you control, replace the
-	// file there with a link to nim, then connect. The kernel still reports
-	// your original path and the stat lands on nim's inode.
-	//
+	// Both sides go through ImageOf, which stats /proc/<pid>/exe itself rather
+	// than reading it and stat-ing the string it yields. That is the whole
+	// difference between checking the running image and checking a filename:
+	// the file at a path belongs to whoever owns the directory, so an earlier
+	// readlink-then-stat was defeated with no race at all -- launch from a
+	// path you control, replace the file there with a link to nim, connect.
 	// Demonstrated in pathswap_test.go, which runs on both unix platforms.
-	// Darwin reaches the same guarantee by a different route, because it has
-	// no /proc -- see image_darwin.go.
-	peerInfo, err := os.Stat(fmt.Sprintf("/proc/%d/exe", ucred.Pid))
+	peerImage, err := ImageOf(int(ucred.Pid))
 	if err != nil {
 		return true, false
 	}
-	// /proc/self/exe for the same reason: os.Executable() also returns a
-	// path, and comparing a kernel-resolved inode against a path-resolved one
-	// would reintroduce the problem on our own side.
-	selfInfo, err := os.Stat("/proc/self/exe")
+	selfImage, err := ImageOf(os.Getpid())
 	if err != nil {
 		return true, false
 	}
-	return true, os.SameFile(peerInfo, selfInfo)
+	return true, peerImage.Equal(selfImage)
 }

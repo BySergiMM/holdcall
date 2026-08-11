@@ -88,30 +88,30 @@ const (
 	regionBufLen = 4096
 )
 
-// imageID is a file identity: the device and inode of a mapped executable.
-type imageID struct {
-	dev uint32
-	ino uint64
-}
-
-// regionImage returns the vnode identity of the file backing pid's lowest
-// mapped region.
-func regionImage(pid int) (imageID, error) {
+// ImageOf returns the identity of the file pid is executing: the vnode behind
+// its own mapping of its main image.
+//
+// It works for any pid the caller is allowed to inspect, not only for socket
+// peers, which is what lets the daemon identify the process that spawned a
+// relay as well as the relay itself. A pid belonging to another user, or one
+// that has exited, yields an error and a zero Image -- never a usable
+// identity.
+func ImageOf(pid int) (Image, error) {
 	buf := make([]byte, regionBufLen)
 	n, _, errno := unix.Syscall6(unix.SYS_PROC_INFO,
 		procInfoCallPIDInfo, uintptr(pid), procPIDRegionPathInfo,
 		0, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
 	if errno != 0 {
-		return imageID{}, errno
+		return Image{}, errno
 	}
 	// proc_info returns the number of bytes written. Anything shorter than the
 	// fields read below means the struct is not the shape this code expects,
 	// and must not be read as an identity.
 	if int(n) < vstInoOffset+8 {
-		return imageID{}, fmt.Errorf("proc_info returned %d bytes, too few to contain a vnode identity", n)
+		return Image{}, fmt.Errorf("proc_info returned %d bytes, too few to contain a vnode identity", n)
 	}
-	return imageID{
-		dev: *(*uint32)(unsafe.Pointer(&buf[vstDevOffset])),
+	return Image{
+		dev: uint64(*(*uint32)(unsafe.Pointer(&buf[vstDevOffset]))),
 		ino: *(*uint64)(unsafe.Pointer(&buf[vstInoOffset])),
 	}, nil
 }
@@ -127,7 +127,7 @@ func regionImage(pid int) (imageID, error) {
 // as weaker. A silently wrong comparison would be worse than a known weak one.
 var selfImage struct {
 	once        sync.Once
-	id          imageID
+	id          Image
 	trustworthy bool
 }
 
@@ -144,13 +144,13 @@ func resolveSelfImage() {
 	if !ok {
 		return
 	}
-	got, err := regionImage(os.Getpid())
+	got, err := ImageOf(os.Getpid())
 	if err != nil {
 		return
 	}
 	// The check that makes the rest safe: the kernel's answer for our own pid
 	// has to be our own binary.
-	if got.dev != uint32(st.Dev) || got.ino != st.Ino {
+	if got.dev != uint64(st.Dev) || got.ino != st.Ino {
 		return
 	}
 	selfImage.id = got
@@ -159,7 +159,49 @@ func resolveSelfImage() {
 
 // selfImageID reports our own image identity, and whether vnode comparison can
 // be trusted on this system.
-func selfImageID() (imageID, bool) {
+func selfImageID() (Image, bool) {
 	selfImage.once.Do(resolveSelfImage)
 	return selfImage.id, selfImage.trustworthy
+}
+
+// Layout constants for PROC_PIDTBSDINFO, from the same SDK header. Only the
+// parent pid is read: struct proc_bsdinfo begins with pbi_flags, pbi_status,
+// pbi_xstatus and pbi_pid, four uint32s, so pbi_ppid sits at offset 16.
+const (
+	procPIDTBSDInfo = 3 // PROC_PIDTBSDINFO
+	pbiPPIDOffset   = 16
+	bsdInfoBufLen   = 1024 // sizeof(struct proc_bsdinfo) is 232; ask for more, see regionBufLen
+)
+
+// ParentOf returns the pid that spawned pid.
+//
+// This is what makes an agent identity possible without asking anyone to
+// declare one: a relay is spawned by the MCP client, so the client's own
+// process is the relay's parent, and the daemon can walk from the socket peer
+// to its parent and ask what file *that* is executing.
+//
+// It is read from the kernel, so the process in question has no say in it. It
+// is still only a pid: what makes it an identity is passing it to ImageOf,
+// which is the part a caller must not skip.
+//
+// A pid that has exited, or belongs to a user we may not inspect, yields an
+// error. So does a parent of 0, which would mean the process has been
+// reparented or is one this cannot describe -- treating that as an identity
+// would be inventing one.
+func ParentOf(pid int) (int, error) {
+	buf := make([]byte, bsdInfoBufLen)
+	n, _, errno := unix.Syscall6(unix.SYS_PROC_INFO,
+		procInfoCallPIDInfo, uintptr(pid), procPIDTBSDInfo,
+		0, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
+	if errno != 0 {
+		return 0, errno
+	}
+	if int(n) < pbiPPIDOffset+4 {
+		return 0, fmt.Errorf("proc_info returned %d bytes, too few to contain a parent pid", n)
+	}
+	ppid := int(*(*uint32)(unsafe.Pointer(&buf[pbiPPIDOffset])))
+	if ppid <= 0 {
+		return 0, fmt.Errorf("process %d reports no parent", pid)
+	}
+	return ppid, nil
 }
