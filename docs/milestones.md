@@ -25,6 +25,8 @@ context. Only one can survive.
 
 The other branch's journal is the better one and should be the base. This
 branch's daemon detachment and credential work then port onto it.
+`docs/merge-plan.md` is the step-by-step, with the conflict surface measured
+rather than guessed.
 
 ## Standing decisions
 
