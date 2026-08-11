@@ -24,9 +24,18 @@ package peer
 //   - Not stable across a reinstall, and not necessarily stable across a
 //     reboot: inode numbers survive, but device numbers can change when
 //     filesystems are mounted differently. Anything that *persists* an Image
-//     has to decide what to do when it stops matching -- see the enrollment
+//     has to decide what to do when it stops matching -- see the enrolment
 //     work that uses this, which must treat a mismatch as "not that agent"
-//     rather than as an error, and must give the operator a way to re-enroll.
+//     rather than as an error, and must give the operator a way to re-enrol.
+//   - Not unique over time. Inode numbers are reused: ext4 will hand out the
+//     number it just freed, which is how a test that deleted a file and wrote
+//     another in its place saw the same identity twice. For an Image taken
+//     from a *running* process this does not arise, because the kernel holds
+//     the inode for as long as the process runs. It does arise for a
+//     persisted one whose file has since been deleted, where a later
+//     unrelated file could land on the same number -- which is a reason an
+//     enrolment pointing at a file that no longer exists should be repaired
+//     rather than left in place.
 type Image struct {
 	dev uint64
 	ino uint64

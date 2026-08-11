@@ -149,12 +149,20 @@ func TestAReplacedFileIsReportedStaleRatherThanFailing(t *testing.T) {
 		t.Fatal("a freshly enrolled agent was reported stale")
 	}
 
-	// Replace the file at the same path: same name, different inode.
-	if err := os.Remove(path); err != nil {
-		t.Fatalf("removing: %v", err)
+	// Replace the file the way a self-updating application does: write the new
+	// one alongside and rename over the old.
+	//
+	// Not remove-then-create. That is what this test did first, and it passed
+	// on APFS and failed on ext4, which reuses the inode number it just freed
+	// -- so the "replacement" was the same identity and correctly reported as
+	// current. Renaming keeps both files alive at once, which is the only way
+	// to be sure of a distinct inode.
+	replacement := path + ".new"
+	if err := os.WriteFile(replacement, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatalf("writing the replacement: %v", err)
 	}
-	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
-		t.Fatalf("rewriting: %v", err)
+	if err := os.Rename(replacement, path); err != nil {
+		t.Fatalf("renaming over: %v", err)
 	}
 
 	resp := handleAgentList(Request{ID: "3", Kind: KindAgentList}, j)
