@@ -2,7 +2,10 @@
 
 package peer
 
-import "fmt"
+import (
+	"fmt"
+	"net"
+)
 
 // Windows has no implementation of any of this yet, and saying so is the whole
 // content of this file.
@@ -29,3 +32,6 @@ func ImageOfFile(path string) (Image, error) { return Image{}, errUnsupported }
 
 // ParentOf reports the pid that spawned pid.
 func ParentOf(pid int) (int, error) { return 0, errUnsupported }
+
+// pidOfImpl reports unsupported, as everything else here does.
+func pidOfImpl(conn net.Conn) (int, bool, error) { return 0, false, nil }

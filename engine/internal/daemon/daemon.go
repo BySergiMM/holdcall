@@ -273,6 +273,11 @@ func handle(conn net.Conn, j *journal.Journal, policy config.Policy, store crede
 		return
 	}
 
+	// The agent behind this connection, worked out once. It cannot change
+	// mid-connection: the peer's pid is fixed for the life of the socket, and
+	// so is its parent. Deriving it per message would only add ways to fail.
+	agent := deriveAgent(conn, j)
+
 	// bufio.Reader rather than mcp.NewReader: the latter's ReadRaw grows
 	// without bound, which is right for the client<->connector relay, where a
 	// large tool result is legitimate, and wrong here. Every message this
@@ -343,14 +348,14 @@ func handle(conn net.Conn, j *journal.Journal, policy config.Policy, store crede
 		// where one question went unanswered can no longer be trusted to pair
 		// the next answer with the right call.
 		if ev.Kind == KindCallRequest {
-			if err := answer(conn, ev, j, policy); err != nil {
+			if err := answer(conn, ev, j, policy, agent); err != nil {
 				log.Printf("answering %s seq %d: %v", ev.SessionID, ev.Seq, err)
 				return
 			}
 			continue
 		}
 
-		if err := apply(ev, j); err != nil {
+		if err := apply(ev, j, agent); err != nil {
 			log.Printf("%s: %v", ev.Kind, err)
 			continue
 		}
@@ -369,7 +374,7 @@ func handle(conn net.Conn, j *journal.Journal, policy config.Policy, store crede
 // because allowing a call Nim failed to record would break the one thing this
 // milestone guarantees: that a call which reached a connector is a call the
 // journal knows about.
-func answer(conn net.Conn, ev Event, j *journal.Journal, policy config.Policy) error {
+func answer(conn net.Conn, ev Event, j *journal.Journal, policy config.Policy, agent string) error {
 	decision, reason := journal.DecisionAllow, ""
 	if policy.Denied(ev.Tool) {
 		decision = journal.DecisionDeny
@@ -377,7 +382,7 @@ func answer(conn net.Conn, ev Event, j *journal.Journal, policy config.Policy) e
 	}
 
 	ev.Decision = decision
-	if err := apply(ev, j); err != nil {
+	if err := apply(ev, j, agent); err != nil {
 		log.Printf("call.request: %v", err)
 		decision = DecisionUndecided
 		reason = "the call could not be recorded"
@@ -396,7 +401,7 @@ func answer(conn net.Conn, ev Event, j *journal.Journal, policy config.Policy) e
 // updates. A shim that reports the same call twice -- once on the way out and
 // once when it returns -- produces two entries, and the pair is joined by
 // (session_id, seq) when read back.
-func apply(ev Event, j *journal.Journal) error {
+func apply(ev Event, j *journal.Journal, agent string) error {
 	e := journal.Entry{
 		Kind:       ev.Kind,
 		SessionID:  ev.SessionID,
@@ -412,6 +417,14 @@ func apply(ev Event, j *journal.Journal) error {
 		e.MachineID = optional(ev.MachineID)
 		e.Client = optional(ev.Client)
 		e.Connector = optional(ev.Connector)
+		// On session.start only, for the same reason connector is: it is a
+		// property of the session, and two immutable entries that both
+		// describe one thing can contradict each other where a join cannot.
+		//
+		// Taken from the derivation, never from ev. Client is next to it and
+		// is the opposite kind of thing -- a label the caller sent, recorded
+		// because it is useful and never because it is trusted.
+		e.Agent = optional(agent)
 	case KindCallRequest:
 		e.Tool = optional(ev.Tool)
 		e.ParamsDigest = optional(ev.Digest)

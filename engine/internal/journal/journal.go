@@ -72,6 +72,7 @@ create table if not exists nim_journal (
     machine_id       text,
     client           text,
     protocol_version text,
+    agent            text,
     prev_hash        text    not null,
     hash             text    not null
 );
@@ -143,6 +144,7 @@ create table if not exists nim_agents (
 // every run after the first and is not a failure.
 var migrations = []string{
 	`alter table nim_connectors add column command text`,
+	`alter table nim_journal add column agent text`,
 }
 
 func migrate(db *sql.DB) error {
@@ -299,8 +301,13 @@ type Entry struct {
 	MachineID       *string
 	Client          *string
 	ProtocolVersion *string
-	PrevHash        string
-	Hash            string
+	// Agent is the enrolled client program this session belongs to, derived by
+	// the daemon from the kernel. Nil when no enrolment matched, which is the
+	// ordinary state for anyone who has not enrolled one. Never set from the
+	// wire: there is no field on Event for it, deliberately.
+	Agent    *string
+	PrevHash string
+	Hash     string
 }
 
 type Journal struct {
@@ -511,18 +518,18 @@ func (j *Journal) Append(e Entry) error {
 		// correctly even when the identifier has gone missing.
 		return fmt.Errorf("cannot start a journal without an install identifier")
 	}
-	e.SchemaVersion = SchemaVersion1
-	e.Hash = chainHash(e.PrevHash, canonicalEncodeV1(e))
+	e.SchemaVersion = CurrentSchemaVersion
+	e.Hash = chainHash(e.PrevHash, canonicalEncode(e))
 
 	_, err = tx.Exec(
 		`insert into nim_journal
 		   (chain_seq, schema_version, kind, session_id, seq, connector, tool,
 		    params_digest, decision, ok, duration_ms, anomaly, occurred_at,
-		    machine_id, client, protocol_version, prev_hash, hash)
-		 values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		    machine_id, client, protocol_version, agent, prev_hash, hash)
+		 values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		e.ChainSeq, e.SchemaVersion, e.Kind, e.SessionID, e.Seq, e.Connector, e.Tool,
 		e.ParamsDigest, e.Decision, e.OK, e.DurationMS, e.Anomaly, e.OccurredAt,
-		e.MachineID, e.Client, e.ProtocolVersion, e.PrevHash, e.Hash,
+		e.MachineID, e.Client, e.ProtocolVersion, e.Agent, e.PrevHash, e.Hash,
 	)
 	if err != nil {
 		return err
@@ -748,4 +755,29 @@ func (j *Journal) DeleteAgent(name string) error {
 	}
 	_, err := j.db.Exec(`delete from nim_agents where name = ?`, name)
 	return err
+}
+
+// AgentByImage finds the enrolment matching an executable identity.
+//
+// found is false, with no error, when nothing matches -- the ordinary state
+// for anyone who has not enrolled an agent, and for any program that is not
+// one. It is not a failure and must not be treated as one.
+//
+// A zero dev and ino match nothing, deliberately: those are what a failed
+// identity lookup leaves behind, and an enrolment can never hold them because
+// the daemon refuses to record an identity it did not obtain from the
+// filesystem.
+func (j *Journal) AgentByImage(dev, ino uint64) (name string, found bool, err error) {
+	if dev == 0 && ino == 0 {
+		return "", false, nil
+	}
+	err = j.db.QueryRow(
+		`select name from nim_agents where exec_dev = ? and exec_ino = ?`, dev, ino).Scan(&name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return name, true, nil
 }

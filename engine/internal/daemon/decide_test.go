@@ -156,7 +156,7 @@ func TestAnUnwritableJournalRefuses(t *testing.T) {
 
 	go func() {
 		answer(theirs, Event{Kind: KindCallRequest, SessionID: "s1", Seq: 1,
-			Tool: "echo", Digest: "d", OccurredAt: now()}, j, config.Policy{})
+			Tool: "echo", Digest: "d", OccurredAt: now()}, j, config.Policy{}, "")
 	}()
 
 	mine.SetReadDeadline(time.Now().Add(5 * time.Second))

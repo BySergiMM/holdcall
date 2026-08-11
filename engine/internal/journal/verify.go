@@ -59,7 +59,7 @@ func (j *Journal) Verify(expectHead string) (VerifyReport, error) {
 	rows, err := j.db.Query(
 		`select chain_seq, schema_version, kind, session_id, seq, connector, tool,
 		        params_digest, decision, ok, duration_ms, anomaly, occurred_at,
-		        machine_id, client, protocol_version, prev_hash, hash
+		        machine_id, client, protocol_version, agent, prev_hash, hash
 		   from nim_journal order by chain_seq`)
 	if err != nil {
 		return VerifyReport{}, err
@@ -92,7 +92,7 @@ func (j *Journal) Verify(expectHead string) (VerifyReport, error) {
 				plural(e.ChainSeq-expectedSeq, "entry has", "entries have"))
 			return rep, nil
 		}
-		if e.SchemaVersion != SchemaVersion1 {
+		if !knownSchemaVersion(e.SchemaVersion) {
 			rep.Problem = fmt.Sprintf(
 				"entry %d was written under schema_version %d, which this build does not know how to verify",
 				e.ChainSeq, e.SchemaVersion)
@@ -104,7 +104,7 @@ func (j *Journal) Verify(expectHead string) (VerifyReport, error) {
 				e.ChainSeq, short(e.PrevHash), short(prevHash))
 			return rep, nil
 		}
-		if got := chainHash(e.PrevHash, canonicalEncodeV1(e)); got != e.Hash {
+		if got := chainHash(e.PrevHash, canonicalEncode(e)); got != e.Hash {
 			rep.Problem = fmt.Sprintf(
 				"entry %d has been altered: its contents hash to %s but it stores %s",
 				e.ChainSeq, short(got), short(e.Hash))
@@ -156,12 +156,12 @@ func scanEntry(rows *sql.Rows) (Entry, error) {
 	var seq, durationMS sql.NullInt64
 	var ok sql.NullBool
 	var connector, tool, digest, decision, anomaly sql.NullString
-	var machineID, client, protocolVersion sql.NullString
+	var machineID, client, protocolVersion, agent sql.NullString
 
 	err := rows.Scan(
 		&e.ChainSeq, &e.SchemaVersion, &e.Kind, &e.SessionID, &seq, &connector, &tool,
 		&digest, &decision, &ok, &durationMS, &anomaly, &e.OccurredAt,
-		&machineID, &client, &protocolVersion, &e.PrevHash, &e.Hash,
+		&machineID, &client, &protocolVersion, &agent, &e.PrevHash, &e.Hash,
 	)
 	if err != nil {
 		return e, err
@@ -184,6 +184,7 @@ func scanEntry(rows *sql.Rows) (Entry, error) {
 	e.MachineID = nullable(machineID)
 	e.Client = nullable(client)
 	e.ProtocolVersion = nullable(protocolVersion)
+	e.Agent = nullable(agent)
 	return e, nil
 }
 

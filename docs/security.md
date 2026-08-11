@@ -142,6 +142,29 @@ credential lookup cannot pivot to a second connector mid-connection.
 
 **Fail-closed** covers every way of not getting a decision.
 
+## Agent identity
+
+An agent is a client program, enrolled by the operator and identified by the
+executable it runs -- the same kernel-backed identity peer verification uses,
+applied to the socket peer's *parent*, since a relay is spawned by the client.
+Nothing about it is sent by the relay: there is no agent field on the wire, so
+an agent cannot state one. A name a caller could choose would let a restricted
+agent claim an unrestricted one's, which inverts a policy rather than bypassing
+it.
+
+Recorded on `session.start` at schema_version 2, and covered by the chain:
+altering it after the fact breaks the entry's hash.
+
+**Nothing decides anything on it yet.** Enrolment and derivation are in place;
+grants are a later milestone, and that milestone has to state what an unknown
+agent may do rather than inherit an answer from here.
+
+What it establishes: two different client programs are different agents. What
+it does not: two windows of the same program are the same agent, because they
+run the same file. Enrolment is also as privileged as running Nim -- anything
+that can execute this binary as this user can enrol or replace one, exactly as
+it can register a connector.
+
 ## Known gaps
 
 | Gap | Severity | Why it is open |

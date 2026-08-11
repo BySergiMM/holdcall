@@ -123,3 +123,29 @@ func peerExecPath(pid int) (string, error) {
 	}
 	return string(rest[:end]), nil
 }
+
+// pidOfImpl reads the peer's pid from the kernel's own record of the
+// connection. LOCAL_PEERPID is set when the connection is made and cannot be
+// influenced by the process on the other end.
+func pidOfImpl(conn net.Conn) (int, bool, error) {
+	uc, ok := conn.(*net.UnixConn)
+	if !ok {
+		return 0, false, nil
+	}
+	raw, err := uc.SyscallConn()
+	if err != nil {
+		return 0, true, err
+	}
+	var pid int
+	var sockErr error
+	ctrlErr := raw.Control(func(fd uintptr) {
+		pid, sockErr = unix.GetsockoptInt(int(fd), unix.SOL_LOCAL, unix.LOCAL_PEERPID)
+	})
+	if ctrlErr != nil {
+		return 0, true, ctrlErr
+	}
+	if sockErr != nil {
+		return 0, true, sockErr
+	}
+	return pid, true, nil
+}

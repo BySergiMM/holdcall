@@ -63,3 +63,29 @@ func isSelfImpl(conn net.Conn) (supported, same bool) {
 	}
 	return true, peerImage.Equal(selfImage)
 }
+
+// pidOfImpl reads the peer's pid from the kernel's own record of the
+// connection. SO_PEERCRED is set when the connection is made and cannot be
+// influenced by the process on the other end.
+func pidOfImpl(conn net.Conn) (int, bool, error) {
+	uc, ok := conn.(*net.UnixConn)
+	if !ok {
+		return 0, false, nil
+	}
+	raw, err := uc.SyscallConn()
+	if err != nil {
+		return 0, true, err
+	}
+	var ucred *syscall.Ucred
+	var sockErr error
+	ctrlErr := raw.Control(func(fd uintptr) {
+		ucred, sockErr = syscall.GetsockoptUcred(int(fd), syscall.SOL_SOCKET, syscall.SO_PEERCRED)
+	})
+	if ctrlErr != nil {
+		return 0, true, ctrlErr
+	}
+	if sockErr != nil {
+		return 0, true, sockErr
+	}
+	return int(ucred.Pid), true, nil
+}

@@ -31,6 +31,7 @@ is updated.
 | 14 | `machine_id` | string, nullable | `session.start` |
 | 15 | `client` | string, nullable | `session.start` |
 | 16 | `protocol_version` | string, nullable | `session.end` |
+| 17 | `agent` | string, nullable | `session.start` (schema_version 2 only) |
 
 `prev_hash` and `hash` are stored alongside but are **not** encoded: they are the
 chain, not the content.
@@ -62,6 +63,21 @@ It is redundant with the `call.request` that shares its `(session_id, seq)`, and
 two immutable entries that both describe one call can contradict each other. A
 join cannot. `connector` is on `session.start` for the same reason.
 
+`agent` is the enrolled client program a session belongs to, as the daemon
+derived it from the kernel: the socket peer's parent process, and the file that
+process is executing. It is never sent by the relay — there is no field for it
+on the wire — because an identity a caller can state is a claim, and a
+restricted agent naming an unrestricted one would invert a policy rather than
+bypass it. It is NULL when no enrolment matched, which is the ordinary state.
+
+It sits on `session.start` for the same reason `connector` does: it is a
+property of the session, and two immutable entries that both describe one
+session can contradict each other where a join cannot.
+
+Do not confuse it with `client`, which is next to it and is the opposite kind
+of thing: a label the caller chose, recorded because it is useful and never
+because it is trusted.
+
 ## canonical_encode_v1
 
 ```
@@ -88,6 +104,34 @@ Each field is:
 The tag and the length prefix are what make the encoding unambiguous: no two
 distinct entries can produce the same bytes, and no field value can be mistaken
 for a separator, because there are no separators.
+
+## canonical_encode_v2
+
+Identical to v1 except that the domain is `nim.journal.v2` and there are
+**seventeen** fields, the last being `agent`:
+
+    output := "nim.journal.v2" 0x0A || field(1) || ... || field(17)
+
+The domain differs deliberately. Seventeen fields hashed under the v1 domain
+would let the same entry produce different hashes depending on which build read
+it, which is precisely what a version exists to prevent.
+
+The genesis is **not** versioned with the entry encoding — it is still
+`nim.journal.v1.genesis`. It seeds the chain from the install's identifier and
+has nothing to do with how many fields an entry has; changing it would
+invalidate every existing chain for no reason.
+
+## Verifying a journal that spans versions
+
+`schema_version` is stored per entry and verification dispatches on what each
+entry says, never on what the current build writes. A journal written before
+`agent` existed keeps verifying with the v1 encoder, and a chain containing
+both versions checks out end to end — the chain links by hash, and each
+entry's own encoding is decided by its own stored version.
+
+An entry claiming a version this build does not know is refused by name rather
+than encoded under a guess. Encoding it under whatever rules happen to be
+nearest is how a future entry would come to verify against the wrong ones.
 
 ### Strings
 
@@ -123,7 +167,7 @@ are in the column are what get hashed.
 
 ### What canonical_encode_v1 is not
 
-It is **not** a JSON canonicaliser. It takes a fixed list of sixteen typed
+It is **not** a JSON canonicaliser. It takes a fixed list of typed
 scalars, so questions about object key ordering, duplicate keys, batches and
 malformed JSON do not arise here — an entry has no keys and no nesting.
 

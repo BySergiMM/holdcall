@@ -98,7 +98,10 @@ func Check(src SnapshotSource, expectHead string) (JournalState, error) {
 	}
 	state.Entries = length
 	state.Head = head
-	state.SchemaVersion = journal.SchemaVersion1
+	// The version this build writes, not a constant. It said 1 while the daemon
+	// was already writing 2, which is the sort of stale claim a status command
+	// exists to not make.
+	state.SchemaVersion = journal.CurrentSchemaVersion
 	state.VerificationMaterial = src.SeedKnown()
 
 	report, err := src.Verify(expectHead)
