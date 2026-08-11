@@ -407,13 +407,41 @@ func handleRequest(req Request, state *connState, j *journal.Journal, store cred
 // error is the ordinary case for a target with no connector configured, and
 // the shim must treat it exactly like today: spawn with no env changes.
 // Found=true with a non-empty Error is the fail-closed case: a connector IS
-// configured but the secret could not be retrieved, and the shim must refuse
-// to spawn rather than start the downstream under a partial configuration.
+// configured but the secret cannot be released, and the shim must refuse to
+// spawn rather than start the downstream under a partial configuration.
 //
-// A connection is bound to the target of its first credential.get and may
-// never ask for a different one: nothing about a shim's own session
-// legitimately needs more than its own --target's credential, and this is
-// what stops a connection from pivoting to ask for someone else's.
+// The answer carries the command the credential may be injected into, and
+// the shim spawns that rather than whatever was on its own command line.
+// That is the authorization boundary, and it exists because the two checks
+// around it are not one.
+//
+// Peer verification asks "is the caller this binary". Any local process
+// satisfies that by executing the binary, so on its own it authorizes
+// nothing: reproduced live during the audit that found it, where
+//
+//	nim serve --target github -- /bin/sh -c 'echo $GITHUB_TOKEN'
+//
+// printed the real secret. Both documented layers passed -- the caller was
+// genuinely this binary, and the connection genuinely asked for one target
+// and only one. Neither constrains *which* target may be asked for, or what
+// receives the answer. A caller that chooses the command that receives a
+// secret has the secret.
+//
+// So the command is registered with the connector, in SQLite, by whoever
+// stored the credential, and the daemon hands it back rather than accepting
+// one. An attacker naming another target now gets that target's real
+// downstream server spawned, which is not a way to read the secret.
+//
+// A connection is still bound to the target of its first credential.get and
+// may never ask for a different one: that stops a pivot within one
+// connection, which remains worth stopping even though it was never the
+// whole story.
+//
+// What this does not close, stated rather than glossed: the registered argv
+// is spawned through the usual PATH resolution, so a caller that already
+// controls PATH can still put its own binary in front of the registered
+// name. Closing that needs the daemon to spawn the downstream itself, which
+// is a larger change than this one and is not pretended here.
 //
 // The metadata lookup and the secret lookup below are two separate reads,
 // not one atomic operation, so this takes the same per-target lock
@@ -446,6 +474,17 @@ func handleCredentialGet(req Request, state *connState, j *journal.Journal, stor
 	if !found {
 		return Response{ID: req.ID, Found: false}
 	}
+	// A connector with no registered command is not one without a
+	// restriction: it is one whose authorized command is unknown, which is
+	// the state every connector stored before commands existed is in. There
+	// is nothing safe to inject the secret into, so nothing is injected.
+	if len(info.Command) == 0 {
+		return Response{ID: req.ID, Found: true, Error: fmt.Sprintf(
+			"connector %q has no authorized command: it was registered before Nim bound credentials to a command. "+
+				"Register it again with the server it belongs to, e.g. "+
+				"nim connector set %s --env %s -- <command> [args...]",
+			req.Target, req.Target, info.EnvKey)}
+	}
 	if store == nil {
 		return Response{ID: req.ID, Found: true, Error: "credential store unavailable"}
 	}
@@ -453,7 +492,12 @@ func handleCredentialGet(req Request, state *connState, j *journal.Journal, stor
 	if err != nil {
 		return Response{ID: req.ID, Found: true, Error: fmt.Sprintf("retrieving secret for connector %q: %v", req.Target, err)}
 	}
-	return Response{ID: req.ID, Found: true, Env: map[string]string{info.EnvKey: secret}}
+	return Response{
+		ID:      req.ID,
+		Found:   true,
+		Env:     map[string]string{info.EnvKey: secret},
+		Command: info.Command,
+	}
 }
 
 func handleConnectorSet(req Request, j *journal.Journal, store credential.Store, locks *targetLocks) Response {
@@ -466,6 +510,9 @@ func handleConnectorSet(req Request, j *journal.Journal, store credential.Store,
 	if err := validateSecret(req.Secret); err != nil {
 		return Response{ID: req.ID, Error: err.Error()}
 	}
+	if err := validateCommand(req.Command); err != nil {
+		return Response{ID: req.ID, Error: err.Error()}
+	}
 	if store == nil {
 		return Response{ID: req.ID, Error: "credential store unavailable"}
 	}
@@ -476,7 +523,7 @@ func handleConnectorSet(req Request, j *journal.Journal, store credential.Store,
 	if err := store.Set(req.Target, req.Secret); err != nil {
 		return Response{ID: req.ID, Error: fmt.Sprintf("storing secret: %v", err)}
 	}
-	if err := j.SetConnector(req.Target, req.EnvKey, time.Now()); err != nil {
+	if err := j.SetConnector(req.Target, req.EnvKey, req.Command, time.Now()); err != nil {
 		// The keychain write succeeded but the metadata write did not: undo
 		// it so the two do not silently drift apart -- an orphaned keychain
 		// entry with no matching metadata would be invisible to
@@ -495,7 +542,12 @@ func handleConnectorList(req Request, j *journal.Journal) Response {
 	}
 	infos := make([]ConnectorInfo, len(list))
 	for i, c := range list {
-		infos[i] = ConnectorInfo{Target: c.Target, EnvKey: c.EnvKey, UpdatedAt: c.UpdatedAt.Format(time.RFC3339Nano)}
+		infos[i] = ConnectorInfo{
+			Target:    c.Target,
+			EnvKey:    c.EnvKey,
+			Command:   c.Command,
+			UpdatedAt: c.UpdatedAt.Format(time.RFC3339Nano),
+		}
 	}
 	return Response{ID: req.ID, Connectors: infos}
 }

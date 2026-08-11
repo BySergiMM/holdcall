@@ -9,8 +9,10 @@ package journal
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -47,12 +49,38 @@ create index if not exists nim_calls_occurred_at_idx on nim_calls (occurred_at d
 -- records which env var name a target's credential is injected under, so
 -- connector list and the daemon's own lookup at spawn time have something
 -- to read without ever touching the secret.
+--
+-- command is the argv, JSON-encoded, of the one downstream server this
+-- target's credential may be injected into. It is an authorization input,
+-- which is why it lives here rather than in config.toml: SQLite is the
+-- source of truth, and the daemon is the only writer.
 create table if not exists nim_connectors (
     target      text primary key,
     env_key     text    not null,
+    command     text,
     updated_at  text    not null
 );
 `
+
+// migrations are additive statements applied after schema, each of which must
+// be safe to run against a database that already has it applied.
+//
+// SQLite has no "add column if not exists", and create-table-if-not-exists
+// does nothing to a table that already exists, so a column added to an
+// existing install needs this. A duplicate-column error is the expected
+// result on every run after the first and is not a failure.
+var migrations = []string{
+	`alter table nim_connectors add column command text`,
+}
+
+func migrate(db *sql.DB) error {
+	for _, stmt := range migrations {
+		if _, err := db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+			return fmt.Errorf("migration %q: %w", stmt, err)
+		}
+	}
+	return nil
+}
 
 type Journal struct{ db *sql.DB }
 
@@ -77,6 +105,10 @@ func Open(path string) (*Journal, error) {
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("schema: %w", err)
+	}
+	if err := migrate(db); err != nil {
+		db.Close()
+		return nil, err
 	}
 	return &Journal{db: db}, nil
 }
@@ -146,23 +178,64 @@ func (j *Journal) CountCalls() (int, error) {
 }
 
 // Connector is non-secret connector metadata: which env var a target's
-// credential is injected under. The credential value itself is never here --
-// see internal/credential.
+// credential is injected under, and the one command that credential may be
+// injected into. The credential value itself is never here -- see
+// internal/credential.
+//
+// Command is nil for a connector registered before commands existed. That is
+// not a connector with "no restriction": it is one whose authorized command
+// is unknown, and the daemon refuses to release its secret at all until it is
+// registered again. See daemon.handleCredentialGet.
 type Connector struct {
 	Target    string
 	EnvKey    string
+	Command   []string
 	UpdatedAt time.Time
 }
 
 // SetConnector is an upsert: setting a connector that already exists
-// replaces its env key, exactly like the credential store's own Set.
-func (j *Journal) SetConnector(target, envKey string, at time.Time) error {
-	_, err := j.db.Exec(
-		`insert into nim_connectors (target, env_key, updated_at) values (?, ?, ?)
-		 on conflict (target) do update set env_key = excluded.env_key, updated_at = excluded.updated_at`,
-		target, envKey, at.UTC().Format(time.RFC3339Nano),
+// replaces its env key and command, exactly like the credential store's own
+// Set replaces the secret.
+func (j *Journal) SetConnector(target, envKey string, command []string, at time.Time) error {
+	encoded, err := encodeCommand(command)
+	if err != nil {
+		return err
+	}
+	_, err = j.db.Exec(
+		`insert into nim_connectors (target, env_key, command, updated_at) values (?, ?, ?, ?)
+		 on conflict (target) do update set
+		   env_key    = excluded.env_key,
+		   command    = excluded.command,
+		   updated_at = excluded.updated_at`,
+		target, envKey, encoded, at.UTC().Format(time.RFC3339Nano),
 	)
 	return err
+}
+
+// encodeCommand stores argv as JSON rather than a joined string: a command
+// argument can contain a space, and re-splitting on one would silently change
+// what gets spawned. An empty command is stored as NULL, distinctly from an
+// empty argv.
+func encodeCommand(command []string) (any, error) {
+	if len(command) == 0 {
+		return nil, nil
+	}
+	b, err := json.Marshal(command)
+	if err != nil {
+		return nil, fmt.Errorf("encoding connector command: %w", err)
+	}
+	return string(b), nil
+}
+
+func decodeCommand(s sql.NullString) ([]string, error) {
+	if !s.Valid || s.String == "" {
+		return nil, nil
+	}
+	var out []string
+	if err := json.Unmarshal([]byte(s.String), &out); err != nil {
+		return nil, fmt.Errorf("decoding connector command: %w", err)
+	}
+	return out, nil
 }
 
 // ConnectorInfo looks up one target. found is false, with no error, if no
@@ -170,12 +243,16 @@ func (j *Journal) SetConnector(target, envKey string, at time.Time) error {
 // not a failure.
 func (j *Journal) ConnectorInfo(target string) (c Connector, found bool, err error) {
 	var updatedAt string
-	err = j.db.QueryRow(`select target, env_key, updated_at from nim_connectors where target = ?`, target).
-		Scan(&c.Target, &c.EnvKey, &updatedAt)
+	var command sql.NullString
+	err = j.db.QueryRow(`select target, env_key, command, updated_at from nim_connectors where target = ?`, target).
+		Scan(&c.Target, &c.EnvKey, &command, &updatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Connector{}, false, nil
 	}
 	if err != nil {
+		return Connector{}, false, err
+	}
+	if c.Command, err = decodeCommand(command); err != nil {
 		return Connector{}, false, err
 	}
 	c.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedAt)
@@ -184,7 +261,7 @@ func (j *Journal) ConnectorInfo(target string) (c Connector, found bool, err err
 
 // ListConnectors returns every configured connector, ordered by target.
 func (j *Journal) ListConnectors() ([]Connector, error) {
-	rows, err := j.db.Query(`select target, env_key, updated_at from nim_connectors order by target`)
+	rows, err := j.db.Query(`select target, env_key, command, updated_at from nim_connectors order by target`)
 	if err != nil {
 		return nil, err
 	}
@@ -194,7 +271,11 @@ func (j *Journal) ListConnectors() ([]Connector, error) {
 	for rows.Next() {
 		var c Connector
 		var updatedAt string
-		if err := rows.Scan(&c.Target, &c.EnvKey, &updatedAt); err != nil {
+		var command sql.NullString
+		if err := rows.Scan(&c.Target, &c.EnvKey, &command, &updatedAt); err != nil {
+			return nil, err
+		}
+		if c.Command, err = decodeCommand(command); err != nil {
 			return nil, err
 		}
 		c.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedAt)

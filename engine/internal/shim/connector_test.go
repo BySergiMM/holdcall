@@ -25,58 +25,58 @@ func fakeDaemon(t *testing.T, resp daemon.Response) net.Conn {
 	return client
 }
 
-func TestFetchConnectorEnvOnNilConnIsFailOpen(t *testing.T) {
-	env, err := fetchConnectorEnv(nil, "github")
-	if err != nil || env != nil {
-		t.Fatalf("got (%v, %v), want (nil, nil) -- no daemon connection must never block the spawn", env, err)
+func TestFetchConnectorOnNilConnIsFailOpen(t *testing.T) {
+	inj, err := fetchConnector(nil, "github")
+	if err != nil || inj.env != nil {
+		t.Fatalf("got (%v, %v), want (nil, nil) -- no daemon connection must never block the spawn", inj.env, err)
 	}
 }
 
-func TestFetchConnectorEnvOnUnconfiguredTargetIsFailOpen(t *testing.T) {
+func TestFetchConnectorOnUnconfiguredTargetIsFailOpen(t *testing.T) {
 	conn := fakeDaemon(t, daemon.Response{ID: "x", Found: false})
-	env, err := fetchConnectorEnv(conn, "github")
-	if err != nil || env != nil {
-		t.Fatalf("got (%v, %v), want (nil, nil) for an unconfigured target", env, err)
+	inj, err := fetchConnector(conn, "github")
+	if err != nil || inj.env != nil {
+		t.Fatalf("got (%v, %v), want (nil, nil) for an unconfigured target", inj.env, err)
 	}
 }
 
-func TestFetchConnectorEnvReturnsKeyValuePairs(t *testing.T) {
-	conn := fakeDaemon(t, daemon.Response{ID: "x", Found: true, Env: map[string]string{"GITHUB_TOKEN": "ghp_x"}})
-	env, err := fetchConnectorEnv(conn, "github")
+func TestFetchConnectorReturnsKeyValuePairs(t *testing.T) {
+	conn := fakeDaemon(t, daemon.Response{ID: "x", Found: true, Env: map[string]string{"GITHUB_TOKEN": "ghp_x"}, Command: []string{"server"}})
+	inj, err := fetchConnector(conn, "github")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(env) != 1 || env[0] != "GITHUB_TOKEN=ghp_x" {
-		t.Fatalf("got %v, want [GITHUB_TOKEN=ghp_x]", env)
+	if len(inj.env) != 1 || inj.env[0] != "GITHUB_TOKEN=ghp_x" {
+		t.Fatalf("got %v, want [GITHUB_TOKEN=ghp_x]", inj.env)
 	}
 }
 
-func TestFetchConnectorEnvWithMultipleKeysReturnsAllOfThem(t *testing.T) {
+func TestFetchConnectorWithMultipleKeysReturnsAllOfThem(t *testing.T) {
 	conn := fakeDaemon(t, daemon.Response{ID: "x", Found: true, Env: map[string]string{
 		"GITHUB_TOKEN": "ghp_x", "GITHUB_ORG": "acme",
-	}})
-	env, err := fetchConnectorEnv(conn, "github")
+	}, Command: []string{"server"}})
+	inj, err := fetchConnector(conn, "github")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	sort.Strings(env)
+	sort.Strings(inj.env)
 	want := []string{"GITHUB_ORG=acme", "GITHUB_TOKEN=ghp_x"}
-	if len(env) != 2 || env[0] != want[0] || env[1] != want[1] {
-		t.Fatalf("got %v, want %v", env, want)
+	if len(inj.env) != 2 || inj.env[0] != want[0] || inj.env[1] != want[1] {
+		t.Fatalf("got %v, want %v", inj.env, want)
 	}
 }
 
 // The fail-closed guarantee, seen from the shim's side: a connector IS
 // configured but its secret could not be retrieved, so Run must refuse to
 // spawn rather than start the downstream without it.
-func TestFetchConnectorEnvOnBrokenSecretFailsClosed(t *testing.T) {
+func TestFetchConnectorOnBrokenSecretFailsClosed(t *testing.T) {
 	conn := fakeDaemon(t, daemon.Response{ID: "x", Found: true, Error: "keychain locked"})
-	env, err := fetchConnectorEnv(conn, "github")
+	inj, err := fetchConnector(conn, "github")
 	if err == nil {
 		t.Fatal("a configured connector with an unretrievable secret must return an error")
 	}
-	if env != nil {
-		t.Fatalf("no env should be returned on the fail-closed path, got %v", env)
+	if inj.env != nil {
+		t.Fatalf("no env should be returned on the fail-closed path, got %v", inj.env)
 	}
 }
 

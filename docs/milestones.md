@@ -82,27 +82,67 @@ weaker retry-based mitigation.
 The daemon holds the downstream servers' credentials and injects them at spawn
 time. They leave the client's configuration file.
 
-**Status: done, READY WITH KNOWN LIMITATION (Windows).** Secrets live in the OS
-credential store (Keychain / DPAPI / Secret Service), never in SQLite, never in
-argv (`nim connector set <target> --env KEY` reads the value from stdin, not a
-command-line argument). Two independent authorization layers gate the socket:
-peer-process identity (kernel-verified on darwin/linux -- `LOCAL_PEERPID` /
-`SO_PEERCRED`, resolved to an executable path and compared to the daemon's own
-by file identity, not by name or content) and per-connection target-binding
-(a connection may only ever ask for the one target its first `credential.get`
-named, closing off a downstream MCP server pivoting to another target's
-secret even from a connection that did pass peer verification). Verified live
-on macOS with an adversarial suite: raw-socket and Python clients denied
-outright, symlinked/copied/renamed binaries still denied (compared by inode,
-not path), pivot/reconnect/duplicate-JSON-key tricks all denied, a real
-"malicious downstream" (a legitimately-spawned `nim serve` session) denied
-when it tried to reach another target's credential directly. Two additional
-issues were found and fixed during the same audit: an unbounded per-line
-socket read let any local process (pre-authorization) grow the daemon's
-memory without limit, and `credential.get`'s metadata+secret read was not
-serialized against a concurrent `connector.set`, producing a torn env-key/
-secret pairing under load; both are now bounded/locked and covered by
-regression tests, including one reproducing the original race live.
+**Status: done, READY WITH KNOWN LIMITATIONS (Windows; PATH).** Secrets live in
+the OS credential store (Keychain / DPAPI / Secret Service), never in SQLite,
+never in argv (`nim connector set` reads the value from stdin, not a
+command-line argument).
+
+**What authorizes a credential is the connector's registered command.** A
+connector names the one downstream server its secret may be injected into,
+stored in SQLite by whoever registered it, and the daemon hands that command
+back rather than accepting one:
+
+```
+echo "$GITHUB_TOKEN" | nim connector set github --env GITHUB_TOKEN \
+    -- npx -y @modelcontextprotocol/server-github
+```
+
+`nim serve --target github` then runs the registered server. A command given
+on the command line is ignored, with a warning, whenever a connector supplies
+one.
+
+**This corrects a claim an earlier version of this section made.** It said two
+independent layers gated the socket -- peer-process identity and
+per-connection target-binding -- and that between them they closed off a
+downstream MCP server reaching another target's secret. They did not. Both
+layers passed this, reproduced live:
+
+```
+nim serve --target github -- /bin/sh -c 'echo $GITHUB_TOKEN'
+```
+
+which printed the real token. Peer identity asks whether the caller is this
+binary, and anything on the machine can be by running it. Target binding asks
+whether a connection has asked for a *second* target, and this asks for
+exactly one. Neither ever constrained what the answer would be injected into,
+and a caller that chooses the process receiving a secret has the secret. The
+adversarial suite that was cited as evidence tested pivoting *within one
+connection*; pivoting by starting a second process was never tested and was
+never prevented.
+
+Both layers are still there and still worth having -- peer identity keeps
+anything that is not Nim off the socket entirely, target binding still stops a
+pivot mid-connection -- but the command binding is what makes a credential
+safe to hold, and it is the thing to point at when asked what protects one.
+
+A connector registered before this existed has no authorized command. It fails
+closed: the daemon refuses to release the secret and the relay refuses to
+spawn, with a message saying to register it again. It is not treated as
+unrestricted.
+
+**PATH is the limitation this does not close.** The registered argv is spawned
+through normal PATH resolution, so a caller that already controls PATH can put
+its own binary in front of the registered name. Closing that needs the daemon
+to spawn the downstream itself and hand the shim a pipe -- process inversion,
+which is a larger change and is also what would let a credential stop being
+handed to the connector at all. It is not pretended here.
+
+Two further issues were found and fixed: an unbounded per-line socket read let
+any local process (pre-authorization) grow the daemon's memory without limit,
+and `credential.get`'s metadata+secret read was not serialized against a
+concurrent `connector.set`, producing a torn env-key/secret pairing under
+load; both are now bounded/locked and covered by regression tests, including
+one reproducing the original race live.
 
 Windows has no peer-credential API for AF_UNIX sockets (`afunix.sys` exposes
 nothing equivalent to `SO_PEERCRED`/`LOCAL_PEERPID`), investigated again
@@ -110,9 +150,11 @@ specifically during this audit with no workaround found -- see
 `peer_windows.go`'s comment for what was considered (named pipes, a
 capability token, file-ACL checks) and why each either just moves the
 problem or requires reversing this document's own M1 "unix sockets on
-Windows" standing decision. Target-binding still holds there (it does not
-depend on peer identity), but nothing can verify the caller is genuinely this
-binary, and `config.go`'s `EnsureDirs` also does not set a real Windows ACL
+Windows" standing decision. Command binding and target binding both still
+hold there -- neither depends on peer identity, and the first is what
+actually authorizes a credential -- but nothing can verify the caller is
+genuinely this binary, so a non-Nim process can still open the socket and
+write to the journal. `config.go`'s `EnsureDirs` also does not set a real Windows ACL
 on the socket's directory (`os.Chmod`/`os.MkdirAll`'s mode argument only
 toggles the read-only attribute on Windows, never an ACL) -- confidentiality
 there rests on the OS's own default temp-directory permissions, not on

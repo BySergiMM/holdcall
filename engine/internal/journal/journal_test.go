@@ -2,6 +2,7 @@ package journal
 
 import (
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -296,11 +297,11 @@ func TestConnectorInfoOnAnUnconfiguredTargetIsNotFoundNotError(t *testing.T) {
 func TestSetConnectorIsAnUpsert(t *testing.T) {
 	j := open(t)
 	first := time.Now().UTC()
-	if err := j.SetConnector("github", "GITHUB_TOKEN", first); err != nil {
+	if err := j.SetConnector("github", "GITHUB_TOKEN", []string{"server"}, first); err != nil {
 		t.Fatalf("first SetConnector: %v", err)
 	}
 	second := first.Add(time.Hour)
-	if err := j.SetConnector("github", "GH_TOKEN", second); err != nil {
+	if err := j.SetConnector("github", "GH_TOKEN", []string{"server"}, second); err != nil {
 		t.Fatalf("second SetConnector: %v", err)
 	}
 
@@ -330,10 +331,10 @@ func TestSetConnectorIsAnUpsert(t *testing.T) {
 func TestListConnectorsIsOrderedAndExcludesNothingSecret(t *testing.T) {
 	j := open(t)
 	now := time.Now().UTC()
-	if err := j.SetConnector("slack", "SLACK_TOKEN", now); err != nil {
+	if err := j.SetConnector("slack", "SLACK_TOKEN", []string{"server"}, now); err != nil {
 		t.Fatalf("SetConnector(slack): %v", err)
 	}
-	if err := j.SetConnector("github", "GITHUB_TOKEN", now); err != nil {
+	if err := j.SetConnector("github", "GITHUB_TOKEN", []string{"server"}, now); err != nil {
 		t.Fatalf("SetConnector(github): %v", err)
 	}
 
@@ -359,7 +360,11 @@ func TestNimConnectorsHasNoSecretColumn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Columns: %v", err)
 	}
-	want := map[string]bool{"target": true, "env_key": true, "updated_at": true}
+	// command joined this set when credentials became bound to the one
+	// server allowed to receive them. It is an authorization input, not a
+	// secret: it names a program, and the value it guards still lives only
+	// in the OS credential store.
+	want := map[string]bool{"target": true, "env_key": true, "command": true, "updated_at": true}
 	if len(cols) != len(want) {
 		t.Fatalf("nim_connectors columns = %v, want exactly %v", cols, want)
 	}
@@ -370,9 +375,72 @@ func TestNimConnectorsHasNoSecretColumn(t *testing.T) {
 	}
 }
 
+// The migration has to be safe to run against a database that already has
+// the column, because Open runs it on every start. A duplicate-column error
+// is the expected result from the second open onward and must not surface.
+func TestOpeningTwiceAppliesMigrationsIdempotently(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nim.db")
+	for i := range 3 {
+		j, err := Open(path)
+		if err != nil {
+			t.Fatalf("open %d: %v", i+1, err)
+		}
+		if err := j.SetConnector("github", "GITHUB_TOKEN", []string{"server", "--flag"}, time.Now()); err != nil {
+			t.Fatalf("SetConnector on open %d: %v", i+1, err)
+		}
+		c, found, err := j.ConnectorInfo("github")
+		if err != nil || !found {
+			t.Fatalf("ConnectorInfo on open %d: found=%v err=%v", i+1, found, err)
+		}
+		if len(c.Command) != 2 || c.Command[0] != "server" || c.Command[1] != "--flag" {
+			t.Fatalf("command did not round-trip on open %d: %v", i+1, c.Command)
+		}
+		j.Close()
+	}
+}
+
+// A connector stored before commands existed reads back with none, rather
+// than with a fabricated one. The daemon depends on being able to tell that
+// case apart: it refuses to release the secret, instead of injecting it into
+// something it never authorized.
+func TestAConnectorWrittenWithoutACommandReadsBackWithNone(t *testing.T) {
+	j := open(t)
+	if _, err := j.db.Exec(
+		`insert into nim_connectors (target, env_key, updated_at) values (?, ?, ?)`,
+		"legacy", "LEGACY_TOKEN", time.Now().UTC().Format(time.RFC3339Nano),
+	); err != nil {
+		t.Fatalf("seeding a pre-command connector: %v", err)
+	}
+	c, found, err := j.ConnectorInfo("legacy")
+	if err != nil || !found {
+		t.Fatalf("ConnectorInfo: found=%v err=%v", found, err)
+	}
+	if c.Command != nil {
+		t.Fatalf("got command %v, want nil for a connector stored without one", c.Command)
+	}
+}
+
+// A command argument may contain a space. Storing argv as a joined string
+// and re-splitting on one would change what gets spawned, which for the
+// thing that decides where a credential goes is not a cosmetic difference.
+func TestCommandArgumentsSurviveSpacesAndQuotes(t *testing.T) {
+	j := open(t)
+	want := []string{"server", "--dir", "/path/with a space", `--json={"a":"b c"}`}
+	if err := j.SetConnector("github", "GITHUB_TOKEN", want, time.Now()); err != nil {
+		t.Fatalf("SetConnector: %v", err)
+	}
+	c, _, err := j.ConnectorInfo("github")
+	if err != nil {
+		t.Fatalf("ConnectorInfo: %v", err)
+	}
+	if !slices.Equal(c.Command, want) {
+		t.Fatalf("got %v, want %v", c.Command, want)
+	}
+}
+
 func TestDeleteConnectorRemovesIt(t *testing.T) {
 	j := open(t)
-	if err := j.SetConnector("github", "GITHUB_TOKEN", time.Now()); err != nil {
+	if err := j.SetConnector("github", "GITHUB_TOKEN", []string{"server"}, time.Now()); err != nil {
 		t.Fatalf("SetConnector: %v", err)
 	}
 	if err := j.DeleteConnector("github"); err != nil {

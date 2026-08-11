@@ -88,7 +88,7 @@ func TestHandleCredentialGetOnUnconfiguredTargetIsFailOpen(t *testing.T) {
 
 func TestHandleCredentialGetReturnsTheConfiguredEnv(t *testing.T) {
 	j := openJournal(t)
-	if err := j.SetConnector("github", "GITHUB_TOKEN", time.Now()); err != nil {
+	if err := j.SetConnector("github", "GITHUB_TOKEN", []string{"server"}, time.Now()); err != nil {
 		t.Fatalf("SetConnector: %v", err)
 	}
 	store := newFakeStore()
@@ -110,7 +110,7 @@ func TestHandleCredentialGetReturnsTheConfiguredEnv(t *testing.T) {
 // rather than silently proceeding as if nothing were configured.
 func TestHandleCredentialGetOnBrokenSecretIsFailClosed(t *testing.T) {
 	j := openJournal(t)
-	if err := j.SetConnector("github", "GITHUB_TOKEN", time.Now()); err != nil {
+	if err := j.SetConnector("github", "GITHUB_TOKEN", []string{"server"}, time.Now()); err != nil {
 		t.Fatalf("SetConnector: %v", err)
 	}
 	store := newFakeStore()
@@ -177,7 +177,7 @@ func TestHandleCredentialGetNeverTearsEnvKeyAndSecretUnderConcurrentSet(t *testi
 
 func TestHandleCredentialGetWithNoStoreIsFailClosed(t *testing.T) {
 	j := openJournal(t)
-	if err := j.SetConnector("github", "GITHUB_TOKEN", time.Now()); err != nil {
+	if err := j.SetConnector("github", "GITHUB_TOKEN", []string{"server"}, time.Now()); err != nil {
 		t.Fatalf("SetConnector: %v", err)
 	}
 	resp := handleCredentialGet(Request{ID: "1", Kind: KindCredentialGet, Target: "github"}, unverifiedState(), j, nil, newTargetLocks())
@@ -193,7 +193,7 @@ func TestHandleCredentialGetWithNoStoreIsFailClosed(t *testing.T) {
 func TestHandleCredentialGetRejectsPivotingToADifferentTargetOnTheSameConnection(t *testing.T) {
 	j := openJournal(t)
 	for _, target := range []string{"github", "slack"} {
-		if err := j.SetConnector(target, "TOKEN", time.Now()); err != nil {
+		if err := j.SetConnector(target, "TOKEN", []string{"server"}, time.Now()); err != nil {
 			t.Fatalf("SetConnector(%s): %v", target, err)
 		}
 	}
@@ -239,7 +239,7 @@ func TestHandleConnectorSetStoresBothMetadataAndSecret(t *testing.T) {
 	j := openJournal(t)
 	store := newFakeStore()
 
-	resp := handleConnectorSet(Request{ID: "1", Kind: KindConnectorSet, Target: "github", EnvKey: "GITHUB_TOKEN", Secret: "ghp_x"}, j, store, newTargetLocks())
+	resp := handleConnectorSet(Request{ID: "1", Kind: KindConnectorSet, Target: "github", EnvKey: "GITHUB_TOKEN", Secret: "ghp_x", Command: []string{"server"}}, j, store, newTargetLocks())
 	if resp.Error != "" {
 		t.Fatalf("unexpected error: %s", resp.Error)
 	}
@@ -266,7 +266,7 @@ func TestHandleConnectorSetRollsBackTheSecretIfMetadataWriteFails(t *testing.T) 
 	j.Close() // force SetConnector to fail on a closed database
 	store := newFakeStore()
 
-	resp := handleConnectorSet(Request{ID: "1", Kind: KindConnectorSet, Target: "github", EnvKey: "GITHUB_TOKEN", Secret: "ghp_x"}, j, store, newTargetLocks())
+	resp := handleConnectorSet(Request{ID: "1", Kind: KindConnectorSet, Target: "github", EnvKey: "GITHUB_TOKEN", Secret: "ghp_x", Command: []string{"server"}}, j, store, newTargetLocks())
 	if resp.Error == "" {
 		t.Fatal("expected an error when the metadata write fails")
 	}
@@ -329,9 +329,10 @@ func TestHandleConnectorSetAcceptsExactlyTheSizeLimit(t *testing.T) {
 	store := newFakeStore()
 	req := Request{
 		ID: "1", Kind: KindConnectorSet,
-		Target: strings.Repeat("a", MaxTargetLen),
-		EnvKey: strings.Repeat("K", MaxEnvKeyLen),
-		Secret: strings.Repeat("v", MaxSecretLen),
+		Target:  strings.Repeat("a", MaxTargetLen),
+		EnvKey:  strings.Repeat("K", MaxEnvKeyLen),
+		Secret:  strings.Repeat("v", MaxSecretLen),
+		Command: []string{"server"},
 	}
 	resp := handleConnectorSet(req, j, store, newTargetLocks())
 	if resp.Error != "" {
@@ -341,7 +342,7 @@ func TestHandleConnectorSetAcceptsExactlyTheSizeLimit(t *testing.T) {
 
 func TestHandleConnectorListReturnsNoSecretsEverTouchingTheStore(t *testing.T) {
 	j := openJournal(t)
-	if err := j.SetConnector("github", "GITHUB_TOKEN", time.Now()); err != nil {
+	if err := j.SetConnector("github", "GITHUB_TOKEN", []string{"server"}, time.Now()); err != nil {
 		t.Fatalf("SetConnector: %v", err)
 	}
 	resp := handleConnectorList(Request{ID: "1", Kind: KindConnectorList}, j)
@@ -353,7 +354,7 @@ func TestHandleConnectorListReturnsNoSecretsEverTouchingTheStore(t *testing.T) {
 func TestHandleConnectorRemoveDeletesMetadataAndSecret(t *testing.T) {
 	j := openJournal(t)
 	store := newFakeStore()
-	if err := j.SetConnector("github", "GITHUB_TOKEN", time.Now()); err != nil {
+	if err := j.SetConnector("github", "GITHUB_TOKEN", []string{"server"}, time.Now()); err != nil {
 		t.Fatalf("SetConnector: %v", err)
 	}
 	store.Set("github", "ghp_x")
@@ -397,7 +398,7 @@ func TestHandleConnectorRemoveRejectsAnInvalidTarget(t *testing.T) {
 func TestHandleConnectorRemoveLeavesMetadataIfSecretRemovalFails(t *testing.T) {
 	j := openJournal(t)
 	store := newFakeStore()
-	if err := j.SetConnector("github", "GITHUB_TOKEN", time.Now()); err != nil {
+	if err := j.SetConnector("github", "GITHUB_TOKEN", []string{"server"}, time.Now()); err != nil {
 		t.Fatalf("SetConnector: %v", err)
 	}
 	store.Set("github", "ghp_x")
@@ -421,7 +422,7 @@ func TestHandleConnectorRemoveLeavesMetadataIfSecretRemovalFails(t *testing.T) {
 func TestHandleDispatchesRequestsAndEventsOnTheSameConnection(t *testing.T) {
 	j := openJournal(t)
 	store := newFakeStore()
-	if err := j.SetConnector("github", "GITHUB_TOKEN", time.Now()); err != nil {
+	if err := j.SetConnector("github", "GITHUB_TOKEN", []string{"server"}, time.Now()); err != nil {
 		t.Fatalf("SetConnector: %v", err)
 	}
 	store.Set("github", "ghp_x")
@@ -460,7 +461,7 @@ func TestHandleDispatchesRequestsAndEventsOnTheSameConnection(t *testing.T) {
 func TestHandleRejectsMixingCredentialAndConnectorRequestsOnOneConnection(t *testing.T) {
 	j := openJournal(t)
 	store := newFakeStore()
-	if err := j.SetConnector("github", "GITHUB_TOKEN", time.Now()); err != nil {
+	if err := j.SetConnector("github", "GITHUB_TOKEN", []string{"server"}, time.Now()); err != nil {
 		t.Fatalf("SetConnector: %v", err)
 	}
 	store.Set("github", "ghp_x")

@@ -59,8 +59,10 @@ func main() {
 func usage() {
 	fmt.Fprint(os.Stderr, `nim - authorization for MCP tool calls
 
-  nim serve --target <name> [--client <name>] -- <command> [args...]
-        Relay one MCP server. This is what your client spawns.
+  nim serve --target <name> [--client <name>] [-- <command> [args...]]
+        Relay one MCP server. This is what your client spawns. The command
+        may be omitted when the target has a connector: the daemon then
+        runs the server registered with it.
 
   nim daemon
         Run the shared daemon. Started automatically when needed.
@@ -68,7 +70,7 @@ func usage() {
   nim status
         Where state lives and how much has been recorded.
 
-  nim connector set <target> --env KEY
+  nim connector set <target> --env KEY -- <command> [args...]
         Store a credential for a downstream server, in the OS credential
         store (Keychain / Credential Manager / Secret Service). Never in
         SQLite, never in the client's own configuration. The secret itself
@@ -76,12 +78,21 @@ func usage() {
         from a script) or, in an interactive terminal, prompted for without
         echoing.
 
-            echo "$GITHUB_TOKEN" | nim connector set github --env GITHUB_TOKEN
-            nim connector set github --env GITHUB_TOKEN   # interactive prompt
+        The command after -- is the only server this credential will ever
+        be injected into, and it is required. Without it a stored secret
+        says nothing about what may receive it, and anything able to run
+        nim could name this target alongside a command of its own.
+
+            echo "$GITHUB_TOKEN" | nim connector set github --env GITHUB_TOKEN \
+                -- npx -y @modelcontextprotocol/server-github
+
+            # interactive prompt for the secret
+            nim connector set github --env GITHUB_TOKEN \
+                -- npx -y @modelcontextprotocol/server-github
 
   nim connector list
-        Configured connectors and the env var name each injects. Never the
-        secret value.
+        Configured connectors, the env var name each injects, and the
+        server each is bound to. Never the secret value.
 
   nim connector remove <target>
         Forget a connector's credential.
@@ -99,10 +110,10 @@ func runServe(args []string) error {
 	if *target == "" {
 		return fmt.Errorf("--target is required")
 	}
+	// The command may be omitted when the target has a connector: the daemon
+	// then supplies the one it authorized. shim.Run reports the case where
+	// neither is present, since only it knows what the daemon answered.
 	command := fs.Args()
-	if len(command) == 0 {
-		return fmt.Errorf("give the downstream server after --, e.g. -- npx -y some-mcp-server")
-	}
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -194,13 +205,22 @@ func runConnector(args []string) error {
 // never becomes a command-line argument of this process (visible via ps and
 // left in shell history for as long as that history file exists), which is
 // exactly what the old "--env KEY=value" form did. See readSecretFromStdin.
-func parseConnectorSetArgs(args []string) (target, key string, err error) {
+//
+// Everything after -- is the downstream server this credential may be
+// injected into. It is required: a stored secret with no statement about
+// what may receive it is what let any caller name a target and its own
+// command and be handed the secret. The same -- convention as nim serve, so
+// a command with its own flags needs no quoting or escaping.
+func parseConnectorSetArgs(args []string) (target, key string, command []string, err error) {
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
+		case a == "--":
+			command = args[i+1:]
+			i = len(args)
 		case a == "--env":
 			if i+1 >= len(args) {
-				return "", "", fmt.Errorf("--env requires a KEY argument")
+				return "", "", nil, fmt.Errorf("--env requires a KEY argument")
 			}
 			i++
 			key = args[i]
@@ -209,23 +229,30 @@ func parseConnectorSetArgs(args []string) (target, key string, err error) {
 		case target == "" && !strings.HasPrefix(a, "-"):
 			target = a
 		default:
-			return "", "", fmt.Errorf("unexpected argument %q; usage: nim connector set <target> --env KEY", a)
+			return "", "", nil, fmt.Errorf("unexpected argument %q; usage: %s", a, connectorSetUsage)
 		}
 	}
 	if target == "" {
-		return "", "", fmt.Errorf("usage: nim connector set <target> --env KEY")
+		return "", "", nil, fmt.Errorf("usage: %s", connectorSetUsage)
 	}
 	if key == "" {
-		return "", "", fmt.Errorf("--env is required, e.g. --env GITHUB_TOKEN")
+		return "", "", nil, fmt.Errorf("--env is required, e.g. --env GITHUB_TOKEN")
 	}
 	if strings.Contains(key, "=") {
-		return "", "", fmt.Errorf("--env takes just the variable name (e.g. --env GITHUB_TOKEN), not KEY=value -- provide the secret on stdin instead")
+		return "", "", nil, fmt.Errorf("--env takes just the variable name (e.g. --env GITHUB_TOKEN), not KEY=value -- provide the secret on stdin instead")
 	}
-	return target, key, nil
+	if len(command) == 0 {
+		return "", "", nil, fmt.Errorf(
+			"give the server this credential belongs to after --, so Nim knows what it may be injected into.\n"+
+				"usage: %s", connectorSetUsage)
+	}
+	return target, key, command, nil
 }
 
+const connectorSetUsage = "nim connector set <target> --env KEY -- <command> [args...]"
+
 func runConnectorSet(args []string) error {
-	target, key, err := parseConnectorSetArgs(args)
+	target, key, command, err := parseConnectorSetArgs(args)
 	if err != nil {
 		return err
 	}
@@ -242,7 +269,7 @@ func runConnectorSet(args []string) error {
 
 	resp, err := daemon.SendRequest(conn, daemon.Request{
 		ID: uuid.New(), Kind: daemon.KindConnectorSet,
-		Target: target, EnvKey: key, Secret: secret,
+		Target: target, EnvKey: key, Secret: secret, Command: command,
 	})
 	if err != nil {
 		return err
@@ -250,7 +277,7 @@ func runConnectorSet(args []string) error {
 	if resp.Error != "" {
 		return fmt.Errorf("%s", resp.Error)
 	}
-	fmt.Printf("connector %q set (injects %s)\n", target, key)
+	fmt.Printf("connector %q set (injects %s into %s)\n", target, key, strings.Join(command, " "))
 	return nil
 }
 
@@ -313,7 +340,14 @@ func runConnectorList(args []string) error {
 		return nil
 	}
 	for _, c := range resp.Connectors {
-		fmt.Printf("%-20s %-20s %s\n", c.Target, c.EnvKey, c.UpdatedAt)
+		// A connector with no command cannot be used at all -- the daemon
+		// refuses to release its secret -- so saying so here is the only
+		// place a user finds out before an agent hits it at spawn time.
+		command := strings.Join(c.Command, " ")
+		if command == "" {
+			command = "(no authorized command: register it again)"
+		}
+		fmt.Printf("%-20s %-20s %-24s %s\n", c.Target, c.EnvKey, c.UpdatedAt, command)
 	}
 	return nil
 }

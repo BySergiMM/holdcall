@@ -20,6 +20,13 @@ type Request struct {
 	Target string `json:"target,omitempty"`
 	EnvKey string `json:"env_key,omitempty"`
 	Secret string `json:"secret,omitempty"` // only set for connector.set; never logged, see String
+
+	// Command is the downstream server this target's credential may be
+	// injected into, as argv. Set only by connector.set: a credential.get
+	// never sends one, because a caller does not get to nominate the command
+	// that receives a secret -- that is precisely the hole this field exists
+	// to close. See handleCredentialGet.
+	Command []string `json:"command,omitempty"`
 }
 
 const (
@@ -37,8 +44,8 @@ func (r Request) String() string {
 	if r.Secret != "" {
 		secret = "<redacted>"
 	}
-	return fmt.Sprintf("Request{ID:%s Kind:%s Target:%s EnvKey:%s Secret:%s}",
-		r.ID, r.Kind, r.Target, r.EnvKey, secret)
+	return fmt.Sprintf("Request{ID:%s Kind:%s Target:%s EnvKey:%s Secret:%s Command:%d args}",
+		r.ID, r.Kind, r.Target, r.EnvKey, secret, len(r.Command))
 }
 
 // Response answers a Request. Env carries real secret material for
@@ -51,6 +58,12 @@ type Response struct {
 	// credential.get
 	Found bool              `json:"found,omitempty"`
 	Env   map[string]string `json:"env,omitempty"`
+	// Command is the argv the daemon authorizes this credential to be
+	// injected into. The shim spawns this, not whatever was on its own
+	// command line: the daemon is the authority on which process may receive
+	// a secret, and a shim that took the caller's word for it is the
+	// credential oracle this replaces.
+	Command []string `json:"command,omitempty"`
 
 	// connector.list
 	Connectors []ConnectorInfo `json:"connectors,omitempty"`
@@ -59,9 +72,10 @@ type Response struct {
 // ConnectorInfo is non-secret connector metadata: which env var name a
 // target's credential is injected under, never the value itself.
 type ConnectorInfo struct {
-	Target    string `json:"target"`
-	EnvKey    string `json:"env_key"`
-	UpdatedAt string `json:"updated_at"`
+	Target    string   `json:"target"`
+	EnvKey    string   `json:"env_key"`
+	Command   []string `json:"command,omitempty"`
+	UpdatedAt string   `json:"updated_at"`
 }
 
 func (r Response) String() string {

@@ -1,6 +1,17 @@
 package main
 
-import "testing"
+import (
+	"slices"
+	"testing"
+)
+
+// server is the stand-in downstream every case below binds its connector to.
+// A connector must name one: see TestParseConnectorSetArgsRequiresACommand.
+var server = []string{"npx", "-y", "@modelcontextprotocol/server-github"}
+
+func withServer(args ...string) []string {
+	return append(append([]string{}, args...), append([]string{"--"}, server...)...)
+}
 
 // The specified invocation is "nim connector set <target> --env KEY": target
 // before the flag. The standard flag package stops parsing flags at the
@@ -9,17 +20,20 @@ import "testing"
 // implementation of this parser used flag.FlagSet and failed exactly this
 // case.
 func TestParseConnectorSetArgsAcceptsTargetBeforeTheFlag(t *testing.T) {
-	target, key, err := parseConnectorSetArgs([]string{"github", "--env", "GITHUB_TOKEN"})
+	target, key, command, err := parseConnectorSetArgs(withServer("github", "--env", "GITHUB_TOKEN"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if target != "github" || key != "GITHUB_TOKEN" {
 		t.Fatalf("got (%q, %q), want (github, GITHUB_TOKEN)", target, key)
 	}
+	if !slices.Equal(command, server) {
+		t.Fatalf("got command %v, want %v", command, server)
+	}
 }
 
 func TestParseConnectorSetArgsAcceptsTheFlagBeforeTarget(t *testing.T) {
-	target, key, err := parseConnectorSetArgs([]string{"--env", "GITHUB_TOKEN", "github"})
+	target, key, _, err := parseConnectorSetArgs(withServer("--env", "GITHUB_TOKEN", "github"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -29,7 +43,7 @@ func TestParseConnectorSetArgsAcceptsTheFlagBeforeTarget(t *testing.T) {
 }
 
 func TestParseConnectorSetArgsAcceptsEqualsForm(t *testing.T) {
-	target, key, err := parseConnectorSetArgs([]string{"github", "--env=GITHUB_TOKEN"})
+	target, key, _, err := parseConnectorSetArgs(withServer("github", "--env=GITHUB_TOKEN"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -39,14 +53,45 @@ func TestParseConnectorSetArgsAcceptsEqualsForm(t *testing.T) {
 }
 
 func TestParseConnectorSetArgsRequiresATarget(t *testing.T) {
-	if _, _, err := parseConnectorSetArgs([]string{"--env", "K"}); err == nil {
+	if _, _, _, err := parseConnectorSetArgs(withServer("--env", "K")); err == nil {
 		t.Fatal("expected an error with no target given")
 	}
 }
 
 func TestParseConnectorSetArgsRequiresTheEnvFlag(t *testing.T) {
-	if _, _, err := parseConnectorSetArgs([]string{"github"}); err == nil {
+	if _, _, _, err := parseConnectorSetArgs(withServer("github")); err == nil {
 		t.Fatal("expected an error with no --env given")
+	}
+}
+
+// A connector with no command is a stored secret with no statement about
+// what may receive it, which is exactly what let any caller name a target
+// alongside a command of its own and be handed the credential. Refusing at
+// registration puts the failure on the person configuring it rather than on
+// the agent that later hits it.
+func TestParseConnectorSetArgsRequiresACommand(t *testing.T) {
+	for _, args := range [][]string{
+		{"github", "--env", "GITHUB_TOKEN"},
+		{"github", "--env", "GITHUB_TOKEN", "--"},
+	} {
+		if _, _, _, err := parseConnectorSetArgs(args); err == nil {
+			t.Errorf("expected an error for args %v (no command after --)", args)
+		}
+	}
+}
+
+// Everything after -- belongs to the downstream server, including things
+// that look like Nim's own flags. Without this a server taking --env would
+// have its arguments silently stolen by this parser.
+func TestParseConnectorSetArgsTakesEverythingAfterTheSeparatorVerbatim(t *testing.T) {
+	want := []string{"my-server", "--env", "SOMETHING", "--flag=x", "positional"}
+	_, _, command, err := parseConnectorSetArgs(
+		append([]string{"github", "--env", "GITHUB_TOKEN", "--"}, want...))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !slices.Equal(command, want) {
+		t.Fatalf("got command %v, want %v", command, want)
 	}
 }
 
@@ -56,10 +101,10 @@ func TestParseConnectorSetArgsRequiresTheEnvFlag(t *testing.T) {
 // "value" as part of the key).
 func TestParseConnectorSetArgsRejectsAValueInTheEnvFlag(t *testing.T) {
 	for _, args := range [][]string{
-		{"github", "--env", "GITHUB_TOKEN=ghp_secret"},
-		{"github", "--env=GITHUB_TOKEN=ghp_secret"},
+		withServer("github", "--env", "GITHUB_TOKEN=ghp_secret"),
+		withServer("github", "--env=GITHUB_TOKEN=ghp_secret"),
 	} {
-		if _, _, err := parseConnectorSetArgs(args); err == nil {
+		if _, _, _, err := parseConnectorSetArgs(args); err == nil {
 			t.Errorf("expected an error for args %v (old KEY=value form)", args)
 		}
 	}

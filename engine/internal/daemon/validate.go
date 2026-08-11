@@ -26,6 +26,13 @@ const (
 	// MaxSecretLen is generous for any real API token, certificate, or key
 	// material Nim is likely to inject, without allowing unbounded growth.
 	MaxSecretLen = 32 * 1024
+	// MaxCommandArgs and MaxCommandArgLen bound a connector's registered
+	// argv. Both are far past any real MCP server invocation
+	// (`npx -y @modelcontextprotocol/server-github` is three) while keeping
+	// what gets stored in nim_connectors, and re-read on every spawn,
+	// bounded.
+	MaxCommandArgs   = 64
+	MaxCommandArgLen = 4096
 )
 
 // targetPattern is a strict allowlist, not a blacklist: it is easier to
@@ -61,6 +68,33 @@ func validateEnvKey(key string) error {
 	}
 	if len(key) > MaxEnvKeyLen {
 		return fmt.Errorf("env key is %d characters, over the %d limit", len(key), MaxEnvKeyLen)
+	}
+	return nil
+}
+
+// validateCommand checks a connector's registered argv.
+//
+// A connector must have one: it is what the credential is authorized to be
+// injected into, and a connector without it is a stored secret with no
+// statement about who may receive it. Registering one without a command is
+// refused here rather than accepted and refused later at spawn time, so the
+// failure lands on the person configuring it, not on the agent using it.
+func validateCommand(command []string) error {
+	if len(command) == 0 {
+		return fmt.Errorf(
+			"a connector needs the command it belongs to, so Nim knows what its credential may be injected into: " +
+				"nim connector set <target> --env KEY -- <command> [args...]")
+	}
+	if len(command) > MaxCommandArgs {
+		return fmt.Errorf("command has %d arguments, over the %d limit", len(command), MaxCommandArgs)
+	}
+	if command[0] == "" {
+		return fmt.Errorf("the command's program name must not be empty")
+	}
+	for i, arg := range command {
+		if len(arg) > MaxCommandArgLen {
+			return fmt.Errorf("command argument %d is %d bytes, over the %d limit", i, len(arg), MaxCommandArgLen)
+		}
 	}
 	return nil
 }

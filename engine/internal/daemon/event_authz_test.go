@@ -124,23 +124,41 @@ func TestEventsFromTheSameBinaryStillLand(t *testing.T) {
 	t.Cleanup(func() { ln.Close() })
 	done := serveOne(t, j, ln)
 
+	// The helper holds its connection open after writing, and this test kills
+	// it once the rows have landed. That is not test scaffolding to make a
+	// flaky thing pass: peer identity is read from the kernel's record of a
+	// live connection, so a client that writes and exits in the same instant
+	// can genuinely be gone before the daemon looks. Every real client stays
+	// -- a shim for its whole session, a connector command until its response
+	// arrives -- and this one models that rather than the impossible case.
 	cmd := exec.Command(os.Args[0], "-test.run=TestHelperProcessSendEvents")
 	cmd.Env = append(os.Environ(), "NIM_TEST_HELPER_SOCKET="+sock, "NIM_TEST_EVENT_SENDER=1")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("helper: %v: %s", err, out)
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("starting helper: %v", err)
 	}
+	t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait() })
 
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("handle did not return")
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if countRows(t, path, "nim_calls") == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the legitimate binary's events never landed: %d sessions, %d calls",
+				countRows(t, path, "nim_sessions"), countRows(t, path, "nim_calls"))
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 
 	if n := countRows(t, path, "nim_sessions"); n != 1 {
 		t.Errorf("the legitimate binary wrote %d sessions, want 1", n)
 	}
-	if n := countRows(t, path, "nim_calls"); n != 1 {
-		t.Errorf("the legitimate binary wrote %d calls, want 1", n)
+
+	cmd.Process.Kill()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("handle did not return after the peer went away")
 	}
 }
 
@@ -169,6 +187,9 @@ func TestHelperProcessSendEvents(t *testing.T) {
 			t.Fatalf("encode: %v", err)
 		}
 	}
+	// Stay alive, holding the connection, exactly as a real client does. The
+	// parent kills this process once it has seen the events land.
+	time.Sleep(30 * time.Second)
 }
 
 // TestAConnectionCannotWriteToASessionItDidNotStart covers the second half of

@@ -22,7 +22,7 @@ func TestHandleDeniesCredentialGetFromANonNimProcess(t *testing.T) {
 		t.Skip("nc not available")
 	}
 	j := openJournal(t)
-	if err := j.SetConnector("github", "GITHUB_TOKEN", time.Now()); err != nil {
+	if err := j.SetConnector("github", "GITHUB_TOKEN", []string{"server"}, time.Now()); err != nil {
 		t.Fatalf("SetConnector: %v", err)
 	}
 	store := newFakeStore()
@@ -108,7 +108,7 @@ func TestHandleDeniesConnectorOperationsFromANonNimProcess(t *testing.T) {
 		t.Skip("nc not available")
 	}
 	j := openJournal(t)
-	if err := j.SetConnector("github", "GITHUB_TOKEN", time.Now()); err != nil {
+	if err := j.SetConnector("github", "GITHUB_TOKEN", []string{"server"}, time.Now()); err != nil {
 		t.Fatalf("SetConnector: %v", err)
 	}
 	store := newFakeStore()
@@ -197,7 +197,7 @@ func TestHandleDeniesConnectorOperationsFromANonNimProcess(t *testing.T) {
 // everything else.
 func TestHandleAllowsCredentialGetFromTheSameBinary(t *testing.T) {
 	j := openJournal(t)
-	if err := j.SetConnector("github", "GITHUB_TOKEN", time.Now()); err != nil {
+	if err := j.SetConnector("github", "GITHUB_TOKEN", []string{"server"}, time.Now()); err != nil {
 		t.Fatalf("SetConnector: %v", err)
 	}
 	store := newFakeStore()
@@ -247,7 +247,7 @@ func TestHandleAllowsCredentialGetFromTheSameBinary(t *testing.T) {
 func TestHandleTargetBindingSurvivesEverySingleConnectionTrick(t *testing.T) {
 	j := openJournal(t)
 	for _, target := range []string{"github", "slack"} {
-		if err := j.SetConnector(target, strings.ToUpper(target)+"_TOKEN", time.Now()); err != nil {
+		if err := j.SetConnector(target, strings.ToUpper(target)+"_TOKEN", []string{"server"}, time.Now()); err != nil {
 			t.Fatalf("SetConnector(%s): %v", target, err)
 		}
 	}

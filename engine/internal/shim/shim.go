@@ -17,6 +17,8 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -53,9 +55,9 @@ type Shim struct {
 
 // Run relays until the client closes stdin or the downstream server exits.
 func Run(opts Options) error {
-	if len(opts.Command) == 0 {
-		return fmt.Errorf("no downstream command given")
-	}
+	// The downstream command is not checked here any more. A connector can
+	// supply it, and which one wins is only known once the daemon has
+	// answered -- see the check after fetchConnector.
 
 	// A configuration that cannot work is worth one line on stderr, where the
 	// client will show it, rather than a relay that quietly records nothing.
@@ -72,13 +74,33 @@ func Run(opts Options) error {
 	// target with a connector configured must have its credential injected
 	// before the downstream starts, or not start at all. A target with none
 	// configured -- the ordinary case -- costs nothing extra; see
-	// fetchConnectorEnv for exactly which outcomes fail open vs. closed.
-	env, err := fetchConnectorEnv(conn, opts.Target)
+	// fetchConnector for exactly which outcomes fail open vs. closed.
+	inj, err := fetchConnector(conn, opts.Target)
 	if err != nil {
 		if conn != nil {
 			conn.Close() // never handed to a reporter, so nothing else owns it
 		}
 		return err
+	}
+
+	// When a credential is being injected, the daemon decides what receives
+	// it. Taking the command from opts here instead is what made this a
+	// credential oracle: any caller could name a target and its own command
+	// and be handed the secret.
+	command := opts.Command
+	if len(inj.command) > 0 {
+		if len(opts.Command) > 0 && !slices.Equal(opts.Command, inj.command) {
+			fmt.Fprintf(os.Stderr,
+				"nim: ignoring the command given on the command line; connector %q is registered to run %s\n"+
+					"nim: the daemon decides what a credential may be injected into, not the caller\n",
+				opts.Target, strings.Join(inj.command, " "))
+		}
+		command = inj.command
+	}
+	if len(command) == 0 {
+		return fmt.Errorf(
+			"no downstream command: give one after --, or register one with "+
+				"nim connector set %s --env KEY -- <command> [args...]", opts.Target)
 	}
 
 	s := &Shim{
@@ -89,7 +111,7 @@ func Run(opts Options) error {
 	}
 	defer s.reporter.close()
 
-	cmd := buildDownstreamCmd(opts.Command, env)
+	cmd := buildDownstreamCmd(command, inj.env)
 	downIn, err := cmd.StdinPipe()
 	if err != nil {
 		return err
@@ -102,7 +124,7 @@ func Run(opts Options) error {
 	// passed straight through rather than captured.
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("cannot start %s: %w", opts.Command[0], err)
+		return fmt.Errorf("cannot start %s: %w", command[0], err)
 	}
 
 	mid, midErr := machineID()
@@ -233,25 +255,38 @@ func buildDownstreamCmd(command []string, env []string) *exec.Cmd {
 	return cmd
 }
 
-// fetchConnectorEnv asks the daemon what to inject into the downstream's
-// environment for target, before it is spawned. There are three outcomes:
+// injection is what the daemon authorized for one target: the environment to
+// add, and the command that environment may be added to. Both or neither --
+// a credential is never separable from the process allowed to receive it.
+type injection struct {
+	env     []string
+	command []string
+}
+
+// fetchConnector asks the daemon what to inject for target, and into what,
+// before anything is spawned. There are four outcomes:
 //
 //   - conn is nil, or the request could not complete (daemon unreachable,
 //     timed out mid-request): treated the same as "no connector configured"
-//     -- fail open. A target the operator never configured a connector for
-//     must keep working exactly as it does without M3 at all, even if the
-//     daemon that would have told us so is down; that matches M1/M2's
-//     existing guarantee that a missing daemon never blocks the relay.
+//     -- fail open, with no credential and no command. A target the operator
+//     never configured a connector for must keep working exactly as it does
+//     without M3 at all, even if the daemon that would have told us so is
+//     down; that matches M1/M2's existing guarantee that a missing daemon
+//     never blocks the relay. Nothing is leaked by this: failing open here
+//     yields no secret, only a downstream started without one.
 //   - the daemon answers Found=false: no connector configured for target.
 //     Same outcome as above, this time confirmed rather than assumed.
 //   - the daemon answers Found=true with Error set: a connector IS
-//     configured but its secret could not be retrieved. This is the one
-//     case that fails closed -- returning an error here means Run refuses
-//     to spawn the downstream under a partial configuration, rather than
-//     starting it without the credential it was set up to need.
-func fetchConnectorEnv(conn net.Conn, target string) ([]string, error) {
+//     configured but its credential cannot be released. This fails closed --
+//     returning an error means Run refuses to spawn rather than starting the
+//     downstream under a partial configuration. A connector registered
+//     before commands existed lands here, deliberately.
+//   - Found=true with no error: the env to inject and the one command it may
+//     be injected into. A response carrying a credential but no command is
+//     itself refused; that pairing is the whole authorization.
+func fetchConnector(conn net.Conn, target string) (injection, error) {
 	if conn == nil {
-		return nil, nil
+		return injection{}, nil
 	}
 	deadline := time.Now().Add(2 * time.Second)
 	if err := conn.SetDeadline(deadline); err == nil {
@@ -264,19 +299,26 @@ func fetchConnectorEnv(conn net.Conn, target string) ([]string, error) {
 		Target: target,
 	})
 	if err != nil {
-		return nil, nil // could not ask; fail open, see above
+		return injection{}, nil // could not ask; fail open, see above
 	}
 	if !resp.Found {
-		return nil, nil
+		return injection{}, nil
 	}
 	if resp.Error != "" {
-		return nil, fmt.Errorf("connector %q is configured but its credential could not be retrieved: %s", target, resp.Error)
+		return injection{}, fmt.Errorf("connector %q is configured but its credential could not be retrieved: %s", target, resp.Error)
+	}
+	if len(resp.Env) > 0 && len(resp.Command) == 0 {
+		// The daemon should never send this. Refusing rather than falling
+		// back to the caller's own command means a future daemon bug cannot
+		// quietly reopen the oracle this pairing exists to close.
+		return injection{}, fmt.Errorf(
+			"connector %q returned a credential with no authorized command; refusing to spawn", target)
 	}
 	pairs := make([]string, 0, len(resp.Env))
 	for k, v := range resp.Env {
 		pairs = append(pairs, k+"="+v)
 	}
-	return pairs, nil
+	return injection{env: pairs, command: resp.Command}, nil
 }
 
 // reporter delivers events to the daemon without ever blocking the relay.
