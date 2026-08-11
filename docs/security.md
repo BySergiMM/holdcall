@@ -37,6 +37,47 @@ Not in the model, and worth being explicit about:
   --expect-head <hash>` is the only thing that catches it, and only for what
   was committed before the head you recorded.
 
+## What peer identity establishes, per platform
+
+Peer identity asks the kernel who is on the other end of a socket and whether
+it is running the same file we are. The question that decides its strength is
+whether the answer describes a **running image** or a **filename**.
+
+| | How the peer's image is resolved | Resists path swap |
+|---|---|---|
+| **Linux** | `stat("/proc/<pid>/exe")` — the kernel resolves the magic link to the inode the process is executing | yes |
+| **Darwin** | the vnode behind the peer's own mapping of its main image, via `proc_info`'s `PROC_PIDREGIONPATHINFO` | yes |
+| **Windows** | nothing — AF_UNIX exposes no peer-credential API | n/a, unsupported |
+
+Both unix implementations previously stat'ed a *path* (`kern.procargs2` on
+darwin, `readlink /proc/<pid>/exe` on linux) and were defeated with no race at
+all: launch from a path you own, replace the file there with a link to the nim
+binary, then connect. `internal/peer/pathswap_test.go` is that attack, and it
+runs on both platforms.
+
+**What this is not.** It is executable identity, kernel-provided — not
+code-signing identity. It says nothing about who signed a binary, and a
+rebuild of Nim is a different inode and therefore a different program as far as
+this is concerned. It also does not distinguish two processes running the same
+file, which is why session ownership exists.
+
+**Darwin specifics.** `PROC_PIDREGIONPATHINFO` at address 0 returns the
+process's lowest mapped region, which is its main image: `__PAGEZERO` sits
+below it and an attempt to place a file-backed executable mapping underneath
+was rejected by the kernel at every address tried, so a peer cannot relocate
+what this reads. The flavor and every struct field come from the installed SDK
+header; the one value taken from XNU rather than the SDK is the `proc_info`
+call number, which Apple does not ship. That is why the implementation first
+resolves *its own* pid and requires the answer to be its own binary before
+trusting the mechanism at all — if a future macOS moves a field, the check
+fails against something already known and falls back to the old path
+comparison rather than comparing garbage.
+
+`SecCodeCopyGuestWithAttributes` would give a stronger, signature-based
+identity, but requires Security.framework and therefore cgo, which would end
+the `CGO_ENABLED=0` cross-compilation this project relies on. It was not
+needed: the vnode check answers the question actually being asked.
+
 ## Attacks run against the current build
 
 | # | Attack | Result | Covered by |
@@ -58,12 +99,27 @@ Not in the model, and worth being explicit about:
 | 15 | Alter an entry in place | **detected** | `journal_test.go` |
 | 16 | Leak a credential into logs, the journal, or stderr | **none found** | manual, re-run each audit |
 | 17 | Leak call arguments into the journal | **none found** (digest only) | `journal_test.go` |
+| 18 | Defeat peer identity by swapping the file at the peer's launch path | **blocked** (linux and darwin) | `pathswap_test.go` |
+| 19 | Pass `--expect-head` a head the journal has grown past | **no longer misreported** | `journal_test.go` |
 
-Three of these were live vulnerabilities found by audit rather than
-hypotheticals: **1** (any local process could read every credential), **3**
-(the journal was writable by anything), and **6–8** (the daemon was
-impersonable, which the merge itself introduced). Each has a regression test
-that fails against the code as it was.
+Live vulnerabilities found by audit rather than hypotheticals: **1** (any local
+process could read every credential), **3** (the journal was writable by
+anything), **6–8** (the daemon was impersonable, which the merge itself
+introduced), and **18** (peer identity compared a filename rather than the
+running image). Each has a regression test that fails against the code as it
+was.
+
+**18 qualified 2–8 on darwin until it was fixed**, because all of those rest on
+peer identity, and until the vnode check replaced the path comparison they were
+defeatable there. They now hold on both unix platforms. Rows 1 and 10–13 never
+depended on peer identity and hold everywhere.
+
+**19 was not a vulnerability but a false accusation**, which is its own kind of
+failure: `--expect-head` reported "entries have been removed and the chain
+recomputed" for a journal that had merely grown since the head was recorded.
+An operator shown that every time learns to ignore it, and the one check that
+detects truncation stops being read. It now looks for the recorded head *in*
+the chain rather than only at its tip.
 
 ## What protects what
 
