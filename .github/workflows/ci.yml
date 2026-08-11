@@ -1,0 +1,107 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: engine
+
+jobs:
+  # Both platforms, because they do not run the same code. peer_darwin.go and
+  # peer_linux.go are separate implementations of the check that keeps
+  # everything which is not Nim off the daemon socket, and until this existed
+  # only the darwin one had ever been executed -- the linux one was reasoned
+  # about and cross-compiled. The same is true of the credential store, which
+  # shells out to `security` on one and `secret-tool` on the other.
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: engine/go.mod
+          cache-dependency-path: engine/go.sum
+
+      # secret-tool is what credential.New() looks for on linux. Installing it
+      # means the daemon takes the same startup path CI's linux runner would
+      # otherwise skip -- New() succeeding rather than failing closed.
+      #
+      # It does not mean the linux store is tested. There are no linux
+      # equivalents of store_darwin_test.go, and a runner has no keyring
+      # daemon for secret-tool to talk to even with the binary present, so
+      # Set/Get/Delete on that platform remain unexercised. That gap is real
+      # and this does not close it.
+      - name: Install libsecret (linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libsecret-tools
+
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt'd:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      # -race is not optional here. Three real concurrency bugs have been
+      # found in this codebase so far (a split-brain daemon start, a torn
+      # credential read, a BUSY_SNAPSHOT under concurrent journal writes), and
+      # each was reproducible only under contention.
+      - name: go test -race
+        run: go test -race -count=1 ./...
+
+  # The engine claims to build for three platforms with no C toolchain, which
+  # is why modernc.org/sqlite is used instead of mattn/go-sqlite3. That claim
+  # is worth checking on every push rather than at release time.
+  cross-compile:
+    name: cross-compile
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: darwin
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: engine/go.mod
+          cache-dependency-path: engine/go.sum
+
+      - name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+        env:
+          CGO_ENABLED: '0'
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: go build ./...
