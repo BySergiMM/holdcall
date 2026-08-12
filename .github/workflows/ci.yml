@@ -68,8 +68,20 @@ jobs:
       # found in this codebase so far (a split-brain daemon start, a torn
       # credential read, a BUSY_SNAPSHOT under concurrent journal writes), and
       # each was reproducible only under contention.
-      - name: go test -race
-        run: go test -race -count=1 ./...
+      #
+      # -v is not optional either, and for a less obvious reason: without it a
+      # package whose adversarial tests all skipped prints exactly the same
+      # "ok" as one where they all passed. pipefail keeps the pipe into tee
+      # from swallowing a real failure.
+      - name: go test -race -v
+        run: |
+          set -o pipefail
+          go test -race -count=1 -v ./... 2>&1 | tee /tmp/gotest.log
+
+      # And having made skips visible, refuse to ignore them: any test the
+      # dashboard cites as evidence for a verified guarantee must have run.
+      - name: adversarial tests must have run, not skipped
+        run: ../.github/scripts/assert-evidence-ran.sh /tmp/gotest.log
 
   # The dashboard makes claims about this repository, so its build is a check
   # on those claims rather than a packaging step: scripts/generate.mjs exits
@@ -139,3 +151,14 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: go build ./...
+
+      # go build ignores _test.go files, so a test that does not compile on a
+      # platform used to reach main unnoticed -- which happened once already,
+      # with a peer test using syscall.Stat_t on windows. go vet type-checks
+      # the test files too, which is the whole reason for this step.
+      - name: Vet ${{ matrix.goos }}/${{ matrix.goarch }}
+        env:
+          CGO_ENABLED: '0'
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: go vet ./...
