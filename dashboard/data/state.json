@@ -30,9 +30,9 @@
     "provenance": "ci",
     "workflow": "CI",
     "conclusion": "success",
-    "commit": "28ef25e",
-    "runId": "31512445562",
-    "takenAt": "2026-08-11T18:58:00Z",
+    "commit": "ca868d9",
+    "runId": "31579165816",
+    "takenAt": "2026-08-12T09:05:00Z",
     "jobs": [
       {
         "name": "test (ubuntu-latest)",
@@ -863,9 +863,29 @@
       "wasLive": false,
       "evidence": "Red-teamed deliberately on 2026-08-12 with sixteen attempts: forged statuses, relabelled milestones, closed decisions, duplicated ids, invented runtime data, secrets and local paths in prose, overridden test counts. Fourteen got through and are now refused, each with a regression test; the two that appeared to work never had — derived facts are computed after the declared ones are spread in, so a hand-written count cannot win. The build also scans every byte of the published output, not just the data file. What remains undetectable is a wrong summary written next to a real test name, and a platform column resting on a test that compiles there without proving anything.",
       "tests": []
+    },
+    {
+      "id": "deployment-exposes-more-than-the-page",
+      "name": "Reach something other than the dashboard on the public deployment",
+      "category": "meta",
+      "status": "partial",
+      "wasLive": false,
+      "evidence": "Audited from outside on 2026-08-12 against all three intended hostnames. Refused: .env and .env.local, .git, .vercel/project.json, builds.json and config.json, package.json, vercel.json, next.config.mjs, data/state.json, generate.mjs, nim.db, .nim/, engine sources, .DS_Store, node_modules -- all 404. No source maps exist and no chunk references one. Path traversal returns 400 or a generic edge error. POST/PUT/DELETE/PATCH/TRACE all 405. /_src redirects to Vercel's source viewer, which demands a login. No secret shape, token, JWT or local path appears in any served byte, and no journal data: no chain hash, prev_hash, chain_seq, machine_id or session id. Partial rather than pass because sixteen historical deployment URLs and one stale branch alias also answer publicly -- see F-012 -- serving Vercel failure pages and an abandoned placeholder rather than this dashboard.",
+      "tests": []
     }
   ],
   "findings": [
+    {
+      "id": "F-012",
+      "severity": "low",
+      "title": "Old deployments became public along with the intended one",
+      "problem": "Turning deployment protection off applies to every deployment the project has ever made, not only the current one. Sixteen historical deployment URLs answer anonymously, plus a stale branch alias nim-git-m1-bootstrap-seergiiim.vercel.app left over from when the repository was connected to Vercel.",
+      "impact": "Fourteen serve Vercel's generic 'Deployment has failed' page, which carries a deployment id and nothing else. One serves the abandoned v0 placeholder that predates this dashboard. No secret, source, build log or local path was found in any of them -- so this is untidy rather than dangerous, and it means the promise 'only the dashboard is public' is not literally true.",
+      "evidence": "Enumerated all 16 deployment URLs and fetched each anonymously. 14 returned the 20331-byte failure page, 1 returned the 12888-byte v0 stub titled 'v0 App', 1 is the current dashboard. Greps for local paths, build errors, npm output and tokens across those bodies returned nothing.",
+      "status": "open",
+      "nextAction": "Delete the historical deployments and the stale branch alias in the Vercel dashboard, so that the only thing this project serves is the page intended to be served. Needs a human: deleting deployments is destructive and is not this repository's call.",
+      "provenance": "declared"
+    },
     {
       "id": "F-011",
       "severity": "high",
@@ -1010,9 +1030,10 @@
       "id": "D-003",
       "title": "Should the hosted dashboard be publicly reachable?",
       "question": "It lists known weaknesses and attack paths for a private repository, so an unauthenticated URL publishes them.",
-      "status": "open",
-      "resolution": "Still open, and the earlier reading of it was wrong. Vercel Authentication is enabled but scoped all_except_custom_domains, and Vercel counts the project's own assigned production domain as a custom domain. A deployment on 2026-08-12 was therefore public at nim-blush.vercel.app for about two minutes, while the deployment-specific URL and nim-seergiiim.vercel.app correctly demanded a login -- see F-011. Deploying again needs the scope changed to cover all deployments first. The build already sends X-Robots-Tag noindex and a strict CSP, and neither of those is access control.",
-      "provenance": "declared"
+      "status": "resolved",
+      "resolution": "Public, deliberately. Sergi turned deployment protection off so the page can be read by anyone. That is a decision about this page only -- it is written to be public, states its own limits, and carries no runtime data, no secrets and no local paths, all of which is enforced at build time rather than promised. It does not extend to anything else the project publishes. Audited end to end after deploying: see F-012 for the one way the deployment is broader than intended.",
+      "provenance": "declared",
+      "decidedOn": "2026-08-12"
     },
     {
       "id": "D-004",
@@ -1020,6 +1041,14 @@
       "question": "Syncing an unkeyed record to a dashboard exports a liability rather than evidence.",
       "status": "open",
       "resolution": "Undecided. Either the journal gains a key the agent cannot reach, or M8 presents the record as 'what this machine reported'.",
+      "provenance": "declared"
+    },
+    {
+      "id": "D-005",
+      "title": "Should the public page be search-indexed?",
+      "question": "Public and indexed are different things. The build still sends X-Robots-Tag: noindex, nofollow, noarchive, nosnippet, so the page is readable by anyone given the link but will not appear in search results.",
+      "status": "open",
+      "resolution": "Left as noindex, which is the reversible direction: a page can be indexed later, but it cannot be reliably un-indexed once crawled and archived. Worth a deliberate answer rather than a default, given the page is a list of this project's weaknesses.",
       "provenance": "declared"
     }
   ],

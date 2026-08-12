@@ -475,6 +475,15 @@ export default function Page() {
               </p>
             </div>
             <div className="card">
+              <h3 style={{ fontSize: "0.92rem", marginBottom: "0.5rem" }}>This page is public on purpose</h3>
+              <p style={{ color: "var(--text-2)", fontSize: 14 }}>
+                Anyone with the link can read it, which is a deliberate choice about <em>this page</em> and nothing
+                else. It is written to be public: no runtime data, no secrets, no local paths — enforced at build time
+                rather than promised, since the build scans both the declared data and every byte it is about to
+                publish. Being public is also why the weaknesses here are stated plainly instead of softened.
+              </p>
+            </div>
+            <div className="card">
               <h3 style={{ fontSize: "0.92rem", marginBottom: "0.5rem" }}>Platform columns are weakly checked</h3>
               <p style={{ color: "var(--text-2)", fontSize: 14 }}>
                 The build refuses a platform marked verified when every cited test is build-tagged away from it. It
