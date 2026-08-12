@@ -23,25 +23,56 @@ would be exactly the second source of truth this is meant to avoid.
 
 The generator exits non-zero, and writes nothing, when:
 
+**Evidence does not exist**
+
 - a guarantee or attack cites a test that is not in the tree
+- a guarantee names an implementation file that does not exist
+
+**A claim outruns its evidence**
+
 - a guarantee claims `verified` with no test at all behind it
 - an attack claims `pass` with no test at all behind it
 - an attack claims `not_tested` while citing tests
-- a guarantee names an implementation file that does not exist
 - a platform is claimed `verified` when every cited test is build-tagged away
   from it
-- a status, severity or cross-reference is not one of the known values
 
-This is not decorative. The first run of the real `state.json` failed with nine
-problems — every one a test name written from memory that did not exist. The
-claims were corrected against the tree; the check was not relaxed.
+**A status is asserted rather than argued**
 
-`scripts/generate.test.mjs` is a mutation-test suite over that behaviour: it
-corrupts a copy of `state.json` in each of the ways above and requires the
-generator to refuse. A check nobody has watched fail has not been shown to work.
+- any status, severity, layer state or CI conclusion that is not a known value —
+  all of them render through one lookup that falls back to neutral grey, so an
+  invented status does not look wrong, it looks calm
+- an attack row with no written assessment, whatever its status. `fail` and
+  `not_applicable` need no test to be legitimate, which made them the cheapest
+  place to park an inconvenient row
+- a finding missing a problem, impact, evidence or way out
+- a milestone marked `done` that still lists outstanding work
+- a decision marked `resolved` with no `decidedOn` date
+- a CI snapshot reporting `success` while listing a failed job
+- an id that appears twice, which would double-count in every total
+
+**Runtime state or a secret tries to get in**
+
+- `runtime.available` is anything but `false`, or `runtime` carries any key
+  beyond its fixed four
+- any string anywhere in `state.json` matching a token shape, a private key
+  block, or an absolute user path
+
+This is not decorative, and it is not theoretical. The first run of the real
+`state.json` failed with nine problems — every one a test name written from
+memory that did not exist. The `done`-with-pending-work rule failed on its first
+run too, catching M2. The claims were corrected; the checks were not relaxed.
+
+`scripts/generate.test.mjs` is a mutation-test suite over all of it: 34 tests
+that corrupt a copy of `state.json` in each of the ways above and require a
+refusal. Most of them exist because the attack worked first — a deliberate
+red-team pass on 2026-08-12 tried sixteen bypasses and fourteen got through.
+A check nobody has watched fail has not been shown to work.
+
 CI runs the whole thing, so renaming or deleting a test breaks the dashboard
 build — which is the point, because otherwise the page would keep showing a
-property as verified after the thing verifying it had gone.
+property as verified after the thing verifying it had gone. CI also refuses to
+go green when a cited test was *skipped* rather than run, via
+`.github/scripts/assert-evidence-ran.sh`.
 
 ## What it deliberately cannot do
 
@@ -52,11 +83,17 @@ hosted page would export the thing it is supposed to protect. The runtime
 section says NOT AVAILABLE and names the local command for each datum instead.
 `nim console` serves that over loopback, which is where it belongs.
 
-**No secrets, by construction rather than by filtering.** The generator reads
+**No secrets, by construction and then by scanning anyway.** The generator reads
 `engine/`, `docs/` and `git log`. It never opens `nim.db`, the socket, or a
 credential store, and a test asserts it does not even name a path into them.
-A second test scans the generated output for home directories, absolute paths
-and the common shapes of a token.
+
+Construction is not enough on its own, because `state.json` is written by hand
+and the page contains prose written straight into `.tsx` files. So it is scanned
+twice: `generate.mjs` walks every string in the declared data, and
+`scan-output.mjs` walks every byte of `out/` after the build — the only artefact
+whose contents are the thing actually served. That second scan is what catches a
+token in a component, in the props Next serialises into the HTML, or in an
+inlined chunk; the data-file scan sees none of those.
 
 **Nothing live.** Every value is baked in at build time and is true of one
 commit, which the page names. The CI block is a snapshot with its own commit and
