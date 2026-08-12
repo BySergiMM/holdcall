@@ -32,9 +32,9 @@
     "provenance": "ci",
     "workflow": "CI",
     "conclusion": "success",
-    "commit": "053e657",
-    "runId": "31512076777",
-    "takenAt": "2026-08-11T18:34:00Z",
+    "commit": "28ef25e",
+    "runId": "31512445562",
+    "takenAt": "2026-08-11T18:58:00Z",
     "jobs": [
       { "name": "test (ubuntu-latest)", "conclusion": "success" },
       { "name": "test (macos-latest)", "conclusion": "success" },
@@ -43,11 +43,7 @@
       { "name": "cross-compile (linux, amd64)", "conclusion": "success" },
       { "name": "cross-compile (linux, arm64)", "conclusion": "success" },
       { "name": "cross-compile (windows, amd64)", "conclusion": "success" },
-      {
-        "name": "cross-compile (darwin, amd64)",
-        "conclusion": "unknown",
-        "note": "The run concluded success, but GitHub's jobs API still reports this one as in_progress with no completion time. Rather than infer success from the run-level result, it is recorded as what the API actually returns. The same job succeeded on the previous run."
-      }
+      { "name": "cross-compile (darwin, amd64)", "conclusion": "success" }
     ]
   },
 
