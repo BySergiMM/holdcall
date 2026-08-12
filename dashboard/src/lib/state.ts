@@ -96,7 +96,7 @@ export const state = raw as unknown as {
       total: number; pass: number; partial: number; fail: number;
       notTested: number; notApplicable: number; liveBefore: number;
     };
-    findings: { total: number; open: number; accepted: number; high: number; medium: number; low: number };
+    findings: { total: number; open: number; accepted: number; fixed: number; high: number; medium: number; low: number };
     decisions: { total: number; open: number };
     milestones: { total: number; done: number; inProgress: number; planned: number; blocked: number };
   };

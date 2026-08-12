@@ -193,6 +193,172 @@ test("a finding with an unknown severity is refused", () => {
   assert.match(r.out, /unknown severity/);
 });
 
+// ---------------------------------------------------------------------------
+// Regressions from the red-team pass of 2026-08-12. Every one of these was a
+// working bypass before the check that now refuses it -- sixteen attempts, of
+// which fourteen got through. They are kept as tests rather than as a note,
+// because the note would not have failed a build.
+// ---------------------------------------------------------------------------
+
+test("a forged milestone status is refused", () => {
+  const r = runWith((s) => {
+    s.milestones[0].status = "totally_done";
+  });
+  assert.equal(r.ok, false, "an invented milestone status rendered as neutral grey");
+  assert.match(r.out, /totally_done/);
+});
+
+// "done" is the status applied optimistically, so the self-contradiction is
+// worth catching: a milestone still listing outstanding work is not done.
+// This one bit on real data the moment it existed -- M2 was marked done while
+// carrying a pending item that was actually M4's work.
+test("a milestone cannot be marked done while listing outstanding work", () => {
+  const r = runWith((s) => {
+    s.milestones.find((m) => m.status === "in_progress").status = "done";
+  });
+  assert.equal(r.ok, false, "in-progress work was relabelled done");
+  assert.match(r.out, /still listing/);
+});
+
+test("a blocked milestone cannot be relabelled done", () => {
+  const r = runWith((s) => {
+    s.milestones.find((m) => m.status === "blocked").status = "done";
+  });
+  assert.equal(r.ok, false);
+  assert.match(r.out, /still listing/);
+});
+
+test("a forged decision status is refused", () => {
+  const r = runWith((s) => {
+    s.decisions[0].status = "handled";
+  });
+  assert.equal(r.ok, false);
+  assert.match(r.out, /handled/);
+});
+
+// Marking a question resolved is otherwise free: flip a word and an open
+// problem leaves the count. A decision that was really taken was taken on a
+// day, so naming the day is the price of claiming it.
+test("an open decision cannot be marked resolved without a date", () => {
+  const r = runWith((s) => {
+    s.decisions.find((d) => d.status === "open").status = "resolved";
+  });
+  assert.equal(r.ok, false, "an open question was silently closed");
+  assert.match(r.out, /decidedOn/);
+});
+
+test("a forged architecture layer state is refused", () => {
+  const r = runWith((s) => {
+    s.architecture.layers[0].state = "bulletproof";
+  });
+  assert.equal(r.ok, false);
+  assert.match(r.out, /bulletproof/);
+});
+
+test("a forged CI job conclusion is refused", () => {
+  const r = runWith((s) => {
+    s.ciSnapshot.jobs[0].conclusion = "definitely_fine";
+  });
+  assert.equal(r.ok, false);
+  assert.match(r.out, /definitely_fine/);
+});
+
+// Transcribing a run by hand is the step where a red job becomes a green one.
+test("a CI snapshot cannot report success while listing a failed job", () => {
+  const r = runWith((s) => {
+    s.ciSnapshot.conclusion = "success";
+    s.ciSnapshot.jobs[0].conclusion = "failure";
+  });
+  assert.equal(r.ok, false, "a failed job was published under a green heading");
+  assert.match(r.out, /listing a failed job/);
+});
+
+// Runtime state is forbidden rather than merely absent. The flag is inert
+// today, which is exactly why it needs the check now -- before someone wires
+// it up and a field called `sessions` starts meaning something.
+test("runtime cannot be declared available", () => {
+  const r = runWith((s) => {
+    s.runtime.available = true;
+  });
+  assert.equal(r.ok, false);
+  assert.match(r.out, /runtime state/);
+});
+
+test("invented runtime data is refused outright", () => {
+  const r = runWith((s) => {
+    s.runtime.sessions = 412;
+    s.runtime.journalEntries = 9981;
+  });
+  assert.equal(r.ok, false, "fabricated runtime numbers were accepted");
+  assert.match(r.out, /runtime\.(sessions|journalEntries)/);
+});
+
+test("a duplicated id is refused", () => {
+  for (const kind of ["attacks", "guarantees", "findings"]) {
+    const r = runWith((s) => {
+      s[kind].push(JSON.parse(JSON.stringify(s[kind][0])));
+    });
+    assert.equal(r.ok, false, `a duplicated ${kind} id inflated the totals`);
+    assert.match(r.out, /appears more than once/);
+  }
+});
+
+// state.json is hand-written, so a secret or a local path can arrive that way
+// even though the generator never reads one.
+test("a secret smuggled into declared prose is refused", () => {
+  for (const value of [
+    "The token is ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA and it leaks",
+    "AKIAIOSFODNN7EXAMPLE was in the log",
+    "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9",
+    "-----BEGIN RSA PRIVATE KEY-----",
+    "NIM_API_KEY=s3cr3tvalue12345",
+  ]) {
+    const r = runWith((s) => {
+      s.findings[0].evidence = value;
+    });
+    assert.equal(r.ok, false, `a secret shape was published: ${value.slice(0, 30)}`);
+    assert.match(r.out, /looks like/);
+  }
+});
+
+test("a local path smuggled into declared prose is refused", () => {
+  for (const value of [
+    "Built from /Users/someone/Documents/GitHub/nim on this machine, which is fine",
+    "The journal lives at /home/someone/.nim/nim.db on that host",
+    "It resolves to C:\\Users\\someone\\nim on windows",
+  ]) {
+    const r = runWith((s) => {
+      s.project.statusNote = value;
+    });
+    assert.equal(r.ok, false, `a local path was published: ${value}`);
+    assert.match(r.out, /path/);
+  }
+});
+
+// Derived facts are computed after the declared ones are spread in, so a
+// state.json key of the same name cannot win. That is load-bearing -- it is
+// what stops the test count and the commit being asserted by hand -- and it
+// is one property-ordering edit away from silently reversing.
+test("state.json cannot override the derived facts", () => {
+  const r = runWith((s) => {
+    s.derived = { testCount: 9999, commit: "deadbee", clean: true, benchmarkCount: 999 };
+  });
+  assert.ok(r.ok, "overriding derived should not fail the build, only be ignored");
+  const out = JSON.parse(readFileSync(join(dashboard, "src", "data", "generated.json"), "utf8"));
+  assert.notEqual(out.derived.testCount, 9999, "a hand-written test count won over the real one");
+  assert.notEqual(out.derived.commit, "deadbee", "a hand-written commit won over the real one");
+});
+
+test("state.json cannot override the computed summary", () => {
+  const r = runWith((s) => {
+    s.summary = { attacks: { fail: 0, total: 40, pass: 40 } };
+  });
+  assert.ok(r.ok);
+  const out = JSON.parse(readFileSync(join(dashboard, "src", "data", "generated.json"), "utf8"));
+  assert.notEqual(out.summary.attacks.fail, 0, "the undefended count was zeroed by hand");
+  assert.equal(out.summary.attacks.fail, out.attacks.filter((a) => a.status === "fail").length);
+});
+
 // Not a validation rule but a property of the output: the resolved test list
 // must not destroy the human-written prose it sits beside.
 test("resolving tests does not overwrite the written assessment", () => {

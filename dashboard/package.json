@@ -6,10 +6,11 @@
     "generate": "node scripts/generate.mjs",
     "check": "npm run generate && npm run test && npx tsc --noEmit",
     "dev": "npm run generate && next dev",
-    "build": "npm run generate && next build",
+    "build": "npm run generate && next build && node scripts/scan-output.mjs",
     "start": "next start",
     "lint": "next lint",
-    "test": "node --test scripts/generate.test.mjs"
+    "test": "node --test scripts/generate.test.mjs",
+    "scan": "node scripts/scan-output.mjs"
   },
   "dependencies": {
     "next": "15.5.4",

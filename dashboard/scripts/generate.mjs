@@ -130,6 +130,52 @@ const state = JSON.parse(readFileSync(join(dashboard, "data", "state.json"), "ut
 
 const STATUS = ["verified", "partial", "unverified", "not_tested", "unsupported"];
 const ATTACK_STATUS = ["pass", "partial", "fail", "not_tested", "not_applicable"];
+const MILESTONE_STATUS = ["done", "in_progress", "planned", "blocked"];
+const DECISION_STATUS = ["open", "resolved"];
+const LAYER_STATE = ["implemented", "partial", "planned", "absent"];
+const CI_CONCLUSION = ["success", "failure", "cancelled", "skipped", "unknown"];
+
+// Anything not on a known list renders through tone(), which falls back to a
+// neutral grey -- so an invented status word does not look wrong, it looks
+// calm. Every enum on the page is therefore checked by name.
+const enumCheck = (value, allowed, where) => {
+  if (!allowed.includes(value)) {
+    fail(`${where}: "${value}" is not one of ${allowed.join(", ")}`);
+  }
+};
+
+// ---------------------------------------------------------------- no secrets
+//
+// The page is public-by-construction only because nothing private is ever put
+// in it. That holds for what the generator READS -- it never opens the
+// journal, a socket or a credential store -- but state.json is written by
+// hand, so a secret or a local path can arrive that way. Every string in it
+// is walked here rather than trusted, and the build fails rather than
+// publishing one.
+
+const SENSITIVE = [
+  ["a GitHub token", /gh[pousr]_[A-Za-z0-9]{16,}/],
+  ["an AWS key id", /AKIA[0-9A-Z]{16}/],
+  ["a Slack token", /xox[abprs]-[A-Za-z0-9-]{10,}/],
+  ["a private key block", /-----BEGIN [A-Z ]*PRIVATE KEY-----/],
+  ["a bearer token", /bearer\s+[A-Za-z0-9._-]{20,}/i],
+  ["an assignment that looks like a secret", /(SECRET|TOKEN|PASSWORD|API_?KEY|PRIVATE_?KEY)\s*[=:]\s*["']?[A-Za-z0-9._\-/+]{12,}/],
+  ["an absolute macOS user path", /\/Users\/[A-Za-z0-9._-]+\//],
+  ["an absolute Linux user path", /\/home\/[A-Za-z0-9._-]+\//],
+  ["a Windows user path", /[A-Z]:\\Users\\[A-Za-z0-9._-]+/],
+];
+
+function scanStrings(node, path = "state") {
+  if (typeof node === "string") {
+    for (const [what, re] of SENSITIVE) {
+      if (re.test(node)) fail(`${path}: contains what looks like ${what}`);
+    }
+  } else if (Array.isArray(node)) {
+    node.forEach((v, i) => scanStrings(v, `${path}[${i}]`));
+  } else if (node && typeof node === "object") {
+    for (const [k, v] of Object.entries(node)) scanStrings(v, `${path}.${k}`);
+  }
+}
 
 // Where a test lives, or null if it does not exist. Returning null is what
 // turns an unsubstantiated claim into a build failure.
@@ -223,15 +269,87 @@ for (const f of state.findings) {
 // Cross-links have to resolve, or a milestone page shows an empty guarantee.
 const guaranteeIds = new Set(state.guarantees.map((g) => g.id));
 for (const m of state.milestones) {
+  enumCheck(m.status, MILESTONE_STATUS, `milestone ${m.id}`);
   for (const id of m.guarantees ?? []) {
     if (!guaranteeIds.has(id)) fail(`milestone ${m.id}: references unknown guarantee "${id}"`);
   }
+  // The one self-contradiction worth catching mechanically: "done" is the
+  // status that gets applied optimistically, and a milestone that still lists
+  // outstanding work is not done regardless of what the field says.
+  if (m.status === "done" && (m.pending ?? []).length > 0) {
+    fail(`milestone ${m.id}: marked done while still listing ${m.pending.length} outstanding item(s)`);
+  }
 }
 for (const layer of state.architecture.layers) {
+  enumCheck(layer.state, LAYER_STATE, `architecture layer "${layer.name}"`);
   for (const id of layer.guarantees ?? []) {
     if (!guaranteeIds.has(id)) fail(`architecture layer "${layer.name}": unknown guarantee "${id}"`);
   }
 }
+for (const d of state.decisions) {
+  enumCheck(d.status, DECISION_STATUS, `decision ${d.id}`);
+  for (const field of ["question", "resolution"]) {
+    if (typeof d[field] !== "string" || d[field].trim().length < 20) {
+      fail(`decision ${d.id}: "${field}" is empty or too thin to mean anything`);
+    }
+  }
+  // Marking a question resolved is otherwise free -- flip a word and an open
+  // problem disappears from the count. A decision that was actually taken was
+  // taken on a day, so saying when is the cost of claiming it.
+  if (d.status === "resolved" && !/^\d{4}-\d{2}-\d{2}$/.test(d.decidedOn ?? "")) {
+    fail(`decision ${d.id}: marked resolved without a decidedOn date (YYYY-MM-DD)`);
+  }
+  if (d.status === "open" && d.decidedOn) {
+    fail(`decision ${d.id}: still open but carries a decidedOn date`);
+  }
+}
+
+// An id appearing twice double-counts in the summary and collides as a render
+// key, so a row can be duplicated to inflate a total or shadow another.
+for (const [kind, rows] of [
+  ["guarantee", state.guarantees],
+  ["attack", state.attacks],
+  ["finding", state.findings],
+  ["decision", state.decisions],
+  ["milestone", state.milestones],
+]) {
+  const seen = new Set();
+  for (const row of rows) {
+    if (seen.has(row.id)) fail(`${kind} "${row.id}": id appears more than once`);
+    seen.add(row.id);
+  }
+}
+
+// Runtime state is not merely absent, it is forbidden. The page renders a
+// fixed NOT AVAILABLE panel today, so flipping this flag changes nothing --
+// which is exactly why it needs a check now, before someone wires the flag up
+// and a field called `sessions` starts meaning something.
+{
+  const allowed = new Set(["$comment", "available", "reason", "provenance"]);
+  if (state.runtime.available !== false) {
+    fail(`runtime.available is ${JSON.stringify(state.runtime.available)}; this page can never see runtime state`);
+  }
+  for (const k of Object.keys(state.runtime)) {
+    if (!allowed.has(k)) {
+      fail(`runtime.${k}: runtime data must not appear here at all, not even as a placeholder`);
+    }
+  }
+}
+
+// A CI snapshot is transcribed by hand from a run, which is the step where a
+// red job becomes a green one.
+enumCheck(ciSnapshotConclusion(), CI_CONCLUSION, "ciSnapshot.conclusion");
+function ciSnapshotConclusion() {
+  return state.ciSnapshot.conclusion;
+}
+for (const j of state.ciSnapshot.jobs) {
+  enumCheck(j.conclusion, CI_CONCLUSION, `ciSnapshot job "${j.name}"`);
+}
+if (state.ciSnapshot.conclusion === "success" && state.ciSnapshot.jobs.some((j) => j.conclusion === "failure")) {
+  fail("ciSnapshot: reported success while listing a failed job");
+}
+
+scanStrings(state);
 
 // A CI snapshot describing a different commit is stale, and the page has to
 // know so it can label it rather than implying the current tree is green.
@@ -260,6 +378,7 @@ const summary = {
     total: state.findings.length,
     open: count(state.findings, (f) => f.status === "open"),
     accepted: count(state.findings, (f) => f.status === "accepted"),
+    fixed: count(state.findings, (f) => f.status === "fixed"),
     high: count(state.findings, (f) => f.severity === "high"),
     medium: count(state.findings, (f) => f.severity === "medium"),
     low: count(state.findings, (f) => f.severity === "low"),

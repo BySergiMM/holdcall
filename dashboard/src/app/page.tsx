@@ -92,7 +92,7 @@ export default function Page() {
             <Stat
               k="Open findings"
               v={summary.findings.open}
-              sub={`${summary.findings.accepted} accepted · ${summary.findings.high} high severity`}
+              sub={`${summary.findings.accepted} accepted · ${summary.findings.fixed} fixed · ${summary.findings.high} high severity`}
             />
             <Stat k="Unresolved questions" v={summary.decisions.open} sub="decisions that block later work" />
           </div>
@@ -225,8 +225,14 @@ export default function Page() {
         <Section
           id="findings"
           title="Findings"
-          count={`${summary.findings.open} open · ${summary.findings.accepted} accepted`}
-          lede="Known weaknesses. Accepted means understood and deliberately not fixed yet — not fixed."
+          count={`${summary.findings.open} open · ${summary.findings.accepted} accepted · ${summary.findings.fixed} fixed`}
+          lede={
+            <>
+              Known weaknesses. <strong>Accepted</strong> means understood and deliberately not fixed yet — it does not
+              mean fixed. <strong>Fixed</strong> ones stay on the page rather than being deleted, because a finding that
+              vanishes teaches nobody what went wrong.
+            </>
+          }
         >
           {state.findings.map((f) => (
             <details key={f.id} className={`item sev-${tone(f.severity)}`}>

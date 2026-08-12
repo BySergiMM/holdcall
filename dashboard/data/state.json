@@ -315,7 +315,7 @@
     { "id": "compromised-same-user", "name": "A same-user process that already ran code", "category": "identity", "status": "fail", "wasLive": true, "evidence": "This is the threat model's adversary and it is only partly contained. It can run the nim binary, enrol agents, overwrite connectors, and open its own sessions. What it cannot do is read another connector's credential or forge entries without running Nim.", "tests": [] },
     { "id": "symlink-manipulation", "name": "Manipulate symlinks and paths", "category": "identity", "status": "pass", "wasLive": true, "evidence": "The path-swap test builds the attack out of symlinks: it launches a peer through a symlink it controls, then re-points that symlink at Nim's own binary so the launch path names Nim while the running process is genuinely something else. Identity comes from the kernel's view of the running image, so the swap changes nothing.", "tests": ["TestAPathSwapDoesNotDefeatPeerIdentity"] },
     { "id": "environment-leakage", "name": "Read a credential from the connector's environment", "category": "credential", "status": "fail", "wasLive": false, "evidence": "By design the connector receives the secret in its environment, and it inherits the relay's whole environment. On Linux any same-user process can read /proc/<pid>/environ. Closing it needs Nim to hold the credential and proxy the request.", "tests": [] },
-    { "id": "dashboard-deception", "name": "Make this dashboard state something untrue", "category": "meta", "status": "partial", "wasLive": false, "evidence": "The generator refuses to build if a guarantee or attack cites a test that does not exist, or a file that is not in the repo. It cannot detect a wrong summary written next to a real test name.", "tests": [] }
+    { "id": "dashboard-deception", "name": "Make this dashboard state something untrue", "category": "meta", "status": "partial", "wasLive": false, "evidence": "Red-teamed deliberately on 2026-08-12 with sixteen attempts: forged statuses, relabelled milestones, closed decisions, duplicated ids, invented runtime data, secrets and local paths in prose, overridden test counts. Fourteen got through and are now refused, each with a regression test; the two that appeared to work never had — derived facts are computed after the declared ones are spread in, so a hand-written count cannot win. The build also scans every byte of the published output, not just the data file. What remains undetectable is a wrong summary written next to a real test name, and a platform column resting on a test that compiles there without proving anything.", "tests": [] }
   ],
 
   "findings": [
@@ -413,20 +413,20 @@
       "title": "CI does not run go vet for Windows",
       "problem": "Cross-compile jobs run go build only, so test files that break on Windows are not caught.",
       "impact": "A portability break in test code reaches main. This happened once already.",
-      "evidence": "Found by running GOOS=windows go vet locally during M4 step 2.",
-      "status": "open",
-      "nextAction": "Add GOOS=windows go vet ./... to the cross-compile job.",
+      "evidence": "Found by running GOOS=windows go vet locally during M4 step 2. Fixed: every cross-compile job now runs go vet as well as go build. Confirmed in CI run 31576458402 — the windows/amd64 job shows a `Vet windows/amd64 :: success` step with GOOS=windows in its environment, and all three platforms are clean.",
+      "status": "fixed",
+      "nextAction": "None. Kept on the page because a fixed finding is how the next person learns that go build alone never sees a _test.go file.",
       "provenance": "declared"
     },
     {
       "id": "F-010",
-      "severity": "low",
-      "title": "CI cannot show whether the path-swap test ran or skipped",
-      "problem": "CI does not pass -v, so a skipped adversarial test is indistinguishable from a passing one in the log.",
-      "impact": "The single test proving the peer-identity property could silently stop running.",
-      "evidence": "The ubuntu log shows only 'ok internal/peer'.",
-      "status": "open",
-      "nextAction": "Add -v to the CI test step, or promote the connect-timeout skip to a failure.",
+      "severity": "medium",
+      "title": "A skipped adversarial test was indistinguishable from a passing one",
+      "problem": "CI did not pass -v, so a package whose adversarial tests all skipped printed the same 'ok' as one where they all passed. Looked at properly the exposure was wider than the path-swap test: there are fourteen t.Skip call sites and they guard the load-bearing ones — the impostor and non-Nim-process tests skip without python3, the agent derivation test skips if it cannot read its own parent.",
+      "impact": "The dashboard could go on calling a property verified while nothing had checked it for weeks.",
+      "evidence": "Fixed in two parts: CI now runs go test -race -v with pipefail, and assert-evidence-ran.sh fails the build if any test cited for a verified guarantee or a defended attack was skipped rather than run. Confirmed in CI run 31576458402 — ubuntu reports 57 cited tests ran with 1 build-tagged out and 0 skipped, macOS reports 58 ran and 0 skipped. The refusal itself was mutation-tested: rewriting one PASS line to SKIP in a real log makes the script exit 1 naming that test.",
+      "status": "fixed",
+      "nextAction": "None. The check is the standing guard — absent is still allowed because a darwin-only test genuinely does not exist on linux, but skipped is not, because skipped is the state that looks like success.",
       "provenance": "declared"
     }
   ],
@@ -437,6 +437,7 @@
       "title": "What granularity is an 'agent'?",
       "question": "Client program (kernel-backed, coarse) or workspace/instance (finer, forgeable by the same user)?",
       "status": "resolved",
+      "decidedOn": "2026-08-11",
       "resolution": "Client program. Kernel-backed and honest; two windows of one program are the same agent.",
       "provenance": "declared"
     },
@@ -488,8 +489,8 @@
       "objective": "Refuse a tools/call before it reaches a connector.",
       "deliverables": ["synchronous decide path", "fail-closed on every path", "deny list", "batch refusal"],
       "guarantees": ["enforcement-fail-closed"],
-      "limitations": ["Policy is a list of exact tool names in config.toml."],
-      "pending": ["Move policy into SQLite (M4)."]
+      "limitations": ["Policy is a list of exact tool names in config.toml, which is F-004 and is M4's work rather than unfinished M2 work."],
+      "pending": []
     },
     {
       "id": "M2.5", "name": "Daemon lifetime and socket identity", "status": "done",
