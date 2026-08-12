@@ -7,3 +7,5 @@ next-env.d.ts
 # not to be.
 src/data/generated.json
 tsconfig.tsbuildinfo
+.vercel
+.env*

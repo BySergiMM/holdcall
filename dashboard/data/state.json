@@ -16,7 +16,6 @@
     "  ci       - snapshot of a CI run, carries its own timestamp",
     "  runtime  - only knowable on a host running Nim; never available here"
   ],
-
   "project": {
     "name": "Nim",
     "tagline": "A local process between an MCP client and the MCP servers it uses.",
@@ -26,7 +25,6 @@
     "statusNote": "Nim decides, blocks and records. It has no policy model beyond a list of tool names, and agent identity is recorded but not yet acted on.",
     "provenance": "declared"
   },
-
   "ciSnapshot": {
     "$comment": "Snapshot, not live. Staleness is computed against the commit being built.",
     "provenance": "ci",
@@ -36,24 +34,46 @@
     "runId": "31512445562",
     "takenAt": "2026-08-11T18:58:00Z",
     "jobs": [
-      { "name": "test (ubuntu-latest)", "conclusion": "success" },
-      { "name": "test (macos-latest)", "conclusion": "success" },
-      { "name": "dashboard", "conclusion": "success" },
-      { "name": "cross-compile (darwin, arm64)", "conclusion": "success" },
-      { "name": "cross-compile (linux, amd64)", "conclusion": "success" },
-      { "name": "cross-compile (linux, arm64)", "conclusion": "success" },
-      { "name": "cross-compile (windows, amd64)", "conclusion": "success" },
-      { "name": "cross-compile (darwin, amd64)", "conclusion": "success" }
+      {
+        "name": "test (ubuntu-latest)",
+        "conclusion": "success"
+      },
+      {
+        "name": "test (macos-latest)",
+        "conclusion": "success"
+      },
+      {
+        "name": "dashboard",
+        "conclusion": "success"
+      },
+      {
+        "name": "cross-compile (darwin, arm64)",
+        "conclusion": "success"
+      },
+      {
+        "name": "cross-compile (linux, amd64)",
+        "conclusion": "success"
+      },
+      {
+        "name": "cross-compile (linux, arm64)",
+        "conclusion": "success"
+      },
+      {
+        "name": "cross-compile (windows, amd64)",
+        "conclusion": "success"
+      },
+      {
+        "name": "cross-compile (darwin, amd64)",
+        "conclusion": "success"
+      }
     ]
   },
-
   "runtime": {
     "$comment": "Deliberately empty. See the note rendered on the Overview.",
     "available": false,
     "reason": "Nim is local-first. The journal, enrolled agents, connectors and the daemon all live on the machine running Nim. A hosted page cannot see them, and shipping them to one would break the sync contract in docs/milestones.md. `nim console` serves that state over loopback, which is where it belongs.",
     "provenance": "runtime"
   },
-
   "architecture": {
     "provenance": "declared",
     "nodes": [
@@ -93,31 +113,45 @@
         "name": "Agent identity",
         "state": "partial",
         "detail": "Enrolled and derived from the kernel, recorded on session.start. Nothing decides on it yet.",
-        "guarantees": ["agent-not-claimable"]
+        "guarantees": [
+          "agent-not-claimable"
+        ]
       },
       {
         "name": "Policy",
         "state": "partial",
         "detail": "A deny list of exact tool names, read from config.toml. Not per-agent, and anything able to write that file can empty it.",
-        "guarantees": ["enforcement-fail-closed"]
+        "guarantees": [
+          "enforcement-fail-closed"
+        ]
       },
       {
         "name": "Credential access",
         "state": "implemented",
         "detail": "Secrets in the OS store, released only for the connector's registered command.",
-        "guarantees": ["credential-command-binding", "credential-never-in-argv"]
+        "guarantees": [
+          "credential-command-binding",
+          "credential-never-in-argv"
+        ]
       },
       {
         "name": "Peer verification",
         "state": "implemented",
         "detail": "Both ends of the socket verify each other by kernel-resolved executable identity. Unsupported on Windows.",
-        "guarantees": ["peer-identity-both-ways", "peer-resists-path-swap"]
+        "guarantees": [
+          "peer-identity-both-ways",
+          "peer-resists-path-swap"
+        ]
       },
       {
         "name": "Journal",
         "state": "implemented",
         "detail": "Append-only and hash-chained. Integrity, not authenticity — the chain is unkeyed.",
-        "guarantees": ["journal-append-only", "journal-detects-alteration", "journal-expect-head"]
+        "guarantees": [
+          "journal-append-only",
+          "journal-detects-alteration",
+          "journal-expect-head"
+        ]
       },
       {
         "name": "SQLite",
@@ -127,7 +161,6 @@
       }
     ]
   },
-
   "guarantees": [
     {
       "id": "peer-identity-both-ways",
@@ -135,9 +168,22 @@
       "status": "verified",
       "statement": "A process that is not this binary cannot speak on the daemon socket, in either direction. The daemon checks its callers and the relay checks whatever is listening before sending a byte.",
       "notGuaranteed": "It answers \"is this Nim\", not \"is this a relay the operator meant to run\". Anything able to execute the binary passes it.",
-      "implementation": ["engine/internal/peer/peer.go", "engine/internal/daemon/daemon.go", "engine/internal/shim/shim.go"],
-      "tests": ["TestANonNimProcessCannotWriteToTheJournal", "TestANonNimProcessCannotObtainADecision", "TestAnImpostorOnTheSocketCannotChooseWhatIsSpawned", "TestAnImpostorLearnsNothingFromTheAttempt"],
-      "platforms": { "darwin": "verified", "linux": "verified", "windows": "unsupported" },
+      "implementation": [
+        "engine/internal/peer/peer.go",
+        "engine/internal/daemon/daemon.go",
+        "engine/internal/shim/shim.go"
+      ],
+      "tests": [
+        "TestANonNimProcessCannotWriteToTheJournal",
+        "TestANonNimProcessCannotObtainADecision",
+        "TestAnImpostorOnTheSocketCannotChooseWhatIsSpawned",
+        "TestAnImpostorLearnsNothingFromTheAttempt"
+      ],
+      "platforms": {
+        "darwin": "verified",
+        "linux": "verified",
+        "windows": "unsupported"
+      },
       "lastVerified": "2026-08-11",
       "provenance": "declared"
     },
@@ -147,9 +193,21 @@
       "status": "verified",
       "statement": "Identity comes from the kernel's view of what a process is executing: /proc/<pid>/exe on linux, the vnode behind the process's own mapping on darwin. Replacing the file at a peer's launch path does not defeat it.",
       "notGuaranteed": "It is not code-signing identity. A rebuild is a different inode and therefore a different program. Not implemented on Windows at all.",
-      "implementation": ["engine/internal/peer/image_linux.go", "engine/internal/peer/image_darwin.go", "engine/internal/peer/image.go"],
-      "tests": ["TestAPathSwapDoesNotDefeatPeerIdentity", "TestImageOfSelfMatchesOurOwnBinary", "TestImageOfAForeignProcessDiffersFromOurs"],
-      "platforms": { "darwin": "verified", "linux": "verified", "windows": "unsupported" },
+      "implementation": [
+        "engine/internal/peer/image_linux.go",
+        "engine/internal/peer/image_darwin.go",
+        "engine/internal/peer/image.go"
+      ],
+      "tests": [
+        "TestAPathSwapDoesNotDefeatPeerIdentity",
+        "TestImageOfSelfMatchesOurOwnBinary",
+        "TestImageOfAForeignProcessDiffersFromOurs"
+      ],
+      "platforms": {
+        "darwin": "verified",
+        "linux": "verified",
+        "windows": "unsupported"
+      },
       "lastVerified": "2026-08-11",
       "provenance": "declared"
     },
@@ -159,9 +217,21 @@
       "status": "verified",
       "statement": "A connector names the one server its secret may reach. The daemon returns that command; the relay spawns it. A caller naming another connector gets that connector's real server, which is not a way to read anything.",
       "notGuaranteed": "The registered argv is spawned through normal PATH resolution, so a caller that already controls PATH can front-run the binary name.",
-      "implementation": ["engine/internal/daemon/request.go", "engine/internal/shim/shim.go"],
-      "tests": ["TestACallerCannotNominateWhatReceivesACredential", "TestTheDaemonsCommandIsSpawnedNotTheCallersEndToEnd", "TestAConnectorWithNoRegisteredCommandReleasesNothing", "TestACredentialWithNoCommandIsRefused"],
-      "platforms": { "darwin": "verified", "linux": "verified", "windows": "partial" },
+      "implementation": [
+        "engine/internal/daemon/request.go",
+        "engine/internal/shim/shim.go"
+      ],
+      "tests": [
+        "TestACallerCannotNominateWhatReceivesACredential",
+        "TestTheDaemonsCommandIsSpawnedNotTheCallersEndToEnd",
+        "TestAConnectorWithNoRegisteredCommandReleasesNothing",
+        "TestACredentialWithNoCommandIsRefused"
+      ],
+      "platforms": {
+        "darwin": "verified",
+        "linux": "verified",
+        "windows": "partial"
+      },
       "lastVerified": "2026-08-11",
       "provenance": "declared"
     },
@@ -171,9 +241,21 @@
       "status": "verified",
       "statement": "Secrets are read from stdin or a no-echo prompt, stored in the OS credential store, and reach a connector only through its environment.",
       "notGuaranteed": "The connector receives the secret in its environment and can do what it likes with it. On Linux any same-user process can read /proc/<pid>/environ.",
-      "implementation": ["engine/cmd/nim/connector.go", "engine/internal/credential/credential.go"],
-      "tests": ["TestSetNeverPutsTheSecretInArgv", "TestRequestStringNeverIncludesTheSecret", "TestResponseStringNeverIncludesEnvValues", "TestParseConnectorSetArgsRejectsAValueInTheEnvFlag"],
-      "platforms": { "darwin": "verified", "linux": "partial", "windows": "unverified" },
+      "implementation": [
+        "engine/cmd/nim/connector.go",
+        "engine/internal/credential/credential.go"
+      ],
+      "tests": [
+        "TestSetNeverPutsTheSecretInArgv",
+        "TestRequestStringNeverIncludesTheSecret",
+        "TestResponseStringNeverIncludesEnvValues",
+        "TestParseConnectorSetArgsRejectsAValueInTheEnvFlag"
+      ],
+      "platforms": {
+        "darwin": "verified",
+        "linux": "partial",
+        "windows": "unverified"
+      },
       "lastVerified": "2026-08-11",
       "provenance": "declared"
     },
@@ -183,9 +265,22 @@
       "status": "verified",
       "statement": "No daemon, a slow daemon, a closed socket, a reply that does not match the question, or a journal write that failed — each denies. There is no path on which a tools/call reaches a connector without a decision behind it.",
       "notGuaranteed": "It protects calls that go through Nim. Nothing stops a client being reconfigured to spawn the MCP server directly.",
-      "implementation": ["engine/internal/shim/shim.go", "engine/internal/daemon/daemon.go"],
-      "tests": ["TestWithNoDaemonEverythingIsRefused", "TestATimeoutRefusesAndTheNextCallDoesNotWait", "TestAnythingButAValidDecisionIsARefusal", "TestAClosedSocketDuringADecisionIsARefusal", "TestAnUnwritableJournalRefuses"],
-      "platforms": { "darwin": "verified", "linux": "verified", "windows": "verified" },
+      "implementation": [
+        "engine/internal/shim/shim.go",
+        "engine/internal/daemon/daemon.go"
+      ],
+      "tests": [
+        "TestWithNoDaemonEverythingIsRefused",
+        "TestATimeoutRefusesAndTheNextCallDoesNotWait",
+        "TestAnythingButAValidDecisionIsARefusal",
+        "TestAClosedSocketDuringADecisionIsARefusal",
+        "TestAnUnwritableJournalRefuses"
+      ],
+      "platforms": {
+        "darwin": "verified",
+        "linux": "verified",
+        "windows": "verified"
+      },
       "lastVerified": "2026-08-11",
       "provenance": "declared"
     },
@@ -195,9 +290,18 @@
       "status": "verified",
       "statement": "A call produces two immutable entries rather than one row that is updated. Nothing in the write path updates an entry.",
       "notGuaranteed": "Append-only as far as this code is concerned. Nothing stops another process opening the file and writing to it.",
-      "implementation": ["engine/internal/journal/journal.go"],
-      "tests": ["TestReportsBecomeAppendOnlyEntries", "TestEnrolmentAppendsNothingToTheChain"],
-      "platforms": { "darwin": "verified", "linux": "verified", "windows": "verified" },
+      "implementation": [
+        "engine/internal/journal/journal.go"
+      ],
+      "tests": [
+        "TestReportsBecomeAppendOnlyEntries",
+        "TestEnrolmentAppendsNothingToTheChain"
+      ],
+      "platforms": {
+        "darwin": "verified",
+        "linux": "verified",
+        "windows": "verified"
+      },
       "lastVerified": "2026-08-11",
       "provenance": "declared"
     },
@@ -207,9 +311,19 @@
       "status": "verified",
       "statement": "Each entry's hash covers its contents and its position, so an edit made by anything that does not recompute the chain is detected by nim verify.",
       "notGuaranteed": "INTEGRITY, NOT AUTHENTICITY. The chain is unkeyed. Anyone who can write to nim.db can recompute every hash from the genesis and the result verifies cleanly.",
-      "implementation": ["engine/internal/journal/verify.go", "engine/internal/journal/canonical.go"],
-      "tests": ["TestAlteringTheAgentBreaksTheChain", "TestExpectHeadDoesNotExcuseAnAlteredEarlierEntry"],
-      "platforms": { "darwin": "verified", "linux": "verified", "windows": "verified" },
+      "implementation": [
+        "engine/internal/journal/verify.go",
+        "engine/internal/journal/canonical.go"
+      ],
+      "tests": [
+        "TestAlteringTheAgentBreaksTheChain",
+        "TestExpectHeadDoesNotExcuseAnAlteredEarlierEntry"
+      ],
+      "platforms": {
+        "darwin": "verified",
+        "linux": "verified",
+        "windows": "verified"
+      },
       "lastVerified": "2026-08-11",
       "provenance": "declared"
     },
@@ -219,9 +333,20 @@
       "status": "verified",
       "statement": "nim verify --expect-head looks for the recorded head IN the chain. Finding it establishes that nothing at or before it was rewritten; not finding it anywhere is what distinguishes a rewrite from ordinary growth.",
       "notGuaranteed": "Only covers what was committed before the head you recorded, and only if you recorded one somewhere Nim cannot reach.",
-      "implementation": ["engine/internal/journal/verify.go"],
-      "tests": ["TestExpectHeadStillCatchesTruncateAndRecompute", "TestExpectHeadOnAGrownJournalIsNotAnAccusation", "TestExpectHeadThatWasNeverInTheChainFails", "TestExpectHeadAgainstAnEmptyJournalFails"],
-      "platforms": { "darwin": "verified", "linux": "verified", "windows": "verified" },
+      "implementation": [
+        "engine/internal/journal/verify.go"
+      ],
+      "tests": [
+        "TestExpectHeadStillCatchesTruncateAndRecompute",
+        "TestExpectHeadOnAGrownJournalIsNotAnAccusation",
+        "TestExpectHeadThatWasNeverInTheChainFails",
+        "TestExpectHeadAgainstAnEmptyJournalFails"
+      ],
+      "platforms": {
+        "darwin": "verified",
+        "linux": "verified",
+        "windows": "verified"
+      },
       "lastVerified": "2026-08-11",
       "provenance": "declared"
     },
@@ -231,9 +356,21 @@
       "status": "verified",
       "statement": "Verification dispatches on the version each entry stored, so entries written before agent existed keep verifying and a mixed chain checks out end to end.",
       "notGuaranteed": "An entry claiming a version this build does not know is refused rather than checked. That is intended, but it means a downgrade cannot read a newer journal.",
-      "implementation": ["engine/internal/journal/canonical.go", "engine/internal/journal/verify.go"],
-      "tests": ["TestAV1EntryStillVerifiesAfterV2Exists", "TestAChainSpanningBothVersionsVerifies", "TestAnUnknownSchemaVersionIsRefused", "TestTheTwoEncodingsAreDistinct"],
-      "platforms": { "darwin": "verified", "linux": "verified", "windows": "verified" },
+      "implementation": [
+        "engine/internal/journal/canonical.go",
+        "engine/internal/journal/verify.go"
+      ],
+      "tests": [
+        "TestAV1EntryStillVerifiesAfterV2Exists",
+        "TestAChainSpanningBothVersionsVerifies",
+        "TestAnUnknownSchemaVersionIsRefused",
+        "TestTheTwoEncodingsAreDistinct"
+      ],
+      "platforms": {
+        "darwin": "verified",
+        "linux": "verified",
+        "windows": "verified"
+      },
       "lastVerified": "2026-08-11",
       "provenance": "declared"
     },
@@ -243,9 +380,21 @@
       "status": "verified",
       "statement": "The daemon derives the agent from the kernel: socket peer, its parent, the file that parent executes. There is no agent field on the wire.",
       "notGuaranteed": "Nothing decides on it yet. Two windows of one program are the same agent. Enrolment is as privileged as running Nim.",
-      "implementation": ["engine/internal/daemon/derive.go", "engine/internal/daemon/agent.go"],
-      "tests": ["TestNoWireFieldCanSetTheAgent", "TestTheClientLabelIsNotTheAgent", "TestDeriveAgentMatchesTheEnrolledParent", "TestTheDerivedAgentIsRecordedOnSessionStart"],
-      "platforms": { "darwin": "verified", "linux": "verified", "windows": "unsupported" },
+      "implementation": [
+        "engine/internal/daemon/derive.go",
+        "engine/internal/daemon/agent.go"
+      ],
+      "tests": [
+        "TestNoWireFieldCanSetTheAgent",
+        "TestTheClientLabelIsNotTheAgent",
+        "TestDeriveAgentMatchesTheEnrolledParent",
+        "TestTheDerivedAgentIsRecordedOnSessionStart"
+      ],
+      "platforms": {
+        "darwin": "verified",
+        "linux": "verified",
+        "windows": "unsupported"
+      },
       "lastVerified": "2026-08-11",
       "provenance": "declared"
     },
@@ -255,9 +404,18 @@
       "status": "verified",
       "statement": "Peer identity cannot tell one run of Nim from another; session ownership stops one connection appending entries under a session another opened.",
       "notGuaranteed": "Anything running this binary can still open its own session and report whatever it likes about it.",
-      "implementation": ["engine/internal/daemon/daemon.go"],
-      "tests": ["TestAConnectionCannotSpeakForAnotherConnectionsSession", "TestAConnectionsOwnSessionIsServed"],
-      "platforms": { "darwin": "verified", "linux": "verified", "windows": "verified" },
+      "implementation": [
+        "engine/internal/daemon/daemon.go"
+      ],
+      "tests": [
+        "TestAConnectionCannotSpeakForAnotherConnectionsSession",
+        "TestAConnectionsOwnSessionIsServed"
+      ],
+      "platforms": {
+        "darwin": "verified",
+        "linux": "verified",
+        "windows": "verified"
+      },
       "lastVerified": "2026-08-11",
       "provenance": "declared"
     },
@@ -267,58 +425,458 @@
       "status": "partial",
       "statement": "Everything that is not a tools/call is forwarded as the exact bytes that arrived. Unit tests cover the framing and the relay.",
       "notGuaranteed": "The end-to-end proof is tools/relay-rig, which needs fastmcp and HAS NOT BEEN RE-RUN since the M1.5 merge. The claim currently rests on unit tests plus an older run.",
-      "implementation": ["engine/internal/mcp/mcp.go", "engine/internal/shim/shim.go"],
-      "tests": ["TestResponsesAreRelayedByteForByte", "TestAnAllowedCallReachesTheConnectorByteForByte"],
-      "platforms": { "darwin": "partial", "linux": "partial", "windows": "unverified" },
+      "implementation": [
+        "engine/internal/mcp/mcp.go",
+        "engine/internal/shim/shim.go"
+      ],
+      "tests": [
+        "TestResponsesAreRelayedByteForByte",
+        "TestAnAllowedCallReachesTheConnectorByteForByte"
+      ],
+      "platforms": {
+        "darwin": "partial",
+        "linux": "partial",
+        "windows": "unverified"
+      },
       "lastVerified": "2026-08-08",
       "provenance": "declared"
     }
   ],
-
   "attacks": [
-    { "id": "credential-via-chosen-command", "name": "Name a connector, supply your own command, read the credential", "category": "credential", "status": "pass", "wasLive": true, "evidence": "Reproduced live against a real build; the token printed. Fixed by the connector command binding.", "tests": ["TestACallerCannotNominateWhatReceivesACredential", "TestTheDaemonsCommandIsSpawnedNotTheCallersEndToEnd"] },
-    { "id": "credential-from-non-nim", "name": "Ask for a credential from a process that is not Nim", "category": "credential", "status": "pass", "wasLive": false, "evidence": "A raw socket client that speaks the protocol correctly is still refused: the daemon verifies the peer's running image at accept, before it reads a single request byte. Denial does not depend on the request being malformed.", "tests": ["TestANonNimProcessCannotObtainADecision"] },
-    { "id": "journal-forgery", "name": "Write forged entries to the journal from a non-Nim process", "category": "journal", "status": "pass", "wasLive": true, "evidence": "A python socket client wrote a fabricated session and an allowed delete_repository call. Fixed by authorizing the event path.", "tests": ["TestANonNimProcessCannotWriteToTheJournal"] },
-    { "id": "decision-from-non-nim", "name": "Obtain a decision from a non-Nim process", "category": "enforcement", "status": "pass", "wasLive": false, "evidence": "Connection closed before any decision is produced.", "tests": ["TestANonNimProcessCannotObtainADecision"] },
-    { "id": "session-hijack", "name": "Report calls under a session another connection opened", "category": "journal", "status": "pass", "wasLive": false, "evidence": "Refused, and the connection is closed rather than merely erroring, because a caller probing for sessions it does not own is not making an honest mistake. Peer identity cannot separate two runs of Nim, so this is the check that stops one relay appending entries under another's session.", "tests": ["TestAConnectionCannotSpeakForAnotherConnectionsSession"] },
-    { "id": "daemon-impersonation", "name": "Bind the socket first and impersonate the daemon", "category": "identity", "status": "pass", "wasLive": true, "evidence": "As the daemon, a python script had the relay spawn a command of its choosing, allowed a denied call, and harvested tool names. Introduced by the merge; fixed by verifying both ends.", "tests": ["TestAnImpostorOnTheSocketCannotChooseWhatIsSpawned", "TestAnImpostorCannotDecideCalls"] },
-    { "id": "impostor-harvest", "name": "As an impostor, harvest tool names and argument digests", "category": "identity", "status": "pass", "wasLive": true, "evidence": "Verification happens before a byte is written, so the impostor learns nothing.", "tests": ["TestAnImpostorLearnsNothingFromTheAttempt"] },
-    { "id": "executable-path-swap", "name": "Defeat peer identity by swapping the file at the peer's launch path", "category": "identity", "status": "pass", "wasLive": true, "evidence": "A genuine nc process passed peer identity with no race. Fixed by resolving the running image instead of a path. Mutation-verified.", "tests": ["TestAPathSwapDoesNotDefeatPeerIdentity"] },
-    { "id": "memory-exhaustion", "name": "Exhaust daemon memory with an unterminated line", "category": "availability", "status": "pass", "wasLive": true, "evidence": "200 MiB in 0.2s from one unauthenticated connection. Capped at 1 MiB.", "tests": ["TestAnUnauthenticatedConnectionCannotExhaustMemory"] },
-    { "id": "deny-list-bypass", "name": "Bypass the deny list", "category": "enforcement", "status": "pass", "wasLive": false, "evidence": "Denied call never reaches the connector.", "tests": ["TestARefusedCallNeverReachesTheConnector", "TestTheDenyListDecides"] },
-    { "id": "batch-smuggling", "name": "Smuggle a tools/call inside a JSON-RPC batch", "category": "enforcement", "status": "pass", "wasLive": false, "evidence": "Batch carrying a tools/call is refused whole.", "tests": ["TestABatchCarryingAToolCallIsRefusedWhole"] },
-    { "id": "framing-smuggling", "name": "Smuggle a call in a frame Go cannot parse but the server can", "category": "enforcement", "status": "pass", "wasLive": false, "evidence": "A frame Go cannot parse is not forwarded, and neither is a frame carrying more than one message. The rule is that anything the relay cannot fully understand does not reach the connector -- a parser disagreement must not become a way to move a tools/call past the decision point.", "tests": ["TestUnreadableFramesAreNotRelayed", "TestMoreThanOneMessageInAFrameIsNotRelayed"] },
-    { "id": "kill-daemon", "name": "Kill the daemon to disable enforcement", "category": "enforcement", "status": "pass", "wasLive": false, "evidence": "Every tools/call is denied while the daemon is gone. Killing the enforcement point removes the ability to call tools, not the enforcement -- which is the whole content of the fail-closed decision recorded in docs/decisions/0001.", "tests": ["TestWithNoDaemonEverythingIsRefused"] },
-    { "id": "journal-truncation", "name": "Truncate the journal's tail", "category": "journal", "status": "partial", "wasLive": true, "evidence": "Detected ONLY with --expect-head against a head recorded elsewhere. Undetectable otherwise, because the chain is unkeyed.", "tests": ["TestExpectHeadStillCatchesTruncateAndRecompute"] },
-    { "id": "journal-rewrite", "name": "Rewrite the whole journal from the genesis", "category": "journal", "status": "fail", "wasLive": false, "evidence": "Not defended. Nothing in the chain is secret, so anyone who can write nim.db can recompute every hash and the result verifies cleanly. Only an externally recorded head covers any of it.", "tests": [] },
-    { "id": "journal-growth-false-alarm", "name": "Pass --expect-head a head the journal has grown past", "category": "journal", "status": "pass", "wasLive": true, "evidence": "Previously reported ordinary growth as 'entries have been removed'. A check that cries wolf stops being read.", "tests": ["TestExpectHeadOnAGrownJournalIsNotAnAccusation"] },
-    { "id": "forged-agent-identity", "name": "Claim an agent identity on the wire", "category": "identity", "status": "pass", "wasLive": false, "evidence": "There is no agent field on Event; the serialised message is asserted not to contain one.", "tests": ["TestNoWireFieldCanSetTheAgent"] },
-    { "id": "stale-enrollment", "name": "Use a stale enrolment after the executable is replaced", "category": "identity", "status": "pass", "wasLive": true, "evidence": "A replaced file no longer matches; the enrolment is reported STALE rather than silently adopting the new file.", "tests": ["TestAReplacedFileIsReportedStaleRatherThanFailing"] },
-    { "id": "inode-reuse", "name": "Land a new file on a deleted enrolment's inode number", "category": "identity", "status": "partial", "wasLive": true, "evidence": "Inode reuse is real: ext4 hands back the number it just freed, observed in CI. A running process holds its inode so the runtime path is safe; a PERSISTED enrolment whose file was deleted could be matched by an unrelated later file. No test covers the adversarial case.", "tests": [] },
-    { "id": "enrolment-overwrite", "name": "Overwrite another agent's enrolment", "category": "identity", "status": "fail", "wasLive": false, "evidence": "Anything that can run the nim binary as this user can re-enrol any name against any executable. Harmless today because nothing decides on agents; becomes an escalation the moment grants exist.", "tests": [] },
-    { "id": "connector-overwrite", "name": "Overwrite a connector's registered command", "category": "credential", "status": "partial", "wasLive": false, "evidence": "Possible, but destructive rather than exfiltrating: connector.set requires a secret, so an attacker replaces the credential with their own rather than reading the existing one.", "tests": [] },
-    { "id": "path-resolution", "name": "Front-run the registered command through PATH", "category": "credential", "status": "fail", "wasLive": false, "evidence": "The registered argv is spawned through normal PATH resolution. A caller that already controls PATH can place its own binary first. Closing it needs the daemon to spawn the connector itself.", "tests": [] },
-    { "id": "orphan-connector", "name": "Leave a connector running after the relay dies", "category": "lifecycle", "status": "pass", "wasLive": false, "evidence": "The downstream is the relay's child and dies with it.", "tests": ["TestTheDownstreamDiesWithTheRelay", "TestAConnectorReadingStdinDiesWithTheRelay"] },
-    { "id": "daemon-restart", "name": "Restart the daemon mid-session", "category": "lifecycle", "status": "partial", "wasLive": false, "evidence": "Sessions left open are closed by the daemon when a connection drops, and calls fail closed. Not exercised as a deliberate restart-under-load test.", "tests": ["TestSessionIsClosedWhenTheShimGoesAway"] },
-    { "id": "version-mismatch", "name": "Run a new client against an old daemon", "category": "lifecycle", "status": "fail", "wasLive": true, "evidence": "Replacing the binary in place while a daemon runs breaks every operation until it is restarted, with an opaque 'reading response: EOF'. Fails closed, but the message tells the operator nothing.", "tests": [] },
-    { "id": "concurrent-open", "name": "Open the journal from two processes at once", "category": "concurrency", "status": "pass", "wasLive": true, "evidence": "Found by CI: syncViews dropped and recreated a view unsynchronised. Now one immediate transaction; regression test fails 5/5 against the old code.", "tests": ["TestConcurrentOpensDoNotCollideOnViews"] },
-    { "id": "race-conditions", "name": "Provoke races under contention", "category": "concurrency", "status": "pass", "wasLive": true, "evidence": "Three real races found and fixed with reproductions: split-brain daemon start, torn credential read, BUSY_SNAPSHOT. Suite runs -race -shuffle.", "tests": ["TestHandleCredentialGetNeverTearsEnvKeyAndSecretUnderConcurrentSet", "TestListenSerializesConcurrentStaleSocketReclaim", "TestConcurrentAppendsProduceOneChain", "TestTargetLocksSerializesSameTarget"] },
-    { "id": "malformed-input", "name": "Feed the daemon malformed JSON", "category": "protocol", "status": "pass", "wasLive": false, "evidence": "Malformed messages are recorded as an anomaly and skipped; oversized ones are refused before the full parse.", "tests": ["TestMalformedJSONIsAnAnomaly", "TestHandleConnectorSetRejectsOversizedFields", "TestBoundedReadRawRejectsALineOverTheLimitWithoutBufferingItAll"] },
-    { "id": "duplicate-ids", "name": "Reuse a JSON-RPC id for two in-flight calls", "category": "protocol", "status": "partial", "wasLive": false, "evidence": "Recorded as a duplicate_id anomaly. The second answer still cannot be matched to the right request, and nothing prevents the situation.", "tests": [] },
-    { "id": "crash-during-request", "name": "Crash between decision and forward", "category": "lifecycle", "status": "not_tested", "wasLive": false, "evidence": "No test. The known window is documented: the relay gives up after 2s and SQLite's busy timeout is 5s, so a contended write can land after a denial, leaving an allow for a call that never happened. It reads as pending, never as executed.", "tests": [] },
-    { "id": "crash-during-response", "name": "Crash while relaying a response", "category": "lifecycle", "status": "not_tested", "wasLive": false, "evidence": "No test covers this. A crash midway through relaying a response would leave the client with a truncated frame and the journal with a call.request but no call.response. Reasoning says that reads as an unfinished call rather than a successful one, which is the safe direction, but reasoning is not a test and this row does not claim otherwise.", "tests": [] },
-    { "id": "partial-writes", "name": "Power loss mid-commit", "category": "journal", "status": "not_tested", "wasLive": false, "evidence": "synchronous=FULL is asserted but never tested against real hardware loss.", "tests": [] },
-    { "id": "privilege-boundary", "name": "Cross a privilege boundary", "category": "identity", "status": "not_applicable", "wasLive": false, "evidence": "There is no privilege boundary to cross. Everything runs as one OS user by design; that is the premise, not a gap.", "tests": [] },
-    { "id": "unknown-agent", "name": "Act as an agent nobody enrolled", "category": "policy", "status": "partial", "wasLive": false, "evidence": "The recording behaviour is tested: an underivable agent is stored as absent, not refused. What an unknown agent may DO is undecided — that is M4's open question (D-002), not an answer inherited from here.", "tests": ["TestAnUndeterminedAgentIsRecordedAsAbsentNotRefused"] },
-    { "id": "unknown-connector", "name": "Name a connector that does not exist", "category": "policy", "status": "pass", "wasLive": false, "evidence": "No connector configured is the ordinary case: spawn with no credential.", "tests": ["TestHandleCredentialGetOnUnconfiguredTargetIsFailOpen", "TestWithNoConnectorTheCallersCommandRuns"] },
-    { "id": "unknown-tool", "name": "Call a tool no policy mentions", "category": "policy", "status": "partial", "wasLive": false, "evidence": "Allowed. The deny list is a deny list, so anything not on it passes — deliberate for now, and the reason a real policy model is the next milestone.", "tests": [] },
-    { "id": "compromised-same-user", "name": "A same-user process that already ran code", "category": "identity", "status": "fail", "wasLive": true, "evidence": "This is the threat model's adversary and it is only partly contained. It can run the nim binary, enrol agents, overwrite connectors, and open its own sessions. What it cannot do is read another connector's credential or forge entries without running Nim.", "tests": [] },
-    { "id": "symlink-manipulation", "name": "Manipulate symlinks and paths", "category": "identity", "status": "pass", "wasLive": true, "evidence": "The path-swap test builds the attack out of symlinks: it launches a peer through a symlink it controls, then re-points that symlink at Nim's own binary so the launch path names Nim while the running process is genuinely something else. Identity comes from the kernel's view of the running image, so the swap changes nothing.", "tests": ["TestAPathSwapDoesNotDefeatPeerIdentity"] },
-    { "id": "environment-leakage", "name": "Read a credential from the connector's environment", "category": "credential", "status": "fail", "wasLive": false, "evidence": "By design the connector receives the secret in its environment, and it inherits the relay's whole environment. On Linux any same-user process can read /proc/<pid>/environ. Closing it needs Nim to hold the credential and proxy the request.", "tests": [] },
-    { "id": "dashboard-deception", "name": "Make this dashboard state something untrue", "category": "meta", "status": "partial", "wasLive": false, "evidence": "Red-teamed deliberately on 2026-08-12 with sixteen attempts: forged statuses, relabelled milestones, closed decisions, duplicated ids, invented runtime data, secrets and local paths in prose, overridden test counts. Fourteen got through and are now refused, each with a regression test; the two that appeared to work never had — derived facts are computed after the declared ones are spread in, so a hand-written count cannot win. The build also scans every byte of the published output, not just the data file. What remains undetectable is a wrong summary written next to a real test name, and a platform column resting on a test that compiles there without proving anything.", "tests": [] }
+    {
+      "id": "credential-via-chosen-command",
+      "name": "Name a connector, supply your own command, read the credential",
+      "category": "credential",
+      "status": "pass",
+      "wasLive": true,
+      "evidence": "Reproduced live against a real build; the token printed. Fixed by the connector command binding.",
+      "tests": [
+        "TestACallerCannotNominateWhatReceivesACredential",
+        "TestTheDaemonsCommandIsSpawnedNotTheCallersEndToEnd"
+      ]
+    },
+    {
+      "id": "credential-from-non-nim",
+      "name": "Ask for a credential from a process that is not Nim",
+      "category": "credential",
+      "status": "pass",
+      "wasLive": false,
+      "evidence": "A raw socket client that speaks the protocol correctly is still refused: the daemon verifies the peer's running image at accept, before it reads a single request byte. Denial does not depend on the request being malformed.",
+      "tests": [
+        "TestANonNimProcessCannotObtainADecision"
+      ]
+    },
+    {
+      "id": "journal-forgery",
+      "name": "Write forged entries to the journal from a non-Nim process",
+      "category": "journal",
+      "status": "pass",
+      "wasLive": true,
+      "evidence": "A python socket client wrote a fabricated session and an allowed delete_repository call. Fixed by authorizing the event path.",
+      "tests": [
+        "TestANonNimProcessCannotWriteToTheJournal"
+      ]
+    },
+    {
+      "id": "decision-from-non-nim",
+      "name": "Obtain a decision from a non-Nim process",
+      "category": "enforcement",
+      "status": "pass",
+      "wasLive": false,
+      "evidence": "Connection closed before any decision is produced.",
+      "tests": [
+        "TestANonNimProcessCannotObtainADecision"
+      ]
+    },
+    {
+      "id": "session-hijack",
+      "name": "Report calls under a session another connection opened",
+      "category": "journal",
+      "status": "pass",
+      "wasLive": false,
+      "evidence": "Refused, and the connection is closed rather than merely erroring, because a caller probing for sessions it does not own is not making an honest mistake. Peer identity cannot separate two runs of Nim, so this is the check that stops one relay appending entries under another's session.",
+      "tests": [
+        "TestAConnectionCannotSpeakForAnotherConnectionsSession"
+      ]
+    },
+    {
+      "id": "daemon-impersonation",
+      "name": "Bind the socket first and impersonate the daemon",
+      "category": "identity",
+      "status": "pass",
+      "wasLive": true,
+      "evidence": "As the daemon, a python script had the relay spawn a command of its choosing, allowed a denied call, and harvested tool names. Introduced by the merge; fixed by verifying both ends.",
+      "tests": [
+        "TestAnImpostorOnTheSocketCannotChooseWhatIsSpawned",
+        "TestAnImpostorCannotDecideCalls"
+      ]
+    },
+    {
+      "id": "impostor-harvest",
+      "name": "As an impostor, harvest tool names and argument digests",
+      "category": "identity",
+      "status": "pass",
+      "wasLive": true,
+      "evidence": "Verification happens before a byte is written, so the impostor learns nothing.",
+      "tests": [
+        "TestAnImpostorLearnsNothingFromTheAttempt"
+      ]
+    },
+    {
+      "id": "executable-path-swap",
+      "name": "Defeat peer identity by swapping the file at the peer's launch path",
+      "category": "identity",
+      "status": "pass",
+      "wasLive": true,
+      "evidence": "A genuine nc process passed peer identity with no race. Fixed by resolving the running image instead of a path. Mutation-verified.",
+      "tests": [
+        "TestAPathSwapDoesNotDefeatPeerIdentity"
+      ]
+    },
+    {
+      "id": "memory-exhaustion",
+      "name": "Exhaust daemon memory with an unterminated line",
+      "category": "availability",
+      "status": "pass",
+      "wasLive": true,
+      "evidence": "200 MiB in 0.2s from one unauthenticated connection. Capped at 1 MiB.",
+      "tests": [
+        "TestAnUnauthenticatedConnectionCannotExhaustMemory"
+      ]
+    },
+    {
+      "id": "deny-list-bypass",
+      "name": "Bypass the deny list",
+      "category": "enforcement",
+      "status": "pass",
+      "wasLive": false,
+      "evidence": "Denied call never reaches the connector.",
+      "tests": [
+        "TestARefusedCallNeverReachesTheConnector",
+        "TestTheDenyListDecides"
+      ]
+    },
+    {
+      "id": "batch-smuggling",
+      "name": "Smuggle a tools/call inside a JSON-RPC batch",
+      "category": "enforcement",
+      "status": "pass",
+      "wasLive": false,
+      "evidence": "Batch carrying a tools/call is refused whole.",
+      "tests": [
+        "TestABatchCarryingAToolCallIsRefusedWhole"
+      ]
+    },
+    {
+      "id": "framing-smuggling",
+      "name": "Smuggle a call in a frame Go cannot parse but the server can",
+      "category": "enforcement",
+      "status": "pass",
+      "wasLive": false,
+      "evidence": "A frame Go cannot parse is not forwarded, and neither is a frame carrying more than one message. The rule is that anything the relay cannot fully understand does not reach the connector -- a parser disagreement must not become a way to move a tools/call past the decision point.",
+      "tests": [
+        "TestUnreadableFramesAreNotRelayed",
+        "TestMoreThanOneMessageInAFrameIsNotRelayed"
+      ]
+    },
+    {
+      "id": "kill-daemon",
+      "name": "Kill the daemon to disable enforcement",
+      "category": "enforcement",
+      "status": "pass",
+      "wasLive": false,
+      "evidence": "Every tools/call is denied while the daemon is gone. Killing the enforcement point removes the ability to call tools, not the enforcement -- which is the whole content of the fail-closed decision recorded in docs/decisions/0001.",
+      "tests": [
+        "TestWithNoDaemonEverythingIsRefused"
+      ]
+    },
+    {
+      "id": "journal-truncation",
+      "name": "Truncate the journal's tail",
+      "category": "journal",
+      "status": "partial",
+      "wasLive": true,
+      "evidence": "Detected ONLY with --expect-head against a head recorded elsewhere. Undetectable otherwise, because the chain is unkeyed.",
+      "tests": [
+        "TestExpectHeadStillCatchesTruncateAndRecompute"
+      ]
+    },
+    {
+      "id": "journal-rewrite",
+      "name": "Rewrite the whole journal from the genesis",
+      "category": "journal",
+      "status": "fail",
+      "wasLive": false,
+      "evidence": "Not defended. Nothing in the chain is secret, so anyone who can write nim.db can recompute every hash and the result verifies cleanly. Only an externally recorded head covers any of it.",
+      "tests": []
+    },
+    {
+      "id": "journal-growth-false-alarm",
+      "name": "Pass --expect-head a head the journal has grown past",
+      "category": "journal",
+      "status": "pass",
+      "wasLive": true,
+      "evidence": "Previously reported ordinary growth as 'entries have been removed'. A check that cries wolf stops being read.",
+      "tests": [
+        "TestExpectHeadOnAGrownJournalIsNotAnAccusation"
+      ]
+    },
+    {
+      "id": "forged-agent-identity",
+      "name": "Claim an agent identity on the wire",
+      "category": "identity",
+      "status": "pass",
+      "wasLive": false,
+      "evidence": "There is no agent field on Event; the serialised message is asserted not to contain one.",
+      "tests": [
+        "TestNoWireFieldCanSetTheAgent"
+      ]
+    },
+    {
+      "id": "stale-enrollment",
+      "name": "Use a stale enrolment after the executable is replaced",
+      "category": "identity",
+      "status": "pass",
+      "wasLive": true,
+      "evidence": "A replaced file no longer matches; the enrolment is reported STALE rather than silently adopting the new file.",
+      "tests": [
+        "TestAReplacedFileIsReportedStaleRatherThanFailing"
+      ]
+    },
+    {
+      "id": "inode-reuse",
+      "name": "Land a new file on a deleted enrolment's inode number",
+      "category": "identity",
+      "status": "partial",
+      "wasLive": true,
+      "evidence": "Inode reuse is real: ext4 hands back the number it just freed, observed in CI. A running process holds its inode so the runtime path is safe; a PERSISTED enrolment whose file was deleted could be matched by an unrelated later file. No test covers the adversarial case.",
+      "tests": []
+    },
+    {
+      "id": "enrolment-overwrite",
+      "name": "Overwrite another agent's enrolment",
+      "category": "identity",
+      "status": "fail",
+      "wasLive": false,
+      "evidence": "Anything that can run the nim binary as this user can re-enrol any name against any executable. Harmless today because nothing decides on agents; becomes an escalation the moment grants exist.",
+      "tests": []
+    },
+    {
+      "id": "connector-overwrite",
+      "name": "Overwrite a connector's registered command",
+      "category": "credential",
+      "status": "partial",
+      "wasLive": false,
+      "evidence": "Possible, but destructive rather than exfiltrating: connector.set requires a secret, so an attacker replaces the credential with their own rather than reading the existing one.",
+      "tests": []
+    },
+    {
+      "id": "path-resolution",
+      "name": "Front-run the registered command through PATH",
+      "category": "credential",
+      "status": "fail",
+      "wasLive": false,
+      "evidence": "The registered argv is spawned through normal PATH resolution. A caller that already controls PATH can place its own binary first. Closing it needs the daemon to spawn the connector itself.",
+      "tests": []
+    },
+    {
+      "id": "orphan-connector",
+      "name": "Leave a connector running after the relay dies",
+      "category": "lifecycle",
+      "status": "pass",
+      "wasLive": false,
+      "evidence": "The downstream is the relay's child and dies with it.",
+      "tests": [
+        "TestTheDownstreamDiesWithTheRelay",
+        "TestAConnectorReadingStdinDiesWithTheRelay"
+      ]
+    },
+    {
+      "id": "daemon-restart",
+      "name": "Restart the daemon mid-session",
+      "category": "lifecycle",
+      "status": "partial",
+      "wasLive": false,
+      "evidence": "Sessions left open are closed by the daemon when a connection drops, and calls fail closed. Not exercised as a deliberate restart-under-load test.",
+      "tests": [
+        "TestSessionIsClosedWhenTheShimGoesAway"
+      ]
+    },
+    {
+      "id": "version-mismatch",
+      "name": "Run a new client against an old daemon",
+      "category": "lifecycle",
+      "status": "fail",
+      "wasLive": true,
+      "evidence": "Replacing the binary in place while a daemon runs breaks every operation until it is restarted, with an opaque 'reading response: EOF'. Fails closed, but the message tells the operator nothing.",
+      "tests": []
+    },
+    {
+      "id": "concurrent-open",
+      "name": "Open the journal from two processes at once",
+      "category": "concurrency",
+      "status": "pass",
+      "wasLive": true,
+      "evidence": "Found by CI: syncViews dropped and recreated a view unsynchronised. Now one immediate transaction; regression test fails 5/5 against the old code.",
+      "tests": [
+        "TestConcurrentOpensDoNotCollideOnViews"
+      ]
+    },
+    {
+      "id": "race-conditions",
+      "name": "Provoke races under contention",
+      "category": "concurrency",
+      "status": "pass",
+      "wasLive": true,
+      "evidence": "Three real races found and fixed with reproductions: split-brain daemon start, torn credential read, BUSY_SNAPSHOT. Suite runs -race -shuffle.",
+      "tests": [
+        "TestHandleCredentialGetNeverTearsEnvKeyAndSecretUnderConcurrentSet",
+        "TestListenSerializesConcurrentStaleSocketReclaim",
+        "TestConcurrentAppendsProduceOneChain",
+        "TestTargetLocksSerializesSameTarget"
+      ]
+    },
+    {
+      "id": "malformed-input",
+      "name": "Feed the daemon malformed JSON",
+      "category": "protocol",
+      "status": "pass",
+      "wasLive": false,
+      "evidence": "Malformed messages are recorded as an anomaly and skipped; oversized ones are refused before the full parse.",
+      "tests": [
+        "TestMalformedJSONIsAnAnomaly",
+        "TestHandleConnectorSetRejectsOversizedFields",
+        "TestBoundedReadRawRejectsALineOverTheLimitWithoutBufferingItAll"
+      ]
+    },
+    {
+      "id": "duplicate-ids",
+      "name": "Reuse a JSON-RPC id for two in-flight calls",
+      "category": "protocol",
+      "status": "partial",
+      "wasLive": false,
+      "evidence": "Recorded as a duplicate_id anomaly. The second answer still cannot be matched to the right request, and nothing prevents the situation.",
+      "tests": []
+    },
+    {
+      "id": "crash-during-request",
+      "name": "Crash between decision and forward",
+      "category": "lifecycle",
+      "status": "not_tested",
+      "wasLive": false,
+      "evidence": "No test. The known window is documented: the relay gives up after 2s and SQLite's busy timeout is 5s, so a contended write can land after a denial, leaving an allow for a call that never happened. It reads as pending, never as executed.",
+      "tests": []
+    },
+    {
+      "id": "crash-during-response",
+      "name": "Crash while relaying a response",
+      "category": "lifecycle",
+      "status": "not_tested",
+      "wasLive": false,
+      "evidence": "No test covers this. A crash midway through relaying a response would leave the client with a truncated frame and the journal with a call.request but no call.response. Reasoning says that reads as an unfinished call rather than a successful one, which is the safe direction, but reasoning is not a test and this row does not claim otherwise.",
+      "tests": []
+    },
+    {
+      "id": "partial-writes",
+      "name": "Power loss mid-commit",
+      "category": "journal",
+      "status": "not_tested",
+      "wasLive": false,
+      "evidence": "synchronous=FULL is asserted but never tested against real hardware loss.",
+      "tests": []
+    },
+    {
+      "id": "privilege-boundary",
+      "name": "Cross a privilege boundary",
+      "category": "identity",
+      "status": "not_applicable",
+      "wasLive": false,
+      "evidence": "There is no privilege boundary to cross. Everything runs as one OS user by design; that is the premise, not a gap.",
+      "tests": []
+    },
+    {
+      "id": "unknown-agent",
+      "name": "Act as an agent nobody enrolled",
+      "category": "policy",
+      "status": "partial",
+      "wasLive": false,
+      "evidence": "The recording behaviour is tested: an underivable agent is stored as absent, not refused. What an unknown agent may DO is undecided — that is M4's open question (D-002), not an answer inherited from here.",
+      "tests": [
+        "TestAnUndeterminedAgentIsRecordedAsAbsentNotRefused"
+      ]
+    },
+    {
+      "id": "unknown-connector",
+      "name": "Name a connector that does not exist",
+      "category": "policy",
+      "status": "pass",
+      "wasLive": false,
+      "evidence": "No connector configured is the ordinary case: spawn with no credential.",
+      "tests": [
+        "TestHandleCredentialGetOnUnconfiguredTargetIsFailOpen",
+        "TestWithNoConnectorTheCallersCommandRuns"
+      ]
+    },
+    {
+      "id": "unknown-tool",
+      "name": "Call a tool no policy mentions",
+      "category": "policy",
+      "status": "partial",
+      "wasLive": false,
+      "evidence": "Allowed. The deny list is a deny list, so anything not on it passes — deliberate for now, and the reason a real policy model is the next milestone.",
+      "tests": []
+    },
+    {
+      "id": "compromised-same-user",
+      "name": "A same-user process that already ran code",
+      "category": "identity",
+      "status": "fail",
+      "wasLive": true,
+      "evidence": "This is the threat model's adversary and it is only partly contained. It can run the nim binary, enrol agents, overwrite connectors, and open its own sessions. What it cannot do is read another connector's credential or forge entries without running Nim.",
+      "tests": []
+    },
+    {
+      "id": "symlink-manipulation",
+      "name": "Manipulate symlinks and paths",
+      "category": "identity",
+      "status": "pass",
+      "wasLive": true,
+      "evidence": "The path-swap test builds the attack out of symlinks: it launches a peer through a symlink it controls, then re-points that symlink at Nim's own binary so the launch path names Nim while the running process is genuinely something else. Identity comes from the kernel's view of the running image, so the swap changes nothing.",
+      "tests": [
+        "TestAPathSwapDoesNotDefeatPeerIdentity"
+      ]
+    },
+    {
+      "id": "environment-leakage",
+      "name": "Read a credential from the connector's environment",
+      "category": "credential",
+      "status": "fail",
+      "wasLive": false,
+      "evidence": "By design the connector receives the secret in its environment, and it inherits the relay's whole environment. On Linux any same-user process can read /proc/<pid>/environ. Closing it needs Nim to hold the credential and proxy the request.",
+      "tests": []
+    },
+    {
+      "id": "dashboard-deception",
+      "name": "Make this dashboard state something untrue",
+      "category": "meta",
+      "status": "partial",
+      "wasLive": false,
+      "evidence": "Red-teamed deliberately on 2026-08-12 with sixteen attempts: forged statuses, relabelled milestones, closed decisions, duplicated ids, invented runtime data, secrets and local paths in prose, overridden test counts. Fourteen got through and are now refused, each with a regression test; the two that appeared to work never had — derived facts are computed after the declared ones are spread in, so a hand-written count cannot win. The build also scans every byte of the published output, not just the data file. What remains undetectable is a wrong summary written next to a real test name, and a platform column resting on a test that compiles there without proving anything.",
+      "tests": []
+    }
   ],
-
   "findings": [
+    {
+      "id": "F-011",
+      "severity": "high",
+      "title": "A protected Vercel project served this page publicly anyway",
+      "problem": "Vercel Authentication was enabled on the project, but scoped all_except_custom_domains. Vercel treats the project's own assigned production domain (nim-blush.vercel.app) as a custom domain, so that hostname was exempt while every other URL for the same deployment was protected.",
+      "impact": "The full page -- every known weakness, undefended attack path and architectural limitation -- was readable by anyone at that URL, with no login, for roughly two minutes on 2026-08-12. Two of the three hostnames behaved correctly, which is what made it easy to believe the whole thing was protected.",
+      "evidence": "Reading the protection settings was not enough and produced a confident wrong conclusion. Fetching every hostname anonymously was: nim-seergiiim.vercel.app and the deployment URL returned 302 to vercel.com/sso-api with a 15-byte body, while nim-blush.vercel.app returned HTTP 200 with 211 KB containing 'Break Nim' and 'journal chain is unkeyed'. The deployment was removed immediately; all hostnames now return 404 with no content.",
+      "status": "open",
+      "nextAction": "Do not deploy again until deployment protection covers all deployments rather than all_except_custom_domains. More generally: verify access control by fetching every hostname anonymously, never by reading the configuration that is supposed to provide it.",
+      "provenance": "declared"
+    },
     {
       "id": "F-001",
       "severity": "high",
@@ -430,7 +988,6 @@
       "provenance": "declared"
     }
   ],
-
   "decisions": [
     {
       "id": "D-001",
@@ -452,9 +1009,9 @@
     {
       "id": "D-003",
       "title": "Should the hosted dashboard be publicly reachable?",
-      "question": "It lists known weaknesses and attack paths for a private repository.",
+      "question": "It lists known weaknesses and attack paths for a private repository, so an unauthenticated URL publishes them.",
       "status": "open",
-      "resolution": "Undecided. Vercel Authentication or password protection would keep it to the team.",
+      "resolution": "Still open, and the earlier reading of it was wrong. Vercel Authentication is enabled but scoped all_except_custom_domains, and Vercel counts the project's own assigned production domain as a custom domain. A deployment on 2026-08-12 was therefore public at nim-blush.vercel.app for about two minutes, while the deployment-specific URL and nim-seergiiim.vercel.app correctly demanded a login -- see F-011. Deploying again needs the scope changed to cover all deployments first. The build already sends X-Robots-Tag noindex and a strict CSP, and neither of those is access control.",
       "provenance": "declared"
     },
     {
@@ -466,60 +1023,198 @@
       "provenance": "declared"
     }
   ],
-
   "milestones": [
     {
-      "id": "M1", "name": "Pass-through", "status": "done",
+      "id": "M1",
+      "name": "Pass-through",
+      "status": "done",
       "objective": "Relay stdio byte-for-byte and record every tools/call.",
-      "deliverables": ["shim", "daemon", "unix socket", "SQLite", "config.toml"],
-      "guarantees": ["relay-byte-exact"],
-      "limitations": ["Nothing blocked, no credentials, no policy."],
+      "deliverables": [
+        "shim",
+        "daemon",
+        "unix socket",
+        "SQLite",
+        "config.toml"
+      ],
+      "guarantees": [
+        "relay-byte-exact"
+      ],
+      "limitations": [
+        "Nothing blocked, no credentials, no policy."
+      ],
       "pending": []
     },
     {
-      "id": "M1.5", "name": "Trustworthy record", "status": "done",
+      "id": "M1.5",
+      "name": "Trustworthy record",
+      "status": "done",
       "objective": "Make the journal evidence rather than a log.",
-      "deliverables": ["append-only entries", "canonical_encode_v1", "hash chain", "nim verify", "nim log"],
-      "guarantees": ["journal-append-only", "journal-detects-alteration", "journal-expect-head"],
-      "limitations": ["Integrity, not authenticity. The chain is unkeyed."],
+      "deliverables": [
+        "append-only entries",
+        "canonical_encode_v1",
+        "hash chain",
+        "nim verify",
+        "nim log"
+      ],
+      "guarantees": [
+        "journal-append-only",
+        "journal-detects-alteration",
+        "journal-expect-head"
+      ],
+      "limitations": [
+        "Integrity, not authenticity. The chain is unkeyed."
+      ],
       "pending": []
     },
     {
-      "id": "M2", "name": "Minimal enforcement", "status": "done",
+      "id": "M2",
+      "name": "Minimal enforcement",
+      "status": "done",
       "objective": "Refuse a tools/call before it reaches a connector.",
-      "deliverables": ["synchronous decide path", "fail-closed on every path", "deny list", "batch refusal"],
-      "guarantees": ["enforcement-fail-closed"],
-      "limitations": ["Policy is a list of exact tool names in config.toml, which is F-004 and is M4's work rather than unfinished M2 work."],
+      "deliverables": [
+        "synchronous decide path",
+        "fail-closed on every path",
+        "deny list",
+        "batch refusal"
+      ],
+      "guarantees": [
+        "enforcement-fail-closed"
+      ],
+      "limitations": [
+        "Policy is a list of exact tool names in config.toml, which is F-004 and is M4's work rather than unfinished M2 work."
+      ],
       "pending": []
     },
     {
-      "id": "M2.5", "name": "Daemon lifetime and socket identity", "status": "done",
+      "id": "M2.5",
+      "name": "Daemon lifetime and socket identity",
+      "status": "done",
       "objective": "A daemon that outlives a client session, and a socket where both ends know who the other is.",
-      "deliverables": ["Setsid detachment", "flock startup lock", "peer verification both ways"],
-      "guarantees": ["peer-identity-both-ways", "peer-resists-path-swap", "session-ownership"],
-      "limitations": ["No peer verification on Windows."],
+      "deliverables": [
+        "Setsid detachment",
+        "flock startup lock",
+        "peer verification both ways"
+      ],
+      "guarantees": [
+        "peer-identity-both-ways",
+        "peer-resists-path-swap",
+        "session-ownership"
+      ],
+      "limitations": [
+        "No peer verification on Windows."
+      ],
       "pending": []
     },
     {
-      "id": "M3", "name": "Credentials", "status": "done",
+      "id": "M3",
+      "name": "Credentials",
+      "status": "done",
       "objective": "Hold connector credentials outside the client's configuration.",
-      "deliverables": ["OS credential store", "connector command binding", "nim connector set/list/remove"],
-      "guarantees": ["credential-command-binding", "credential-never-in-argv"],
-      "limitations": ["PATH resolution on the registered command.", "The credential is handed to the connector."],
+      "deliverables": [
+        "OS credential store",
+        "connector command binding",
+        "nim connector set/list/remove"
+      ],
+      "guarantees": [
+        "credential-command-binding",
+        "credential-never-in-argv"
+      ],
+      "limitations": [
+        "PATH resolution on the registered command.",
+        "The credential is handed to the connector."
+      ],
       "pending": []
     },
     {
-      "id": "M4", "name": "Agent identity + policy in SQLite", "status": "in_progress",
+      "id": "M4",
+      "name": "Agent identity + policy in SQLite",
+      "status": "in_progress",
       "objective": "Give a decision a subject, and move policy where an authorization input belongs.",
-      "deliverables": ["peer primitives (done)", "nim_agents + nim agent CLI (done)", "daemon-side derivation + journal (done)", "nim_grants + evaluation (not started)", "policy out of config.toml (not started)"],
-      "guarantees": ["agent-not-claimable", "journal-schema-versioning"],
-      "limitations": ["Nothing decides on the agent yet.", "Two windows of one program are the same agent."],
-      "pending": ["Step 4: nim_grants and evaluation.", "Decide what an unknown agent may do (D-002)."]
+      "deliverables": [
+        "peer primitives (done)",
+        "nim_agents + nim agent CLI (done)",
+        "daemon-side derivation + journal (done)",
+        "nim_grants + evaluation (not started)",
+        "policy out of config.toml (not started)"
+      ],
+      "guarantees": [
+        "agent-not-claimable",
+        "journal-schema-versioning"
+      ],
+      "limitations": [
+        "Nothing decides on the agent yet.",
+        "Two windows of one program are the same agent."
+      ],
+      "pending": [
+        "Step 4: nim_grants and evaluation.",
+        "Decide what an unknown agent may do (D-002)."
+      ]
     },
-    { "id": "M4.5", "name": "Grants (Cedar), if it is still the answer", "status": "planned", "objective": "Express allow/deny in something richer than a list, once there is a subject to talk about.", "deliverables": [], "guarantees": [], "limitations": [], "pending": ["Deferred until M4 gives it a subject."] },
-    { "id": "M5", "name": "Budgets", "status": "planned", "objective": "Per session, decremented at authorization time.", "deliverables": [], "guarantees": [], "limitations": [], "pending": ["Needs agent identity."] },
-    { "id": "M6", "name": "Human approval", "status": "planned", "objective": "Out-of-band prompt showing real parameters.", "deliverables": [], "guarantees": [], "limitations": [], "pending": ["Needs agent identity."] },
-    { "id": "M7", "name": "Journal", "status": "done", "objective": "Append-only, hash-chained, with the inputs that produced each decision.", "deliverables": ["Delivered early as M1.5."], "guarantees": ["journal-append-only"], "limitations": ["The 'inputs that produced each decision' part folds into M4."], "pending": [] },
-    { "id": "M8", "name": "Dashboard", "status": "blocked", "objective": "A hosted view of the journal.", "deliverables": [], "guarantees": [], "limitations": ["Blocked on the journal being unkeyed (F-003): syncing it exports a liability rather than evidence."], "pending": ["Resolve D-004."] }
+    {
+      "id": "M4.5",
+      "name": "Grants (Cedar), if it is still the answer",
+      "status": "planned",
+      "objective": "Express allow/deny in something richer than a list, once there is a subject to talk about.",
+      "deliverables": [],
+      "guarantees": [],
+      "limitations": [],
+      "pending": [
+        "Deferred until M4 gives it a subject."
+      ]
+    },
+    {
+      "id": "M5",
+      "name": "Budgets",
+      "status": "planned",
+      "objective": "Per session, decremented at authorization time.",
+      "deliverables": [],
+      "guarantees": [],
+      "limitations": [],
+      "pending": [
+        "Needs agent identity."
+      ]
+    },
+    {
+      "id": "M6",
+      "name": "Human approval",
+      "status": "planned",
+      "objective": "Out-of-band prompt showing real parameters.",
+      "deliverables": [],
+      "guarantees": [],
+      "limitations": [],
+      "pending": [
+        "Needs agent identity."
+      ]
+    },
+    {
+      "id": "M7",
+      "name": "Journal",
+      "status": "done",
+      "objective": "Append-only, hash-chained, with the inputs that produced each decision.",
+      "deliverables": [
+        "Delivered early as M1.5."
+      ],
+      "guarantees": [
+        "journal-append-only"
+      ],
+      "limitations": [
+        "The 'inputs that produced each decision' part folds into M4."
+      ],
+      "pending": []
+    },
+    {
+      "id": "M8",
+      "name": "Dashboard",
+      "status": "blocked",
+      "objective": "A hosted view of the journal.",
+      "deliverables": [],
+      "guarantees": [],
+      "limitations": [
+        "Blocked on the journal being unkeyed (F-003): syncing it exports a liability rather than evidence."
+      ],
+      "pending": [
+        "Resolve D-004."
+      ]
+    }
   ]
 }
