@@ -10,7 +10,8 @@
     "start": "next start",
     "lint": "next lint",
     "test": "node --test scripts/generate.test.mjs",
-    "scan": "node scripts/scan-output.mjs"
+    "scan": "node scripts/scan-output.mjs",
+    "preview": "npm run build && node scripts/preview.mjs"
   },
   "dependencies": {
     "next": "15.5.4",

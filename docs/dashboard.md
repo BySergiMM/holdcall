@@ -97,12 +97,40 @@ indistinguishable from marketing.
 To change a claim, edit `data/state.json` and run `npm run check`. If it refuses,
 the claim is wrong or the evidence moved — fix the claim, not the check.
 
+## Looking at it
+
+    cd dashboard
+    npm run preview        # builds, then serves on http://127.0.0.1:4321
+
+`preview` serves the real production build with the same headers `vercel.json`
+sets, CSP included — which is the setting most likely to break the page in
+production and not at all in `next dev`. It binds to 127.0.0.1 only, refuses
+any path resolving outside `out/`, and needs no network.
+
 ## Deployment
 
-Not currently deployed. Two things need deciding first, and both are on the page
-under "Open questions":
+Prepared, not deployed.
 
-- The repository is private and this page enumerates Nim's known weaknesses and
-  attack paths. Publishing it to an unauthenticated URL publishes those. Vercel
-  Authentication or password protection would keep it to the team (D-003).
-- Nothing should reconnect this repository to Vercel automatically.
+`vercel.json` sets `github.enabled: false`, so even if the repository is ever
+linked to the project again, a push will not deploy on its own. It also sends
+`X-Robots-Tag: noindex, nofollow, noarchive, nosnippet`, a strict
+`Content-Security-Policy` (`default-src 'none'`, no external origins — the page
+loads nothing off-host), `X-Frame-Options: DENY` and `Referrer-Policy:
+no-referrer`.
+
+Checked read-only on 2026-08-12: the Vercel project `nim` already has **Vercel
+Authentication** enabled for `all_except_custom_domains`, and no custom domain
+is attached. A deployment would therefore be readable only by members of the
+Vercel team, not by the public.
+
+Two things to know before that changes:
+
+- **A custom domain bypasses it.** The protection is scoped
+  `all_except_custom_domains`. Attaching a domain would make the page public
+  unless Trusted IPs or password protection is enabled first.
+- **Nothing reconnects GitHub to Vercel automatically**, and nothing should.
+  Deployment is a deliberate act: `vercel deploy --prebuilt` from `dashboard/`,
+  or the Vercel dashboard.
+
+Whether to deploy at all is D-003 on the page, and is not a decision this
+repository should take by itself.
