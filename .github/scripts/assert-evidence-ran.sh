@@ -3,8 +3,8 @@
 # Every test the dashboard cites as evidence for a verified guarantee or a
 # defended attack must actually have RUN on this platform -- not been skipped.
 #
-# This exists because of how much of this suite can quietly not run. Fourteen
-# call sites reach for t.Skip, and they guard the load-bearing ones: the single
+# This exists because of how much of this suite can quietly not run. A dozen
+# or so call sites reach for t.Skip, and they guard the load-bearing ones: the single
 # test proving peer identity survives a path swap skips if the attacker process
 # never connects, the impostor and non-Nim-process tests skip without python3,
 # the agent derivation test skips if it cannot read its own parent. `go test`

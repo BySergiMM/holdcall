@@ -20,9 +20,9 @@
     "name": "Nim",
     "tagline": "A local process between an MCP client and the MCP servers it uses.",
     "currentMilestone": "M4",
-    "currentPhase": "Agent identity — enrolment and derivation landed; policy not started",
+    "currentPhase": "Agent identity and policy in SQLite landed; allow rules are M4.5",
     "overallStatus": "in_progress",
-    "statusNote": "Nim decides, blocks and records. It has no policy model beyond a list of tool names, and agent identity is recorded but not yet acted on.",
+    "statusNote": "Nim decides per (agent, connector, tool), blocks and records. The rules live in SQLite, are changed through the daemon, and every change is an entry in the chain. Rules only deny: a tool no rule names is allowed, and there is no allow rule until M4.5.",
     "provenance": "declared"
   },
   "ciSnapshot": {
@@ -111,18 +111,21 @@
     "layers": [
       {
         "name": "Agent identity",
-        "state": "partial",
-        "detail": "Enrolled and derived from the kernel, recorded on session.start. Nothing decides on it yet.",
+        "state": "implemented",
+        "detail": "Enrolled and derived from the kernel, recorded on session.start, and a rule can be scoped to it. Two windows of one program are the same agent.",
         "guarantees": [
-          "agent-not-claimable"
+          "agent-not-claimable",
+          "policy-per-agent"
         ]
       },
       {
         "name": "Policy",
-        "state": "partial",
-        "detail": "A deny list of exact tool names, read from config.toml. Not per-agent, and anything able to write that file can empty it.",
+        "state": "implemented",
+        "detail": "Deny rules in SQLite, per agent and per connector, changed only through the daemon and recorded in the chain. Deny-only: no allow rules, no precedence, until M4.5.",
         "guarantees": [
-          "enforcement-fail-closed"
+          "enforcement-fail-closed",
+          "policy-in-sqlite",
+          "policy-per-agent"
         ]
       },
       {
@@ -156,7 +159,7 @@
       {
         "name": "SQLite",
         "state": "implemented",
-        "detail": "Source of truth for the journal, connectors and agents. The only thing an authorization decision should read.",
+        "detail": "Source of truth for the journal, connectors, agents and rules. The only thing an authorization decision reads.",
         "guarantees": []
       }
     ]
@@ -166,7 +169,7 @@
       "id": "peer-identity-both-ways",
       "title": "Both ends of the daemon socket verify each other",
       "status": "verified",
-      "statement": "A process that is not this binary cannot speak on the daemon socket, in either direction. The daemon checks its callers and the relay checks whatever is listening before sending a byte.",
+      "statement": "A process that is not this binary cannot speak on the daemon socket, in either direction. The daemon checks its callers; the relay and every management command check whatever is listening before sending a byte.",
       "notGuaranteed": "It answers \"is this Nim\", not \"is this a relay the operator meant to run\". Anything able to execute the binary passes it.",
       "implementation": [
         "engine/internal/peer/peer.go",
@@ -177,14 +180,15 @@
         "TestANonNimProcessCannotWriteToTheJournal",
         "TestANonNimProcessCannotObtainADecision",
         "TestAnImpostorOnTheSocketCannotChooseWhatIsSpawned",
-        "TestAnImpostorLearnsNothingFromTheAttempt"
+        "TestAnImpostorLearnsNothingFromTheAttempt",
+        "TestDialDaemonRefusesAnImpostor"
       ],
       "platforms": {
         "darwin": "verified",
         "linux": "verified",
         "windows": "unsupported"
       },
-      "lastVerified": "2026-08-11",
+      "lastVerified": "2026-09-14",
       "provenance": "declared"
     },
     {
@@ -279,7 +283,7 @@
       "platforms": {
         "darwin": "verified",
         "linux": "verified",
-        "windows": "verified"
+        "windows": "unverified"
       },
       "lastVerified": "2026-08-11",
       "provenance": "declared"
@@ -300,7 +304,7 @@
       "platforms": {
         "darwin": "verified",
         "linux": "verified",
-        "windows": "verified"
+        "windows": "unverified"
       },
       "lastVerified": "2026-08-11",
       "provenance": "declared"
@@ -322,7 +326,7 @@
       "platforms": {
         "darwin": "verified",
         "linux": "verified",
-        "windows": "verified"
+        "windows": "unverified"
       },
       "lastVerified": "2026-08-11",
       "provenance": "declared"
@@ -345,7 +349,7 @@
       "platforms": {
         "darwin": "verified",
         "linux": "verified",
-        "windows": "verified"
+        "windows": "unverified"
       },
       "lastVerified": "2026-08-11",
       "provenance": "declared"
@@ -354,7 +358,7 @@
       "id": "journal-schema-versioning",
       "title": "A journal spanning schema versions still verifies",
       "status": "verified",
-      "statement": "Verification dispatches on the version each entry stored, so entries written before agent existed keep verifying and a mixed chain checks out end to end.",
+      "statement": "Verification dispatches on the version each entry stored, so entries written before agent existed keep verifying and a mixed chain checks out end to end. A table an earlier build created is rebuilt to the current definition on open, every row copied verbatim, so the chain that comes out is the chain that went in.",
       "notGuaranteed": "An entry claiming a version this build does not know is refused rather than checked. That is intended, but it means a downgrade cannot read a newer journal.",
       "implementation": [
         "engine/internal/journal/canonical.go",
@@ -364,14 +368,16 @@
         "TestAV1EntryStillVerifiesAfterV2Exists",
         "TestAChainSpanningBothVersionsVerifies",
         "TestAnUnknownSchemaVersionIsRefused",
-        "TestTheTwoEncodingsAreDistinct"
+        "TestTheTwoEncodingsAreDistinct",
+        "TestAJournalTableFromAnEarlierBuildIsRebuiltWithoutChangingTheChain",
+        "TestOpeningACurrentJournalRecreatesNothing"
       ],
       "platforms": {
         "darwin": "verified",
         "linux": "verified",
-        "windows": "verified"
+        "windows": "unverified"
       },
-      "lastVerified": "2026-08-11",
+      "lastVerified": "2026-09-14",
       "provenance": "declared"
     },
     {
@@ -379,7 +385,7 @@
       "title": "An agent identity cannot be claimed by the agent",
       "status": "verified",
       "statement": "The daemon derives the agent from the kernel: socket peer, its parent, the file that parent executes. There is no agent field on the wire.",
-      "notGuaranteed": "Nothing decides on it yet. Two windows of one program are the same agent. Enrolment is as privileged as running Nim.",
+      "notGuaranteed": "Two windows of one program are the same agent. Enrolment is as privileged as running Nim, and an enrolment change leaves no journal entry (F-018) although the rules scoped to it do.",
       "implementation": [
         "engine/internal/daemon/derive.go",
         "engine/internal/daemon/agent.go"
@@ -395,28 +401,30 @@
         "linux": "verified",
         "windows": "unsupported"
       },
-      "lastVerified": "2026-08-11",
+      "lastVerified": "2026-09-14",
       "provenance": "declared"
     },
     {
       "id": "session-ownership",
       "title": "A connection may only speak for sessions it opened",
       "status": "verified",
-      "statement": "Peer identity cannot tell one run of Nim from another; session ownership stops one connection appending entries under a session another opened.",
+      "statement": "Peer identity cannot tell one run of Nim from another; session ownership stops one connection appending entries under a session another opened. A session id names one session: a start under an id that is live on any connection, or that the journal already holds, is refused and the connection closed.",
       "notGuaranteed": "Anything running this binary can still open its own session and report whatever it likes about it.",
       "implementation": [
         "engine/internal/daemon/daemon.go"
       ],
       "tests": [
         "TestAConnectionCannotSpeakForAnotherConnectionsSession",
-        "TestAConnectionsOwnSessionIsServed"
+        "TestAConnectionsOwnSessionIsServed",
+        "TestASessionCannotBeStartedTwice",
+        "TestAnUnnumberedCallIsRefused"
       ],
       "platforms": {
         "darwin": "verified",
         "linux": "verified",
-        "windows": "verified"
+        "windows": "unverified"
       },
-      "lastVerified": "2026-08-11",
+      "lastVerified": "2026-09-14",
       "provenance": "declared"
     },
     {
@@ -439,6 +447,86 @@
         "windows": "unverified"
       },
       "lastVerified": "2026-08-08",
+      "provenance": "declared"
+    },
+    {
+      "id": "policy-in-sqlite",
+      "title": "Policy lives in SQLite and every change is in the chain",
+      "status": "verified",
+      "statement": "A rule is added or removed through the daemon, over the peer-verified socket, in one transaction with the rule.add or rule.remove entry recording it. The chain never says a rule exists that does not, and no rule exists the chain does not know about. config.toml carries no policy, and a file that still does is refused rather than read past.",
+      "notGuaranteed": "Anything able to run the binary as this user can add or remove a rule, exactly as it can enrol an agent; the entry is what makes that visible, not what prevents it. Rules only deny.",
+      "implementation": [
+        "engine/internal/journal/rules.go",
+        "engine/internal/daemon/policy.go",
+        "engine/internal/config/config.go"
+      ],
+      "tests": [
+        "TestARuleAndItsEntryAreOneChange",
+        "TestAPolicyChangeThatCannotBeRecordedIsNotMade",
+        "TestAlteringAPolicyEntryBreaksTheChain",
+        "TestAPolicyChangeTakesEffectAndIsRecorded",
+        "TestAConfigWithAPolicySectionIsRefused",
+        "TestAStaleDenyListInConfigIsRefused"
+      ],
+      "platforms": {
+        "darwin": "verified",
+        "linux": "verified",
+        "windows": "unverified"
+      },
+      "lastVerified": "2026-09-14",
+      "provenance": "declared"
+    },
+    {
+      "id": "policy-per-agent",
+      "title": "Two agents against one connector receive different verdicts",
+      "status": "verified",
+      "statement": "A decision is (agent, connector, tool). A rule scoped to an enrolled agent applies to sessions the daemon derived as that agent and to no other; a rule scoped to a connector applies to sessions started for it. The record distinguishes the agents on their session.start entries. Proven with two real client programs spawning real relays, not only in-process.",
+      "notGuaranteed": "A session no enrolment matched meets only the rules that name no agent (D-002). Rules only deny, so that is the same ceiling every session had before agents existed -- and it means an allow-list per agent cannot be expressed yet.",
+      "implementation": [
+        "engine/internal/daemon/daemon.go",
+        "engine/internal/journal/rules.go",
+        "engine/internal/daemon/derive.go"
+      ],
+      "tests": [
+        "TestTwoAgentsAgainstOneConnectorReceiveDifferentVerdicts",
+        "TestTwoRealAgentsAgainstOneConnectorReceiveDifferentVerdicts",
+        "TestRuleScopes",
+        "TestARuleScopedToAConnectorStopsAtIt",
+        "TestRulesDecide"
+      ],
+      "platforms": {
+        "darwin": "verified",
+        "linux": "verified",
+        "windows": "unsupported"
+      },
+      "lastVerified": "2026-09-14",
+      "provenance": "declared"
+    },
+    {
+      "id": "relay-reads-one-message",
+      "title": "A tools/call travels only if Nim read it unambiguously",
+      "status": "verified",
+      "statement": "Objects are read by the exact bytes of each key, an object naming a key twice is refused, and a tools/call whose params or name cannot be read as one string is refused before the daemon is asked. What the daemon decides on and the journal records is the name the server will act on.",
+      "notGuaranteed": "Keys inside params.arguments are the tool's business and are digested, never interpreted. A frame refused for a repeated key is not answered, because which id to answer under is the same question. Parser disagreements other than duplicate keys and case-variant keys -- NaN, Infinity -- were already refused as malformed.",
+      "implementation": [
+        "engine/internal/mcp/mcp.go",
+        "engine/internal/shim/shim.go"
+      ],
+      "tests": [
+        "TestAnObjectNamingAKeyTwiceIsRefusedNotGuessed",
+        "TestKeysAreMatchedByExactBytes",
+        "TestACallWithoutOneReadableNameIsRefused",
+        "TestABatchElementNamingAKeyTwiceIsUnreadable",
+        "TestAToolCallHiddenBehindARepeatedKeyIsRefused",
+        "TestACaseVariantKeyCannotRenameTheCall",
+        "TestACallWithoutAReadableNameIsRefusedBeforeAnyDecision"
+      ],
+      "platforms": {
+        "darwin": "verified",
+        "linux": "verified",
+        "windows": "unverified"
+      },
+      "lastVerified": "2026-09-14",
       "provenance": "declared"
     }
   ],
@@ -493,10 +581,11 @@
       "name": "Report calls under a session another connection opened",
       "category": "journal",
       "status": "pass",
-      "wasLive": false,
-      "evidence": "Refused, and the connection is closed rather than merely erroring, because a caller probing for sessions it does not own is not making an honest mistake. Peer identity cannot separate two runs of Nim, so this is the check that stops one relay appending entries under another's session.",
+      "wasLive": true,
+      "evidence": "Refused, and the connection is closed rather than merely erroring. Found by the 2026-09-14 audit: the check exempted session.start itself, so a second connection could re-announce a live session's id and then report calls, outcomes and an end into it; reproduced against the daemon in a scratch copy. A session id now names one session, daemon-wide and for all time -- live on any connection, or ever recorded, and a second start is refused.",
       "tests": [
-        "TestAConnectionCannotSpeakForAnotherConnectionsSession"
+        "TestAConnectionCannotSpeakForAnotherConnectionsSession",
+        "TestASessionCannotBeStartedTwice"
       ]
     },
     {
@@ -505,10 +594,11 @@
       "category": "identity",
       "status": "pass",
       "wasLive": true,
-      "evidence": "As the daemon, a python script had the relay spawn a command of its choosing, allowed a denied call, and harvested tool names. Introduced by the merge; fixed by verifying both ends.",
+      "evidence": "As the daemon, a python script had the relay spawn a command of its choosing, allowed a denied call, and harvested tool names. Introduced by the merge; fixed by verifying both ends. The 2026-09-14 audit found the management commands still trusted the socket: nim connector set would have written the plaintext secret to an impostor. Every command now dials through one verified path.",
       "tests": [
         "TestAnImpostorOnTheSocketCannotChooseWhatIsSpawned",
-        "TestAnImpostorCannotDecideCalls"
+        "TestAnImpostorCannotDecideCalls",
+        "TestDialDaemonRefusesAnImpostor"
       ]
     },
     {
@@ -546,14 +636,14 @@
     },
     {
       "id": "deny-list-bypass",
-      "name": "Bypass the deny list",
+      "name": "Bypass the rules",
       "category": "enforcement",
       "status": "pass",
       "wasLive": false,
-      "evidence": "Denied call never reaches the connector.",
+      "evidence": "A call a rule names never reaches the connector; the rules are read from SQLite at decision time and exact names only. The list used to live in config.toml, which is F-004.",
       "tests": [
         "TestARefusedCallNeverReachesTheConnector",
-        "TestTheDenyListDecides"
+        "TestRulesDecide"
       ]
     },
     {
@@ -573,7 +663,7 @@
       "category": "enforcement",
       "status": "pass",
       "wasLive": false,
-      "evidence": "A frame Go cannot parse is not forwarded, and neither is a frame carrying more than one message. The rule is that anything the relay cannot fully understand does not reach the connector -- a parser disagreement must not become a way to move a tools/call past the decision point.",
+      "evidence": "A frame Go cannot parse is not forwarded, and neither is a frame carrying more than one message. The rule is that anything the relay cannot fully understand does not reach the connector -- a parser disagreement must not become a way to move a tools/call past the decision point. That rule had a hole until 2026-09-14: see the duplicate-key row.",
       "tests": [
         "TestUnreadableFramesAreNotRelayed",
         "TestMoreThanOneMessageInAFrameIsNotRelayed"
@@ -658,7 +748,7 @@
       "category": "identity",
       "status": "fail",
       "wasLive": false,
-      "evidence": "Anything that can run the nim binary as this user can re-enrol any name against any executable. Harmless today because nothing decides on agents; becomes an escalation the moment grants exist.",
+      "evidence": "Anything that can run the nim binary as this user can re-enrol any name against any executable, and now that rules are scoped to enrolments, that moves the name's rules to the new program. A rule change is journaled; an enrolment change is not (F-018). Not a bypass of the same-user threat model, which already grants this, but the one place a policy input changes without a chain entry.",
       "tests": []
     },
     {
@@ -683,12 +773,13 @@
       "id": "orphan-connector",
       "name": "Leave a connector running after the relay dies",
       "category": "lifecycle",
-      "status": "pass",
+      "status": "partial",
       "wasLive": false,
-      "evidence": "The downstream is the relay's child and dies with it.",
+      "evidence": "The downstream is the relay's child. When the relay exits or is asked to stop (SIGTERM, SIGINT) it stops the connector: closes its stdin, waits, asks it to terminate, then kills it. Found by the 2026-09-14 audit: the signal path used to exit without touching the child, so a connector that ignored stdin outlived the relay with whatever credential it held. Still open: a relay killed outright (SIGKILL) runs nothing, and then only a connector that reads its stdin notices.",
       "tests": [
         "TestTheDownstreamDiesWithTheRelay",
-        "TestAConnectorReadingStdinDiesWithTheRelay"
+        "TestAConnectorReadingStdinDiesWithTheRelay",
+        "TestAConnectorIgnoringStdinIsStoppedWithTheRelay"
       ]
     },
     {
@@ -798,11 +889,13 @@
       "id": "unknown-agent",
       "name": "Act as an agent nobody enrolled",
       "category": "policy",
-      "status": "partial",
+      "status": "pass",
       "wasLive": false,
-      "evidence": "The recording behaviour is tested: an underivable agent is stored as absent, not refused. What an unknown agent may DO is undecided — that is M4's open question (D-002), not an answer inherited from here.",
+      "evidence": "Bound by the rules that name no agent, and nothing else: D-002, resolved 2026-09-14 in docs/decisions/0002. Rules only deny, so an unenrolled program has exactly the ceiling every session had before agents existed; nobody gains by avoiding enrolment. The answer has to be given again for allow rules, which is M4.5's question.",
       "tests": [
-        "TestAnUndeterminedAgentIsRecordedAsAbsentNotRefused"
+        "TestAnUndeterminedAgentIsRecordedAsAbsentNotRefused",
+        "TestTwoAgentsAgainstOneConnectorReceiveDifferentVerdicts",
+        "TestRuleScopes"
       ]
     },
     {
@@ -823,7 +916,7 @@
       "category": "policy",
       "status": "partial",
       "wasLive": false,
-      "evidence": "Allowed. The deny list is a deny list, so anything not on it passes — deliberate for now, and the reason a real policy model is the next milestone.",
+      "evidence": "Allowed. Rules only deny, so anything no rule names passes -- deliberate, and the reason an allow model (M4.5) is still ahead. What changed in M4 is that a rule can now be scoped to an agent and a connector, and lives where a change is recorded.",
       "tests": []
     },
     {
@@ -872,9 +965,171 @@
       "wasLive": false,
       "evidence": "Audited from outside on 2026-08-12 against all three intended hostnames. Refused: .env and .env.local, .git, .vercel/project.json, builds.json and config.json, package.json, vercel.json, next.config.mjs, data/state.json, generate.mjs, nim.db, .nim/, engine sources, .DS_Store, node_modules -- all 404. No source maps exist and no chunk references one. Path traversal returns 400 or a generic edge error. POST/PUT/DELETE/PATCH/TRACE all 405. /_src redirects to Vercel's source viewer, which demands a login. No secret shape, token, JWT or local path appears in any served byte, and no journal data: no chain hash, prev_hash, chain_seq, machine_id or session id. Partial rather than pass because sixteen historical deployment URLs and one stale branch alias also answer publicly -- see F-012 -- serving Vercel failure pages and an abandoned placeholder rather than this dashboard.",
       "tests": []
+    },
+    {
+      "id": "duplicate-key-smuggling",
+      "name": "Smuggle a tools/call behind a repeated or case-variant key",
+      "category": "enforcement",
+      "status": "pass",
+      "wasLive": true,
+      "evidence": "Reproduced against the real relay on 2026-09-14, before the fix: `\"method\":5,\"method\":\"tools/call\"` and `\"method\":\"tools/call\",\"Method\":\"ping\"` both reached the connector with no decision, no journal entry and no anomaly, because Go's typed decoder matches keys case-insensitively, lets the last match win, and carries on past a member of the wrong type -- while every mainstream server reads tools/call. Objects are now read by exact key; a repeated key is refused as an anomaly, and a case-variant key is simply a different key, to Nim as to the server.",
+      "tests": [
+        "TestAToolCallHiddenBehindARepeatedKeyIsRefused",
+        "TestAnObjectNamingAKeyTwiceIsRefusedNotGuessed",
+        "TestABatchElementNamingAKeyTwiceIsUnreadable"
+      ]
+    },
+    {
+      "id": "tool-rename",
+      "name": "Name one tool to the daemon and another to the server",
+      "category": "enforcement",
+      "status": "pass",
+      "wasLive": true,
+      "evidence": "Same root cause, worse consequence: `\"name\":\"delete_repository\",\"Name\":\"list_repos\"` had the daemon decide on list_repos, the journal record it, and the server run delete_repository. A tools/call is now decided on the exact-key name or refused before the daemon is asked; a call with no readable name is refused too, where it used to be decided as tool \"\" and allowed.",
+      "tests": [
+        "TestACaseVariantKeyCannotRenameTheCall",
+        "TestKeysAreMatchedByExactBytes",
+        "TestACallWithoutAReadableNameIsRefusedBeforeAnyDecision"
+      ]
+    },
+    {
+      "id": "policy-file-tamper",
+      "name": "Change the rules by editing config.toml",
+      "category": "policy",
+      "status": "pass",
+      "wasLive": false,
+      "evidence": "Nothing an authorization decision reads is in config.toml any more. A file that still carries a [policy] section is refused by every command, with the way forward in the message, rather than read past -- a deny list an operator believes is enforced and is not would be the worst way for the move to go unnoticed. Unknown keys are refused for the same reason: [polciy] used to deny nothing, silently.",
+      "tests": [
+        "TestAConfigWithAPolicySectionIsRefused",
+        "TestAStaleDenyListInConfigIsRefused",
+        "TestUnknownKeysAreRefused"
+      ]
+    },
+    {
+      "id": "policy-change-unrecorded",
+      "name": "Change the rules without leaving a journal entry",
+      "category": "policy",
+      "status": "pass",
+      "wasLive": false,
+      "evidence": "A rule and its rule.add or rule.remove entry are one SQLite transaction: a trigger that refuses the entry leaves no rule, and one that refuses the rule leaves no entry. The entry is hashed into the chain like a call, so editing it afterwards breaks verification. What remains outside the chain is the enrolment a rule is scoped to (F-018).",
+      "tests": [
+        "TestARuleAndItsEntryAreOneChange",
+        "TestAPolicyChangeThatCannotBeRecordedIsNotMade",
+        "TestAlteringAPolicyEntryBreaksTheChain"
+      ]
+    },
+    {
+      "id": "cli-impostor",
+      "name": "Bind the socket first and receive the secret from nim connector set",
+      "category": "credential",
+      "status": "pass",
+      "wasLive": false,
+      "evidence": "Found by reading, not by running: the relay verified the daemon before sending a byte, but nim connector set, nim agent add and their siblings dialled the socket path and trusted whatever answered -- and connector set carries the plaintext secret. Every management command now goes through the one dial that verifies the peer, and the CLI refuses to talk to a process that is not Nim.",
+      "tests": [
+        "TestDialDaemonRefusesAnImpostor"
+      ]
+    },
+    {
+      "id": "console-rebinding",
+      "name": "Read the console from another site through DNS rebinding",
+      "category": "console",
+      "status": "pass",
+      "wasLive": false,
+      "evidence": "nim console binds loopback, but a bind address is not a name: a page on any site can have its own hostname resolve to 127.0.0.1 and then read /api/snapshot, /api/events and every session as if they were its own origin. The console now answers only to a loopback Host -- localhost, 127.0.0.1, ::1 -- and refuses any other name with 421 before a route runs.",
+      "tests": [
+        "TestTheConsoleAnswersOnlyToALoopbackName"
+      ]
     }
   ],
   "findings": [
+    {
+      "id": "F-013",
+      "severity": "high",
+      "title": "A repeated or case-variant JSON key smuggled a tools/call past the decision",
+      "problem": "Go's typed JSON decoder matches keys case-insensitively, lets the last of several matches win, and continues past a member of the wrong type. A frame with `\"method\":5,\"method\":\"tools/call\"` decoded to an empty envelope and was relayed; one with `\"Method\":\"ping\"` beside `\"method\":\"tools/call\"` read as ping; `\"Name\"` beside `\"name\"` renamed the tool the daemon decided on.",
+      "impact": "A tools/call reached the connector with no decision, no journal entry and no anomaly -- the one-direction guarantee did not hold -- and in the rename case the journal recorded a harmless tool while the server ran a denied one.",
+      "evidence": "Reproduced on 2026-09-14 against the unmodified relay: both frames reached the connector, the daemon was asked about 0 calls. Fixed by reading objects by exact key (engine/internal/mcp/mcp.go objectFields) and refusing repeated keys and unreadable calls; seven regression tests.",
+      "status": "fixed",
+      "nextAction": "None. docs/journal-format.md now states the duplicate-key rule the relay applies, and that keys inside params.arguments are not interpreted.",
+      "provenance": "declared"
+    },
+    {
+      "id": "F-014",
+      "severity": "medium",
+      "title": "A second connection could start a session under another connection's id",
+      "problem": "The session-ownership check exempted session.start, and the set of open sessions was per connection, so a second connection could announce a start under a live id and then report calls, outcomes and an end into the first connection's session.",
+      "impact": "On a platform without peer verification, or after any regression of it, one relay could write into another's story. Security.md claimed session ownership held independently of peer identity; it did not.",
+      "evidence": "Found and reproduced in a scratch copy by the 2026-09-14 audit. Fixed: a daemon-wide registry refuses a start for an id that is live on any connection or that the journal has ever recorded, and closes the connection.",
+      "status": "fixed",
+      "nextAction": "None beyond the registry. Kept on the page because 'session ownership holds on its own' was a claim the page made and the code did not back until this.",
+      "provenance": "declared"
+    },
+    {
+      "id": "F-015",
+      "severity": "high",
+      "title": "nim connector set trusted whatever was bound to the socket",
+      "problem": "The relay verified the daemon's executable identity before sending it a byte; the management commands dialled the socket path and did not. nim connector set carries the plaintext secret.",
+      "impact": "A process that bound the socket path first -- the impostor the relay already refused -- would have been handed every secret the operator registered from then on.",
+      "evidence": "Found by reading engine/cmd/nim/connector.go on 2026-09-14; not reproduced live. Fixed: one verified dial (shim.DialDaemon) serves every command, and a test drives it against an impostor.",
+      "status": "fixed",
+      "nextAction": "None. Kept because it is the shape of mistake to look for next time a second caller of the socket appears: every path that talks to the daemon must dial through the one that verifies it.",
+      "provenance": "declared"
+    },
+    {
+      "id": "F-016",
+      "severity": "low",
+      "title": "The console answered to any Host header",
+      "problem": "nim console bound loopback but checked only the request method, so a page on another site could rebind its own name to 127.0.0.1 and read the record from the operator's browser as its own origin.",
+      "impact": "Tool names, connectors, session ids, digests and the chain head readable by a web page the operator happened to visit while the console ran.",
+      "evidence": "Found by the 2026-09-14 audit and confirmed by two independent verifiers. Fixed: requests whose Host is not a loopback name are refused with 421.",
+      "status": "fixed",
+      "nextAction": "None. The Host check is the standing guard; a future console that binds anything other than loopback has to revisit it.",
+      "provenance": "declared"
+    },
+    {
+      "id": "F-017",
+      "severity": "medium",
+      "title": "Every open dropped and recreated the journal's views under a write lock",
+      "problem": "syncViews compared the stored view definition with the statement as written, but SQLite stores CREATE statements with the first keywords upper-cased. The comparison never matched, so the 'only when drifted' path was the only path.",
+      "impact": "Two opens of one file always raced on the views, which is how the concurrent-open collision (TestConcurrentOpensDoNotCollideOnViews) was reachable in the first place, and a read-only command took a write lock on every start.",
+      "evidence": "Reproduced on 2026-09-14: both views reported drifted immediately after creation. Fixed by comparing against the stored form; a test holds the steady state to a read.",
+      "status": "fixed",
+      "nextAction": "None. The stored-form comparison is tested; a change to a view's DDL is now a one-time recreate rather than a recreate on every open.",
+      "provenance": "declared"
+    },
+    {
+      "id": "F-018",
+      "severity": "medium",
+      "title": "Enrolment changes leave no journal entry",
+      "problem": "A rule is journaled when it is added or removed; the enrolment it is scoped to is not. nim agent add can move a name -- and every rule scoped to it -- to a different executable with nothing in the chain saying so.",
+      "impact": "An audit of the rules is possible; an audit of who the rules applied to, over time, is not. Same-user threat model, so not a bypass, but the one policy input that changes silently.",
+      "evidence": "engine/internal/daemon/agent.go writes nim_agents outside the chain, deliberately, from before rules existed. Noted while closing F-004.",
+      "status": "open",
+      "nextAction": "Record agent.add and agent.remove as chain entries, the way rule.add and rule.remove are, carrying the enrolled path and the resolved identity.",
+      "provenance": "declared"
+    },
+    {
+      "id": "F-019",
+      "severity": "low",
+      "title": "nim log --json stopped after one page and looped on -n 0",
+      "problem": "The stream compared each page against the raw -n value while the journal caps a read at 1000, so -n above the cap ended after one page with exit status 0, and -n 0 never ended.",
+      "impact": "An export of a 3000-entry journal came back with 1000 entries and no message.",
+      "evidence": "Found by the 2026-09-14 audit and confirmed. Fixed: the page size is clamped to what the journal returns and -n must be positive.",
+      "status": "fixed",
+      "nextAction": "None. The page size is clamped where the read is, and -n must be positive; an export now ends when the journal does.",
+      "provenance": "declared"
+    },
+    {
+      "id": "F-020",
+      "severity": "medium",
+      "title": "A connector could outlive a relay that was asked to stop",
+      "problem": "On SIGTERM or SIGINT the relay flushed the journal and exited without touching its child. A connector that does not read stdin -- mid-call, or on its own event loop -- kept running with whatever credential it had been given, after the journal had recorded the session as over.",
+      "impact": "The orphan-connector row claimed 'dies with it' on the strength of tests that never exercised the signal path.",
+      "evidence": "Found by the concurrency finder on 2026-09-14. Fixed: the relay stops its child on every exit path -- stdin closed, then SIGTERM, then kill -- and a test sends SIGTERM to a relay whose connector ignores stdin. SIGKILL to the relay remains what it was, and the row says so.",
+      "status": "fixed",
+      "nextAction": "None for SIGTERM and SIGINT. SIGKILL to the relay remains what it was and the orphan-connector row says so; closing it needs the daemon to own the connector, which is process inversion.",
+      "provenance": "declared"
+    },
     {
       "id": "F-012",
       "severity": "low",
@@ -936,9 +1191,9 @@
       "title": "Policy lives in config.toml",
       "problem": "The deny list is read from a file, breaking the standing decision that SQLite is the only thing an authorization decision reads.",
       "impact": "Anything able to write that file can empty the policy, and the change leaves no journal entry.",
-      "evidence": "engine/internal/config/config.go documents it as deliberate, temporary scaffolding.",
-      "status": "open",
-      "nextAction": "Move policy into SQLite and journal every policy change. This is M4.",
+      "evidence": "Fixed 2026-09-14: rules live in nim_rules, are changed with nim policy through the peer-verified socket, and every change is a rule.add or rule.remove entry in the chain. config.toml with a [policy] section is refused by every command, so the move cannot go unnoticed.",
+      "status": "fixed",
+      "nextAction": "None. Kept because it is the record of what config.toml used to hold, and of why nothing an authorization decision reads may go back there.",
       "provenance": "declared"
     },
     {
@@ -957,10 +1212,10 @@
       "severity": "medium",
       "title": "Enrolment is as privileged as running Nim",
       "problem": "Anything that can execute the binary as this user can enrol an agent or replace an existing enrolment.",
-      "impact": "Harmless today because nothing decides on agents. It becomes an escalation the moment grants exist.",
-      "evidence": "engine/internal/daemon/agent.go says so in its own comment.",
+      "impact": "Now that rules are scoped to enrolments, re-enrolling a name against another executable moves that name's rules to the new program. The rules are journaled; the enrolment change is not (F-018).",
+      "evidence": "engine/internal/daemon/agent.go says so in its own comment; docs/decisions/0002 states what an enrolment is worth.",
       "status": "open",
-      "nextAction": "M4 must state what an enrolment is worth before grants are attached to one.",
+      "nextAction": "Journal enrolment changes (F-018). Beyond that it is a property of running everything as one OS user, and needs a second principal to close.",
       "provenance": "declared"
     },
     {
@@ -1022,9 +1277,10 @@
       "id": "D-002",
       "title": "What may an unknown agent do?",
       "question": "Once grants exist, is an unenrolled spawner denied, or does it fall back to the global policy?",
-      "status": "open",
-      "resolution": "Undecided. If 'not enrolled' were more permissive, enrolling would be a downgrade and an attacker would simply avoid it.",
-      "provenance": "declared"
+      "status": "resolved",
+      "resolution": "A session no enrolment matched is bound by the rules that name no agent, and by nothing else. Rules only deny, so enrolment can only take capabilities away: an unenrolled program has exactly the ceiling every session had before agents existed, and nobody gains by avoiding enrolment. docs/decisions/0002 is the argument. It has to be answered again for allow rules, which are M4.5.",
+      "provenance": "declared",
+      "decidedOn": "2026-09-14"
     },
     {
       "id": "D-003",
@@ -1157,27 +1413,29 @@
     {
       "id": "M4",
       "name": "Agent identity + policy in SQLite",
-      "status": "in_progress",
+      "status": "done",
       "objective": "Give a decision a subject, and move policy where an authorization input belongs.",
       "deliverables": [
-        "peer primitives (done)",
-        "nim_agents + nim agent CLI (done)",
-        "daemon-side derivation + journal (done)",
-        "nim_grants + evaluation (not started)",
-        "policy out of config.toml (not started)"
+        "peer primitives",
+        "nim_agents + nim agent CLI",
+        "daemon-side derivation, recorded on session.start",
+        "nim_rules + nim policy CLI, rules scoped per agent and connector",
+        "every rule change a chain entry",
+        "policy out of config.toml, and a stale section refused",
+        "two real agents against one connector receive different verdicts"
       ],
       "guarantees": [
         "agent-not-claimable",
-        "journal-schema-versioning"
+        "journal-schema-versioning",
+        "policy-in-sqlite",
+        "policy-per-agent"
       ],
       "limitations": [
-        "Nothing decides on the agent yet.",
-        "Two windows of one program are the same agent."
+        "Rules only deny; allow rules and precedence are M4.5.",
+        "Two windows of one program are the same agent.",
+        "Enrolment changes are not journaled (F-018)."
       ],
-      "pending": [
-        "Step 4: nim_grants and evaluation.",
-        "Decide what an unknown agent may do (D-002)."
-      ]
+      "pending": []
     },
     {
       "id": "M4.5",
@@ -1188,7 +1446,9 @@
       "guarantees": [],
       "limitations": [],
       "pending": [
-        "Deferred until M4 gives it a subject."
+        "Allow rules and a precedence between allow and deny -- a policy language, with the Cedar spike in front of it.",
+        "Answer D-002 again for the allow model: an unknown agent must be denied wherever enrolment is what grants.",
+        "Journal enrolment changes (F-018) before rules can be trusted across re-enrolments."
       ]
     },
     {

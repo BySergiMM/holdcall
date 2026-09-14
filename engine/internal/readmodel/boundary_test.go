@@ -60,12 +60,12 @@ func TestReadModelSurfaceIsFrozen(t *testing.T) {
 		want  []string
 	}{
 		{"Event", Event{}, []string{
-			"anomaly", "chain_seq", "client", "connector", "decision", "duration_ms",
+			"agent", "anomaly", "chain_seq", "client", "connector", "decision", "duration_ms",
 			"hash", "kind", "machine_id", "occurred_at", "ok", "params_digest",
 			"prev_hash", "protocol_version", "schema_version", "seq", "session_id", "tool",
 		}},
 		{"Page", Page{}, []string{
-			"anomaly", "chain_seq", "client", "connector", "cursor", "decision",
+			"agent", "anomaly", "chain_seq", "client", "connector", "cursor", "decision",
 			"duration_ms", "events", "hash", "kind", "machine_id", "occurred_at",
 			"ok", "params_digest", "prev_hash", "protocol_version", "schema_version",
 			"seq", "session_id", "tool",
@@ -75,17 +75,17 @@ func TestReadModelSurfaceIsFrozen(t *testing.T) {
 			"verification_material",
 		}},
 		{"Gaps", Gaps{}, []string{
-			"anomalies", "anomalies_total", "missing_call_entries",
+			"anomalies", "anomalies_total", "calls_without_session", "missing_call_entries",
 			"sessions_with_gaps", "unfinished_sessions",
 		}},
 		{"Snapshot", Snapshot{}, []string{
-			"anomalies", "anomalies_total", "calls_recorded", "chain", "entries",
+			"anomalies", "anomalies_total", "calls_recorded", "calls_without_session", "chain", "entries",
 			"expected_head_at", "gaps", "head", "journal", "missing_call_entries", "problem",
 			"schema_version", "sessions_with_gaps", "unfinished_sessions",
 			"verification_material",
 		}},
 		{"Session", Session{}, []string{
-			"anomalies", "calls_recorded", "chain_seq", "client", "connector",
+			"agent", "anomalies", "calls_recorded", "chain_seq", "client", "connector",
 			"denied", "ended_at", "id", "machine_id", "outcomes", "started_at", "state",
 		}},
 	}
@@ -105,11 +105,15 @@ func TestReadModelSurfaceIsFrozen(t *testing.T) {
 // Properties the journal cannot support. None of them can be expressed today,
 // and none should become expressible by accident.
 //
-// The list shrank by exactly one word when enforcement arrived: "denied" is now
-// something the journal records, so the model may say it. Everything else on
-// this list is still a claim nothing in the record can back, and "allowed" is
-// deliberately still here -- the journal holds a decision, not a fact about what
-// then happened, and a field called allowed would invite exactly that reading.
+// The list shrinks only when the journal gains the thing. "denied" left it
+// when enforcement arrived; "agent" left it when the daemon began deriving one
+// from the kernel and hashing it into session.start -- until then a field by
+// that name would have been a claim with nothing behind it, and once the
+// journal carried the value, a read model that could not show it was hiding
+// something the chain commits to. Everything else here is still a claim
+// nothing in the record can back, and "allowed" is deliberately still here --
+// the journal holds a decision, not a fact about what then happened, and a
+// field called allowed would invite exactly that reading.
 //
 // This is checked structurally: the question is whether the model has somewhere
 // to put such a value, not whether some string appears in the source.
@@ -119,11 +123,10 @@ func TestReadModelCannotExpressEnforcement(t *testing.T) {
 		"active":            "a session with no end may be running or dead; the journal cannot tell",
 		"allowed":           "an allow is a decision, not evidence the call was made",
 		"blocked":           "Nim refused to forward a call; it did not stop anything else",
-		"policy":            "there is no policy model, only a deny list that is scaffolding",
-		"rule":              "there is no policy model, only a deny list that is scaffolding",
-		"agent":             "there is no agent identity",
-		"agent_id":          "there is no agent identity",
-		"identity":          "there is no agent identity",
+		"policy":            "the rules live in nim_rules and are read by the daemon, not projected here",
+		"rule":              "the rules live in nim_rules and are read by the daemon, not projected here",
+		"agent_id":          "an agent is named by its enrolment, never numbered",
+		"identity":          "the journal records which enrolment matched, not an identity",
 		"connector_reached": "the journal does not record whether the connector received anything",
 		"reached":           "the journal does not record whether the connector received anything",
 		"credential":        "credentials are never recorded",

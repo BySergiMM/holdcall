@@ -22,6 +22,7 @@ package shim
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -178,17 +179,6 @@ func Run(opts Options) error {
 	//
 	// The handler only flushes what is already known and exits; it does not try
 	// to keep the relay alive or to clean up the downstream server.
-	stopping := make(chan os.Signal, 1)
-	signal.Notify(stopping, syscall.SIGTERM, syscall.SIGINT)
-	go func() {
-		<-stopping
-		s.finish()
-		// Exiting zero after being asked to stop: the relay did what it was
-		// told. Re-raising the signal to reproduce the original exit status
-		// would need per-platform code for a status nothing reads.
-		os.Exit(0)
-	}()
-
 	cmd := buildDownstreamCmd(command, inj.env)
 	downIn, err := cmd.StdinPipe()
 	if err != nil {
@@ -204,6 +194,23 @@ func Run(opts Options) error {
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("cannot start %s: %w", command[0], err)
 	}
+
+	stopping := make(chan os.Signal, 1)
+	signal.Notify(stopping, syscall.SIGTERM, syscall.SIGINT)
+	go func() {
+		<-stopping
+		s.finish()
+		// The connector is this relay's child and does not outlive it. Its
+		// stdin closes when this process exits, and a connector that reads
+		// stdin notices; one that does not -- mid-call, or on its own event
+		// loop -- used to be left running, still holding whatever credential
+		// it was given, after the journal had recorded the session as over.
+		stopDownstream(cmd)
+		// Exiting zero after being asked to stop: the relay did what it was
+		// told. Re-raising the signal to reproduce the original exit status
+		// would need per-platform code for a status nothing reads.
+		os.Exit(0)
+	}()
 
 	// Read, never create: replacing a lost identifier would reseed the journal's
 	// chain. By now the daemon has had its chance to make one, so on a fresh
@@ -226,10 +233,47 @@ func Run(opts Options) error {
 	go func() { defer wg.Done(); s.pumpResponses(downOut, s.out) }()
 	wg.Wait()
 
-	err = cmd.Wait()
+	// The client has gone (its stdin closed) or the connector has. Either way
+	// the connector's stdin is closed by now; a connector that does not act on
+	// that is told, then made to.
+	err = stopDownstream(cmd)
 	s.finish()
 	return err
 }
+
+// stopDownstream waits for the connector to exit on its own, then asks it to,
+// then makes it. The waits are short: a connector that has not exited once its
+// stdin closed is not going to, and the relay is what a client is waiting on.
+//
+// The result is cmd.Wait's, so a connector that exited badly is still reported
+// as such. A connector this had to terminate reports as an error too, which is
+// right: it did not stop when told, and that is worth a line on stderr.
+func stopDownstream(cmd *exec.Cmd) error {
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
+
+	select {
+	case err := <-exited:
+		return err
+	case <-time.After(downstreamGrace):
+	}
+	if cmd.Process != nil {
+		terminate(cmd.Process)
+	}
+	select {
+	case err := <-exited:
+		return err
+	case <-time.After(downstreamGrace):
+	}
+	if cmd.Process != nil {
+		cmd.Process.Kill()
+	}
+	return <-exited
+}
+
+// downstreamGrace is how long a connector gets to exit on its own after its
+// stdin closes, and then again after being asked to stop.
+const downstreamGrace = 2 * time.Second
 
 // finish closes the session in the record and flushes what is pending. It runs
 // once, whether the relay ends because the client went away or because it was
@@ -276,6 +320,11 @@ func (s *Shim) pumpRequests(in io.Reader, out io.WriteCloser) {
 			}
 
 		case anomaly != mcp.AnomalyNone:
+			// Includes an object that names a key twice. Valid JSON, but the
+			// one shape on which Nim and a server may legitimately read
+			// different messages, so it is treated exactly as a frame that
+			// could not be read at all: not relayed, and not answered, because
+			// which of two ids to answer under is the same question.
 			// Unreadable, so unaccountable. Go rejects JSON that other parsers
 			// accept -- NaN is the easy example -- so a frame Nim cannot parse
 			// may still be a tools/call to the server behind it. There is no id
@@ -307,12 +356,32 @@ func (s *Shim) pumpRequests(in io.Reader, out io.WriteCloser) {
 // rewritten on the way: a call either travels exactly as it arrived, or it does
 // not travel.
 func (s *Shim) decide(env mcp.Envelope) bool {
+	// Before a sequence number is spent or the daemon is asked: a call Nim
+	// cannot read as exactly one tool name is refused here, whole. The daemon
+	// would otherwise decide on "" or on whichever of two names Go's decoder
+	// preferred, and the journal would record that as what was called while
+	// the server ran something else. No call.request is written for it, as
+	// for a refused batch; the anomaly entry is its record.
+	call, err := env.Call()
+	if err != nil {
+		anomaly := mcp.AnomalyUnreadableCall
+		if errors.Is(err, mcp.ErrDuplicateKey) {
+			anomaly = mcp.AnomalyDuplicateKey
+		}
+		s.noteAnomaly(anomaly)
+		s.refuse("a tools/call it could not read as one tool name")
+		if !env.IsNotification() {
+			s.toClient(mcp.DenyResponse(env.ID, mcp.DeniedUnreadable))
+		}
+		return false
+	}
+
 	key := env.Key()
 
 	s.mu.Lock()
 	_, reused := s.inFlight[key]
 	s.seq++
-	p := pending{tool: env.ToolName(), digest: env.ArgumentsDigest(), seq: s.seq, started: time.Now()}
+	p := pending{tool: call.Name, digest: call.Digest, seq: s.seq, started: time.Now()}
 	s.mu.Unlock()
 
 	// Two calls in flight under one id: the second answer cannot be matched to
@@ -804,8 +873,61 @@ func StartDaemon() bool {
 	if err != nil {
 		return false
 	}
-	log, _ := os.OpenFile(config.LogPath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	// The log lives in the home directory, which on a fresh install does not
+	// exist yet when `nim connector set` is the first thing run. Opening the
+	// file then failed, the error was dropped, and the daemon's first words
+	// -- the ones that explain why it did not start -- went nowhere.
+	if err := os.MkdirAll(config.Home(), 0o700); err != nil {
+		fmt.Fprintf(os.Stderr, "nim: cannot create %s for the daemon's log: %v\n", config.Home(), err)
+	}
+	log, err := os.OpenFile(config.LogPath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "nim: cannot open %s: the daemon will start with no log: %v\n", config.LogPath(), err)
+		log = nil
+	}
 	return startDaemonProcess(self, log) == nil
+}
+
+// DialDaemon connects for one request/response exchange -- a connector, an
+// enrolment or a rule -- starting the daemon if it is not running, and
+// refusing to hand back a connection to anything that is not Nim.
+//
+// The refusal is the point. The relay verified the daemon before sending it a
+// byte, but the management commands dialled the socket path and trusted
+// whatever answered: `nim connector set` would have written the plaintext
+// secret to any process that had bound the path first. Exported so every
+// command that talks to the daemon goes through the one check.
+func DialDaemon(cfg config.Config) (net.Conn, error) {
+	conn, err := dialOrStart(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if !daemonIsGenuine(conn) {
+		conn.Close()
+		return nil, fmt.Errorf(
+			"the process listening on %s is not Nim; refusing to talk to it", cfg.Daemon.Socket)
+	}
+	return conn, nil
+}
+
+// dialOrStart reaches the daemon socket, starting a daemon when nothing
+// answers. Peer identity is the caller's business: the two callers treat an
+// unreachable daemon differently, and both must verify what they reached.
+func dialOrStart(cfg config.Config) (net.Conn, error) {
+	conn, err := net.DialTimeout("unix", cfg.Daemon.Socket, 300*time.Millisecond)
+	if err == nil {
+		return conn, nil
+	}
+	if !StartDaemon() {
+		return nil, fmt.Errorf("could not start the daemon")
+	}
+	for i := 0; i < 20; i++ {
+		time.Sleep(100 * time.Millisecond)
+		if conn, err = net.DialTimeout("unix", cfg.Daemon.Socket, 300*time.Millisecond); err == nil {
+			return conn, nil
+		}
+	}
+	return nil, fmt.Errorf("daemon did not become reachable at %s", cfg.Daemon.Socket)
 }
 
 func nowRFC3339() string { return time.Now().UTC().Format(time.RFC3339Nano) }
@@ -849,18 +971,9 @@ func buildDownstreamCmd(command []string, env []string) *exec.Cmd {
 //     be injected into. A response carrying a credential but no command is
 //     itself refused; that pairing is the whole authorization.
 func fetchConnector(cfg config.Config, connector string) (injection, error) {
-	conn, err := net.DialTimeout("unix", cfg.Daemon.Socket, 300*time.Millisecond)
+	conn, err := dialOrStart(cfg)
 	if err != nil {
-		if !StartDaemon() {
-			return injection{}, nil
-		}
-		for i := 0; i < 20 && conn == nil; i++ {
-			time.Sleep(100 * time.Millisecond)
-			conn, _ = net.DialTimeout("unix", cfg.Daemon.Socket, 300*time.Millisecond)
-		}
-		if conn == nil {
-			return injection{}, nil
-		}
+		return injection{}, nil // unreachable: no connector, and every call will be denied
 	}
 	defer conn.Close()
 

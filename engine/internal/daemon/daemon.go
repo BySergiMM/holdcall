@@ -26,6 +26,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/BySergiMM/nim/engine/internal/config"
@@ -156,6 +157,7 @@ func Run(cfg config.Config) error {
 	}
 
 	locks := newTargetLocks()
+	sessions := newSessionRegistry()
 
 	log.Printf("nim daemon listening on %s (journal: %s)", cfg.Daemon.Socket, cfg.DatabasePath())
 	for {
@@ -163,8 +165,55 @@ func Run(cfg config.Config) error {
 		if err != nil {
 			return err
 		}
-		go handle(conn, j, cfg.Policy, store, locks)
+		go handle(conn, j, store, locks, sessions)
 	}
+}
+
+// sessionRegistry is the daemon-wide record of which session ids are open,
+// so that a session belongs to the one connection that started it.
+//
+// The per-connection map in handle() answered "did this connection start
+// it", which is the right question for every kind but session.start itself:
+// a second connection could announce a start under an id another connection
+// was already using, be given its own claim on the same id, and from then on
+// report calls, outcomes and an end into the first one's session. Peer
+// identity keeps everything that is not Nim off the socket, but session
+// ownership is meant to hold on its own -- it is what tells two runs of Nim
+// apart, which peer identity cannot -- and it did not.
+//
+// An id is refused if it is live on any connection, or if the journal has
+// ever recorded a start under it: a session id names one session, and one
+// that ended is not available for a second story. The check and the claim
+// are one critical section, so two connections racing on the same id cannot
+// both win.
+type sessionRegistry struct {
+	mu   sync.Mutex
+	live map[string]bool
+}
+
+func newSessionRegistry() *sessionRegistry {
+	return &sessionRegistry{live: make(map[string]bool)}
+}
+
+// claim reserves id for the caller. ok is false when the id is taken.
+func (r *sessionRegistry) claim(id string, j *journal.Journal) (ok bool, err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.live[id] {
+		return false, nil
+	}
+	exists, err := j.SessionExists(id)
+	if err != nil || exists {
+		return false, err
+	}
+	r.live[id] = true
+	return true, nil
+}
+
+func (r *sessionRegistry) release(id string) {
+	r.mu.Lock()
+	delete(r.live, id)
+	r.mu.Unlock()
 }
 
 var errAlreadyRunning = errors.New("another daemon holds the socket")
@@ -226,11 +275,14 @@ func listen(path string) (net.Listener, error) {
 	return nil, fmt.Errorf("could not bind %s: %w", path, lastErr)
 }
 
-func handle(conn net.Conn, j *journal.Journal, policy config.Policy, store credential.Store, locks *targetLocks) {
+func handle(conn net.Conn, j *journal.Journal, store credential.Store, locks *targetLocks, sessions *sessionRegistry) {
 	defer conn.Close()
 	state := &requestState{}
 
-	// Sessions opened on this connection that have not been closed yet.
+	// Sessions opened on this connection that have not been closed yet, each
+	// with the connector its start named: a rule can be scoped to a
+	// connector, and the connector is a property of the session, so it is
+	// read from here at decision time rather than sent again on every call.
 	//
 	// A shim closes its own session when it exits or is asked to stop, but a
 	// client that kills it outright leaves no chance to. The daemon can still
@@ -240,7 +292,7 @@ func handle(conn net.Conn, j *journal.Journal, policy config.Policy, store crede
 	// What survives this is the case worth keeping: if the *daemon* dies, it
 	// writes nothing, and the session stays open in the record -- which is
 	// exactly the period during which events were being lost.
-	open := map[string]bool{}
+	open := map[string]string{}
 	defer func() {
 		for id := range open {
 			e := journal.Entry{
@@ -251,6 +303,7 @@ func handle(conn net.Conn, j *journal.Journal, policy config.Policy, store crede
 			if err := j.Append(e); err != nil {
 				log.Printf("closing session %s after its shim went away: %v", id, err)
 			}
+			sessions.release(id)
 		}
 	}()
 
@@ -273,9 +326,12 @@ func handle(conn net.Conn, j *journal.Journal, policy config.Policy, store crede
 		return
 	}
 
-	// The agent behind this connection, worked out once. It cannot change
-	// mid-connection: the peer's pid is fixed for the life of the socket, and
-	// so is its parent. Deriving it per message would only add ways to fail.
+	// The agent behind this connection, worked out once, at accept. The
+	// peer's pid is fixed for the life of the socket; its parent is read now
+	// and is a snapshot, not an invariant -- a client that exits leaves its
+	// relay to be reparented -- so the agent is bound to the session when the
+	// session starts and never re-derived. Deriving it per message would add
+	// ways to fail and a way for the answer to drift within one session.
 	agent := deriveAgent(conn, j)
 
 	// bufio.Reader rather than mcp.NewReader: the latter's ReadRaw grows
@@ -338,8 +394,36 @@ func handle(conn net.Conn, j *journal.Journal, policy config.Policy, store crede
 		// this milestone's own reasoning a stream with one unanswered
 		// question can no longer be trusted to pair the next answer with the
 		// right call. No legitimate shim reaches this.
-		if ev.SessionID == "" || (ev.Kind != KindSessionStart && !open[ev.SessionID]) {
+		_, mine := open[ev.SessionID]
+		if ev.SessionID == "" || (ev.Kind != KindSessionStart && !mine) {
 			log.Printf("refusing %s for session %q: this connection did not start it", ev.Kind, ev.SessionID)
+			return
+		}
+
+		// A session id names one session. One that is live on any connection,
+		// or that the journal has ever recorded a start for, cannot be started
+		// again -- see sessionRegistry. Closed rather than skipped, for the
+		// same reason as above: no legitimate shim reaches this, because a
+		// genuine relay draws its id at random for each run.
+		if ev.Kind == KindSessionStart {
+			ok, err := sessions.claim(ev.SessionID, j)
+			if err != nil {
+				log.Printf("session.start %q: %v", ev.SessionID, err)
+				return
+			}
+			if !ok {
+				log.Printf("refusing session.start for %q: that session already exists", ev.SessionID)
+				return
+			}
+		}
+
+		// A call is numbered from 1 within its session; that number is what
+		// pairs it with its outcome and what gap detection counts. A report
+		// carrying no usable number is not a well-formed call and used to be
+		// journaled with a null seq, where it paired with nothing and could
+		// mask a real gap. A genuine relay never sends one.
+		if (ev.Kind == KindCallRequest || ev.Kind == KindCallOutcome) && ev.Seq <= 0 {
+			log.Printf("refusing %s for session %q with seq %d: a call is numbered from 1", ev.Kind, ev.SessionID, ev.Seq)
 			return
 		}
 
@@ -348,7 +432,7 @@ func handle(conn net.Conn, j *journal.Journal, policy config.Policy, store crede
 		// where one question went unanswered can no longer be trusted to pair
 		// the next answer with the right call.
 		if ev.Kind == KindCallRequest {
-			if err := answer(conn, ev, j, policy, agent); err != nil {
+			if err := answer(conn, ev, j, agent, open[ev.SessionID]); err != nil {
 				log.Printf("answering %s seq %d: %v", ev.SessionID, ev.Seq, err)
 				return
 			}
@@ -357,28 +441,48 @@ func handle(conn net.Conn, j *journal.Journal, policy config.Policy, store crede
 
 		if err := apply(ev, j, agent); err != nil {
 			log.Printf("%s: %v", ev.Kind, err)
+			if ev.Kind == KindSessionStart {
+				sessions.release(ev.SessionID)
+			}
 			continue
 		}
 		switch ev.Kind {
 		case KindSessionStart:
-			open[ev.SessionID] = true
+			open[ev.SessionID] = ev.Connector
 		case KindSessionEnd:
 			delete(open, ev.SessionID)
+			sessions.release(ev.SessionID)
 		}
 	}
 }
 
 // answer decides one call, records the decision, and only then tells the shim.
 //
+// The decision is (agent, connector, tool): the agent the daemon derived for
+// this connection, the connector the session was started for, and the tool
+// the call names, against the rules in SQLite. Two agents calling the same
+// tool on the same connector can therefore receive different answers, which
+// is the property M4 exists to establish, and the record distinguishes them
+// because the agent is on their sessions' start entries.
+//
 // The order is the point. If the entry cannot be written the answer is deny,
 // because allowing a call Nim failed to record would break the one thing this
 // milestone guarantees: that a call which reached a connector is a call the
-// journal knows about.
-func answer(conn net.Conn, ev Event, j *journal.Journal, policy config.Policy, agent string) error {
+// journal knows about. A rule lookup that fails is the same shape -- the
+// daemon could not decide -- and is answered as undecided, not as a verdict.
+func answer(conn net.Conn, ev Event, j *journal.Journal, agent, connector string) error {
 	decision, reason := journal.DecisionAllow, ""
-	if policy.Denied(ev.Tool) {
+	rule, denied, err := j.RuleDenying(agent, connector, ev.Tool)
+	if err != nil {
+		log.Printf("reading the rules for %s seq %d: %v", ev.SessionID, ev.Seq, err)
+		return json.NewEncoder(conn).Encode(Decision{
+			Kind: KindDecision, SessionID: ev.SessionID, Seq: ev.Seq,
+			Decision: DecisionUndecided, Reason: "the rules could not be read",
+		})
+	}
+	if denied {
 		decision = journal.DecisionDeny
-		reason = "the tool is on the deny list in config.toml"
+		reason = "refused by rule: " + rule.String()
 	}
 
 	ev.Decision = decision

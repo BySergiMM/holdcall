@@ -22,6 +22,9 @@ var requestKinds = map[string]bool{
 	KindAgentAdd:        true,
 	KindAgentList:       true,
 	KindAgentRemove:     true,
+	KindPolicyDeny:      true,
+	KindPolicyRemove:    true,
+	KindPolicyList:      true,
 }
 
 // requestState is the per-connection authorization state the Request family
@@ -35,7 +38,7 @@ var requestKinds = map[string]bool{
 // connection, gets "unauthorized" rather than a more specific reason: specific
 // reasons are exactly the oracle an attacker iterating on this protocol wants.
 type requestState struct {
-	kind        string // "" | "credential" | "connector" | "agent"
+	kind        string // "" | "credential" | "connector" | "agent" | "policy"
 	boundTarget string // meaningful only once kind == "credential"
 }
 
@@ -75,6 +78,8 @@ func handleRequest(
 		thisKind = "connector"
 	case KindAgentAdd, KindAgentList, KindAgentRemove:
 		thisKind = "agent"
+	case KindPolicyDeny, KindPolicyRemove, KindPolicyList:
+		thisKind = "policy"
 	default:
 		return Response{ID: req.ID, Error: fmt.Sprintf("unknown request kind %q", req.Kind)}
 	}
@@ -99,6 +104,12 @@ func handleRequest(
 		return handleAgentList(req, j)
 	case KindAgentRemove:
 		return handleAgentRemove(req, j)
+	case KindPolicyDeny:
+		return handlePolicyDeny(req, j)
+	case KindPolicyRemove:
+		return handlePolicyRemove(req, j)
+	case KindPolicyList:
+		return handlePolicyList(req, j)
 	default:
 		panic("unreachable: the switch above is exhaustive for req.Kind")
 	}

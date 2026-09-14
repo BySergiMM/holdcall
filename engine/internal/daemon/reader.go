@@ -22,12 +22,12 @@ import (
 // single line with no newline used to grow the daemon's memory without
 // bound; verified live: 200 MiB sent from one unauthenticated connection in
 // 0.2s grew the daemon's RSS by the same amount, with no pushback at all.
-// Since the shim fails open when the daemon is unreachable (see
-// fetchConnectorEnv), crashing the single shared daemon this way would have
-// silently disabled credential injection for every target on the machine,
-// not just the attacker's own session -- not merely an availability
-// nuisance. 1 MiB is generous headroom over any legitimate message on this
-// connection while remaining a hard, small bound.
+// The relay fails closed when the daemon is unreachable (see shim.decide),
+// so crashing the single shared daemon this way would deny every tools/call
+// on the machine, not just the attacker's own session -- one unauthenticated
+// local process disabling every agent's tools, which is not merely an
+// availability nuisance. 1 MiB is generous headroom over any legitimate
+// message on this connection while remaining a hard, small bound.
 const maxLineBytes = 1 << 20
 
 // boundedReadRaw reads one newline-delimited message from br, the same

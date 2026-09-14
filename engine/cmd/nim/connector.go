@@ -7,7 +7,6 @@ import (
 	"net"
 	"os"
 	"strings"
-	"time"
 
 	"golang.org/x/term"
 
@@ -217,27 +216,19 @@ func runConnectorRemove(args []string) error {
 }
 
 // dialConnectorDaemon connects for a one-shot request/response, starting the
-// daemon if it is not already running. Unlike the relay, a connector command
+// daemon if it is not already running. Unlike the relay, a management command
 // has nothing sensible to fail open to: if the daemon truly cannot be reached
 // it must say so rather than silently pretend to have done nothing.
+//
+// Through shim.DialDaemon, which verifies that what answered is Nim. This
+// used to dial the path and trust it, so `nim connector set` handed the
+// plaintext secret to whatever had bound the socket first -- the impostor the
+// relay had learnt to refuse, still welcome on the one path that carries a
+// credential in the clear.
 func dialConnectorDaemon() (net.Conn, error) {
 	cfg, err := config.Load()
 	if err != nil {
 		return nil, err
 	}
-	conn, err := net.DialTimeout("unix", cfg.Daemon.Socket, 300*time.Millisecond)
-	if err == nil {
-		return conn, nil
-	}
-	if !shim.StartDaemon() {
-		return nil, fmt.Errorf("could not start the daemon")
-	}
-	for i := 0; i < 20; i++ {
-		time.Sleep(100 * time.Millisecond)
-		conn, err = net.DialTimeout("unix", cfg.Daemon.Socket, 300*time.Millisecond)
-		if err == nil {
-			return conn, nil
-		}
-	}
-	return nil, fmt.Errorf("daemon did not become reachable at %s", cfg.Daemon.Socket)
+	return shim.DialDaemon(cfg)
 }

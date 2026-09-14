@@ -13,6 +13,7 @@ import { readFileSync, writeFileSync, mkdtempSync, cpSync, existsSync, rmSync } 
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
+import { SAMPLES, SENSITIVE } from "./sensitive.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const dashboard = join(here, "..");
@@ -214,9 +215,13 @@ test("a forged milestone status is refused", () => {
 // carrying a pending item that was actually M4's work.
 test("a milestone cannot be marked done while listing outstanding work", () => {
   const r = runWith((s) => {
-    s.milestones.find((m) => m.status === "in_progress").status = "done";
+    // Any milestone that still lists work. It used to pick the in-progress
+    // one, which stopped existing the day M4 was finished.
+    const m = s.milestones.find((x) => x.status !== "done" && (x.pending ?? []).length > 0);
+    assert.ok(m, "no milestone with outstanding work to mutate");
+    m.status = "done";
   });
-  assert.equal(r.ok, false, "in-progress work was relabelled done");
+  assert.equal(r.ok, false, "outstanding work was relabelled done");
   assert.match(r.out, /still listing/);
 });
 
@@ -412,5 +417,33 @@ test("the generator never reads runtime state", () => {
   const src = readFileSync(join(here, "generate.mjs"), "utf8");
   for (const forbidden of ["nim.db", "nim.sock", ".nim/", "security find-generic-password", "secret-tool"]) {
     assert.ok(!src.includes(forbidden), `the generator references runtime state: ${forbidden}`);
+  }
+});
+
+
+// Every shape the shared list names is refused when it appears in declared
+// prose -- each one, not a representative. The list gained the key shapes an
+// Anthropic project is most likely to paste (sk-ant-, github_pat_, sk-) after
+// a red-team pass found both scanners silent on all three, and this is what
+// keeps the next addition from being silent.
+test("every sensitive shape is refused in declared prose", () => {
+  for (const [what] of SENSITIVE) {
+    assert.ok(SAMPLES[what], `no sample for "${what}": add one so the pattern is proven to bite`);
+    const r = runWith((s) => {
+      s.findings[0].evidence = `Quoting the leak for the record: ${SAMPLES[what]} -- and that is all.`;
+    });
+    assert.equal(r.ok, false, `${what} passed the declared-data scan: ${SAMPLES[what]}`);
+    assert.match(r.out, new RegExp(what.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), `the refusal does not name ${what}`);
+  }
+});
+
+// The two scanners read one list. A pattern present in one and absent from the
+// other is how `npm run check` passed a JWT that only the build refused.
+test("the declared-data scan and the output scan share one list", () => {
+  const generate = readFileSync(join(dashboard, "scripts", "generate.mjs"), "utf8");
+  const scan = readFileSync(join(dashboard, "scripts", "scan-output.mjs"), "utf8");
+  for (const src of [generate, scan]) {
+    assert.match(src, /from "\.\/sensitive\.mjs"/, "a scanner stopped importing the shared list");
+    assert.doesNotMatch(src, /^const SENSITIVE = \[/m, "a scanner grew a private copy of the list");
   }
 });

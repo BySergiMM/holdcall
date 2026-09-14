@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"unicode"
+	"unicode/utf8"
 )
 
 // Size limits for the request/response protocol. These bound Request-kind
@@ -151,6 +153,35 @@ func validateAgentPath(path string) error {
 	}
 	if !filepath.IsAbs(path) {
 		return fmt.Errorf("agent path %q must be absolute, so it means the same thing wherever the daemon runs", path)
+	}
+	return nil
+}
+
+// MaxToolLen bounds a tool name in a rule. MCP does not fix a maximum; this is
+// generous for any real tool and keeps what a rule stores bounded.
+const MaxToolLen = 256
+
+// validateTool checks the shape of a tool name in a rule.
+//
+// Deliberately loose about characters and strict about nothing else: a rule
+// matches the bytes a client sends as params.name, exactly, so the only names
+// worth refusing are ones no client could send in a JSON string that means
+// what the operator thinks -- control characters, and text that is not UTF-8.
+// No trimming and no case folding, here or at match time.
+func validateTool(tool string) error {
+	if tool == "" {
+		return fmt.Errorf("a rule needs the tool it refuses: nim policy deny <tool>")
+	}
+	if len(tool) > MaxToolLen {
+		return fmt.Errorf("tool name is %d bytes, over the %d limit", len(tool), MaxToolLen)
+	}
+	if !utf8.ValidString(tool) {
+		return fmt.Errorf("tool name is not valid UTF-8")
+	}
+	for _, r := range tool {
+		if unicode.IsControl(r) {
+			return fmt.Errorf("tool name %q contains a control character", tool)
+		}
 	}
 	return nil
 }

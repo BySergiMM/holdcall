@@ -5,11 +5,13 @@ that needs it.
 
 ## Where the work lives
 
-`integration/trunk` is the branch to build on. It is the merge of the two
-lineages that grew from M1 in parallel: the append-only hash-chained journal,
-the console and enforcement from one, credentials and daemon lifetime from the
-other. Neither parent contains the whole engine and neither should be developed
-on further.
+`m1-bootstrap` is the branch to build on. It adopted the merged tree
+(`a10e626`) that `integration/trunk` had produced from the two lineages that
+grew from M1 in parallel -- the append-only hash-chained journal, the console
+and enforcement from one, credentials and daemon lifetime from the other --
+and everything since (agent identity, the dashboard, policy in SQLite) landed
+on it. `integration/trunk` is frozen history: it is where the merge was done,
+and it is not developed on.
 
 The numbering below is the merged one. `M2` means **enforcement**; daemon
 lifetime, which the other lineage had called M2, is folded into M2.5. Anything
@@ -25,14 +27,13 @@ written before the merge that says otherwise is describing one half.
 - **`config.toml` configures the daemon** — socket path, data directory, which
   servers to supervise.
 
-  **Weakened in M2, deliberately and temporarily.** M2 reads a deny list from
-  `config.toml` so that the enforcement path can be exercised end to end against
-  something real. The original decision was right and this breaks it: any
-  process able to write `config.toml` can empty the list, which is not a
-  property an authorization input should have. It is scaffolding, kept small on
-  purpose — exact tool names, no wildcards, no scopes, no ordering — and real
-  policy belongs somewhere the daemon owns. Nothing else an authorization
-  decision depends on may go here in the meantime.
+  **Weakened from M2 to M4, deliberately and temporarily, and restored in M4.**
+  M2 read a deny list from `config.toml` so that the enforcement path could be
+  exercised end to end against something real, knowing that any process able
+  to write the file could empty the list. M4 moved the rules into SQLite,
+  behind the daemon, with every change an entry in the chain. A `config.toml`
+  that still carries a `[policy]` section is refused rather than read past.
+  Nothing an authorization decision depends on goes in the file again.
 - **Supabase is a mirror, never a dependency.** It receives a copy of the
   journal for the dashboard. If it is unreachable, nothing changes locally.
 - **Every table is prefixed `nim_`**, in SQLite and in Postgres alike, so the
@@ -108,7 +109,8 @@ invisibility.
 - **Batches and unparseable frames are counted.** A JSON-RPC batch slips past
   envelope parsing entirely, so a `tools/call` inside one reached a server with
   no record at all. In this milestone it still did, and left an `anomaly` entry
-  saying so. M2 refuses both instead.
+  saying so. M2 refuses an unparseable frame, and a batch that carries a
+  `tools/call`; a batch carrying none is still relayed.
 - **`nim log`**, **`nim verify`**, and a `nim status` that prints the chain head.
 
 **What the chain does not do.** It detects corruption and edits that did not
@@ -202,7 +204,8 @@ window needs machinery this milestone does not buy.
   so nothing in M2 depends on the answer; the inversion that would is a later
   milestone, and the spike belongs with it.
 - **Anything that can write `config.toml` can empty the deny list.** See the
-  standing decision above.
+  standing decision above. Closed in M4: the rules live in SQLite and the
+  file is refused if it still carries them.
 
 **Scope, stated as exclusions.** No canonicalization of arguments, no credential
 handling, no agent identity, no policy model beyond exact tool names, no human
@@ -283,19 +286,62 @@ at all.
 
 ## M4 — Identity, and policy that lives in SQLite
 
-**Reordered, with reasons.** M4 was "Grants (Cedar)", starting with a spike on
-`cedar-go`. That is the wrong next step, and the merged engine makes it obvious
-why: **a policy language has nothing to talk about yet.**
+**Status: done, 2026-09-14.** A decision is `(agent, connector, tool)`. The
+acceptance test ran with real processes: two client programs, enrolled under
+two names, each spawning a relay against one connector and sending the same
+call, received different verdicts, and the journal distinguishes them on their
+`session.start` entries (`TestTwoRealAgentsAgainstOneConnectorReceiveDifferentVerdicts`).
 
-Every decision Nim makes today is per-tool and global. Two agents against the
-same connector get the same answer, because there is no way to tell them apart
-— the word "agent" appears in this document and nowhere in the schema. Grants
+What landed:
+
+- **Agent identity**, derived by the daemon from the kernel -- the socket
+  peer's parent process and the file it executes -- matched against
+  enrolments made with `nim agent add`. Nothing on the wire names an agent.
+  Recorded on `session.start` at schema_version 2, and shown by `nim log`,
+  `nim log --json` and the console.
+- **Rules in SQLite.** `nim policy deny <tool> [--agent] [--connector]`, kept
+  in `nim_rules`, read by the daemon at decision time. Rules only deny; a tool
+  no rule names is allowed, as before. A rule may name only an enrolled agent.
+- **Every change in the chain.** A rule and its `rule.add` or `rule.remove`
+  entry are one SQLite transaction, so the rules have a history that verifies
+  like the calls do. This needed the journal table to be rebuilt once on
+  open -- SQLite cannot widen a CHECK constraint in place -- and the rebuild
+  copies every row verbatim, which a test holds it to.
+- **Policy out of `config.toml`.** The file configures the daemon and nothing
+  else; a `[policy]` section, or any key this build does not know, is refused
+  with the way forward in the message.
+- **D-002 answered** for this model, in
+  `docs/decisions/0002-what-an-unknown-agent-may-do.md`: a session no
+  enrolment matched meets only the rules that name no agent. Because rules
+  only deny, that is the ceiling every session had before agents existed, and
+  nobody gains by avoiding enrolment.
+
+What it does not do, stated rather than implied:
+
+- **No allow rules.** "Only Claude Code may touch github" needs a rule that
+  grants, a precedence between allow and deny, and a different answer to
+  D-002. That is a policy language, and it is M4.5 with the spike in front.
+- **Two windows of one program are the same agent.** The identity is the
+  executable, not the instance.
+- **Enrolment changes are not journaled** (F-018). Re-enrolling a name moves
+  every rule scoped to it, and the chain does not say so. The rules are in the
+  chain; the thing they are scoped to is not yet.
+- **The decision costs one more read.** `docs/benchmarks.md` has the figures:
+  p50 moved from 0.075 ms to 0.091 ms and p99 stayed where it was.
+
+**Reordered, with reasons.** M4 was "Grants (Cedar)", starting with a spike on
+`cedar-go`. That was the wrong next step, and the merged engine made it obvious
+why: **a policy language had nothing to talk about yet.**
+
+Every decision Nim made was per-tool and global. Two agents against the
+same connector got the same answer, because there was no way to tell them apart
+— the word "agent" appeared in this document and nowhere in the schema. Grants
 (M4 as written), budgets (M5) and human approval (M6) all need a subject, and
-none of them can be built until one exists. Choosing a policy language before
+none of them could be built until one existed. Choosing a policy language before
 there is a subject to write policies about is picking the syntax before the
 semantics.
 
-Two things belong here, in this order:
+Two things belonged here, in this order:
 
 1. **Agent identity.** A decision becomes `(agent, connector, tool)` rather
    than `tool`. The journal records which agent, and the console shows it. The
@@ -320,8 +366,18 @@ with those in hand.
 ## M4.5 — Grants (Cedar), if it is still the answer
 
 Allow / deny per (agent, connector, tool), expressed in something richer than
-a list. Preceded by the one-day spike on `cedar-go`, now with a real policy
-model to evaluate it against.
+a list of denials. Preceded by the one-day spike on `cedar-go`, now with a real
+policy model to evaluate it against: a subject, a resource and an action exist,
+and the deny-only rules of M4 are the baseline any language has to reproduce
+before it adds anything.
+
+Three things it has to settle that M4 deliberately did not:
+
+- an allow rule, and the precedence between allow and deny;
+- D-002 again, for that model -- wherever enrolment is what grants, an
+  unknown agent must be denied;
+- journaling enrolment changes (F-018), because a rule scoped to a name is
+  only as trustworthy as the record of what that name pointed at.
 
 ## M5 — Budgets
 

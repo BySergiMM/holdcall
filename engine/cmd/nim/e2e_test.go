@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -66,7 +67,12 @@ type stack struct {
 }
 
 // build compiles the binary and a connector once per test.
-func build(t *testing.T, denyList string) *stack {
+//
+// It used to take a deny list to write into config.toml. Policy no longer
+// lives there -- a config.toml carrying it is refused, see
+// TestAStaleDenyListInConfigIsRefused -- so a test that wants a rule asks the
+// running daemon for one with `nim policy deny`, as an operator would.
+func build(t *testing.T) *stack {
 	t.Helper()
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Skip("no go toolchain to build the binary with")
@@ -97,11 +103,7 @@ func build(t *testing.T, denyList string) *stack {
 	if err := os.MkdirAll(s.home, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	conf := "[daemon]\n"
-	if denyList != "" {
-		conf += "\n[policy]\ndeny = [" + denyList + "]\n"
-	}
-	if err := os.WriteFile(filepath.Join(s.home, "config.toml"), []byte(conf), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(s.home, "config.toml"), []byte("[daemon]\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -173,6 +175,10 @@ func (s *stack) serve(t *testing.T) *relay {
 	var errbuf strings.Builder
 	r := &relay{cmd: cmd, in: in, lines: make(chan string, 32), stderr: &errbuf}
 	cmd.Stderr = &lockedWriter{w: &errbuf, mu: &r.mu}
+	// The connector inherits the relay's stderr. Wait waits for that pipe to
+	// close, so a connector that outlived a killed relay would hang the test
+	// forever; this bounds it.
+	cmd.WaitDelay = 5 * time.Second
 
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
@@ -279,10 +285,20 @@ func decodeLine(t *testing.T, line string) (id string, isError bool, text string
 	return string(got.ID), got.Result.IsError, text
 }
 
+// deny adds a rule through the real CLI and checks the CLI said so.
+func (s *stack) deny(t *testing.T, args ...string) {
+	t.Helper()
+	out, err := s.run(t, append([]string{"policy", "deny"}, args...)...)
+	if err != nil || !strings.Contains(out, "recorded in the journal") {
+		t.Fatalf("nim policy deny %v: %v\n%s", args, err, out)
+	}
+}
+
 // One allowed call and one refused one, through the whole stack.
 func TestRealRelayForwardsOneCallAndRefusesTheOther(t *testing.T) {
-	s := build(t, `"dangerous_tool"`)
+	s := build(t)
 	s.daemon(t)
+	s.deny(t, "dangerous_tool")
 	r := s.serve(t)
 
 	allowed := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"echo","arguments":{"text":"café 🚀"}}}`
@@ -344,7 +360,7 @@ func TestRealRelayForwardsOneCallAndRefusesTheOther(t *testing.T) {
 // With no daemon there is nothing to record a call against, so nothing goes
 // through. This is the whole of fail-closed, checked against the connector.
 func TestRealRelayWithNoDaemonReachesNothing(t *testing.T) {
-	s := build(t, "")
+	s := build(t)
 	// No daemon started, and none may start: the relay spawns one when it can,
 	// so the socket is pointed somewhere it cannot bind.
 	s.env = append(s.env, "TMPDIR=/nonexistent-for-nim")
@@ -374,7 +390,7 @@ func TestRealRelayWithNoDaemonReachesNothing(t *testing.T) {
 // Anything that is not a tools/call still goes straight through, daemon or no
 // daemon. Fail-closed applies to calls, not to the protocol.
 func TestRealRelayStillPassesEverythingElse(t *testing.T) {
-	s := build(t, "")
+	s := build(t)
 	s.daemon(t)
 	r := s.serve(t)
 
@@ -409,7 +425,7 @@ func TestRealRelayStillPassesEverythingElse(t *testing.T) {
 // Measured on darwin/arm64 only. The same is expected on Linux and Windows and
 // is not claimed until it is run there.
 func TestAConnectorReadingStdinDiesWithTheRelay(t *testing.T) {
-	s := build(t, "")
+	s := build(t)
 	s.daemon(t)
 	r := s.serve(t)
 
@@ -429,4 +445,243 @@ func TestAConnectorReadingStdinDiesWithTheRelay(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	t.Error("the connector was still running after the relay was killed")
+}
+
+// launcherSource is a client program small enough to compile in a test: it
+// runs the command it is given as a child and waits for it, which is what an
+// MCP client does with a relay. Two copies of it are two different files,
+// and therefore two different agents.
+const launcherSource = `package main
+
+import (
+	"os"
+	"os/exec"
+)
+
+func main() {
+	cmd := exec.Command(os.Args[1], os.Args[2:]...)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	if err := cmd.Run(); err != nil {
+		os.Exit(1)
+	}
+}
+`
+
+// serveVia is serve with the relay spawned by a launcher, so that the relay's
+// parent -- what the daemon derives the agent from -- is a program of the
+// test's choosing rather than the test binary.
+func (s *stack) serveVia(t *testing.T, launcher string) *relay {
+	t.Helper()
+	cmd := exec.Command(launcher, s.nim, "serve", "--connector", "rig", "--client", "e2e", "--", s.connector)
+	cmd.Env = s.env
+
+	in, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var errbuf strings.Builder
+	r := &relay{cmd: cmd, in: in, lines: make(chan string, 32), stderr: &errbuf}
+	cmd.Stderr = &lockedWriter{w: &errbuf, mu: &r.mu}
+	// The relay and its connector inherit the launcher's stderr pipe, and Wait
+	// waits for it to close. Killing the launcher alone leaves both alive, so
+	// without a bound Wait would never return.
+	cmd.WaitDelay = 5 * time.Second
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		defer close(r.lines)
+		br := bufio.NewReaderSize(out, 1<<20)
+		for {
+			line, err := br.ReadBytes('\n')
+			if len(line) > 0 {
+				r.lines <- string(line)
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+	t.Cleanup(func() { r.kill() })
+	return r
+}
+
+// The acceptance test docs/milestones.md sets for M4, run with real
+// processes: two agents against one connector receive different verdicts,
+// and the record distinguishes them.
+//
+// Two client programs are built -- the same source, two files, two inodes --
+// and enrolled under two names. A rule refuses one tool for the first. Each
+// then spawns a relay, exactly as an MCP client would, and sends the same
+// call. Nothing on the wire says which agent is which; the daemon works it
+// out from the process that spawned the relay.
+func TestTwoRealAgentsAgainstOneConnectorReceiveDifferentVerdicts(t *testing.T) {
+	s := build(t)
+	dir := filepath.Dir(s.nim)
+	src := filepath.Join(dir, "launcher.go")
+	if err := os.WriteFile(src, []byte(launcherSource), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	alpha, beta := filepath.Join(dir, "alpha"), filepath.Join(dir, "beta")
+	for _, bin := range []string{alpha, beta} {
+		if out, err := exec.Command("go", "build", "-o", bin, src).CombinedOutput(); err != nil {
+			t.Fatalf("building %s: %v\n%s", bin, err, out)
+		}
+	}
+	s.daemon(t)
+	for name, bin := range map[string]string{"alpha": alpha, "beta": beta} {
+		if out, err := s.run(t, "agent", "add", name, bin); err != nil || !strings.Contains(out, "enrolled") {
+			t.Fatalf("enrolling %s: %v\n%s", name, err, out)
+		}
+	}
+	s.deny(t, "dangerous_tool", "--agent", "alpha")
+
+	call := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"dangerous_tool","arguments":{}}}`
+	verdict := func(launcher string) bool {
+		t.Helper()
+		r := s.serveVia(t, launcher)
+		r.send(t, call)
+		_, isError, _ := decodeLine(t, r.next(t))
+		// Ended the way a client ends a session: stdin closes, the relay
+		// stops its connector and exits, and the launcher returns.
+		r.in.Close()
+		r.cmd.Wait()
+		return !isError
+	}
+	if verdict(alpha) {
+		t.Error("alpha's call was allowed; the rule names alpha")
+	}
+	if !verdict(beta) {
+		t.Error("beta's call was refused; no rule names beta")
+	}
+
+	// The record says which was which -- not from a label the relay chose
+	// (both said --client e2e) but from what the daemon derived.
+	out, err := s.run(t, "log", "--json")
+	if err != nil {
+		t.Fatalf("nim log --json: %v\n%s", err, out)
+	}
+	agents := map[string]bool{}
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		var e struct {
+			Kind  string `json:"kind"`
+			Agent string `json:"agent"`
+		}
+		if json.Unmarshal([]byte(line), &e) == nil && e.Kind == "session.start" && e.Agent != "" {
+			agents[e.Agent] = true
+		}
+	}
+	if !agents["alpha"] || !agents["beta"] {
+		t.Errorf("the journal does not distinguish the two agents; saw %v", agents)
+	}
+	if out, _ := s.run(t, "policy", "list"); !strings.Contains(out, "alpha") {
+		t.Errorf("nim policy list does not show the rule:\n%s", out)
+	}
+}
+
+// A config.toml that still carries the deny list is refused, with the way
+// forward in the message, on every command -- not read past.
+func TestAStaleDenyListInConfigIsRefused(t *testing.T) {
+	s := build(t)
+	if err := os.WriteFile(filepath.Join(s.home, "config.toml"),
+		[]byte("[daemon]\n\n[policy]\ndeny = [\"dangerous_tool\"]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"status"}, {"daemon"}, {"policy", "list"}} {
+		out, err := s.run(t, args...)
+		if err == nil {
+			t.Errorf("nim %v ran with a stale [policy] section:\n%s", args, out)
+		}
+		if !strings.Contains(out, "nim policy deny") {
+			t.Errorf("nim %v did not say where policy went:\n%s", args, out)
+		}
+	}
+}
+
+// stubbornSource is a connector that never reads its stdin, so the kernel
+// closing that pipe tells it nothing. Only the relay stopping it does.
+const stubbornSource = `package main
+
+import (
+	"os"
+	"time"
+)
+
+func main() {
+	os.WriteFile(os.Getenv("CONNECTOR_LOG")+".started", []byte("yes"), 0o600)
+	time.Sleep(time.Hour)
+}
+`
+
+// A connector that ignores its stdin used to outlive a relay that was asked
+// to stop: the signal handler flushed the journal and exited, and the child
+// carried on with whatever credential it had been given while the record
+// said the session was over. The relay now stops its child before it goes.
+//
+// Asked to stop, not killed outright: a relay that receives SIGKILL runs
+// nothing, and then only a connector that reads its stdin notices. That is a
+// limit of where the relay sits, stated in docs/security.md, and this test
+// does not claim otherwise.
+func TestAConnectorIgnoringStdinIsStoppedWithTheRelay(t *testing.T) {
+	s := build(t)
+	src := filepath.Join(filepath.Dir(s.nim), "stubborn.go")
+	if err := os.WriteFile(src, []byte(stubbornSource), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stubborn := filepath.Join(filepath.Dir(s.nim), "stubborn")
+	if out, err := exec.Command("go", "build", "-o", stubborn, src).CombinedOutput(); err != nil {
+		t.Fatalf("building the connector: %v\n%s", err, out)
+	}
+	s.daemon(t)
+
+	cmd := exec.Command(s.nim, "serve", "--connector", "rig", "--", stubborn)
+	cmd.Env = s.env
+	in, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer in.Close()
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait() })
+
+	started := s.log + ".started"
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(started); err == nil {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if _, err := os.Stat(started); err != nil {
+		t.Fatal("the connector never started")
+	}
+	// The connector's pid, from the relay's point of view, is not exposed;
+	// what is observable is whether a process running that binary remains.
+	running := func() bool {
+		out, _ := exec.Command("pgrep", "-f", stubborn).Output()
+		return strings.TrimSpace(string(out)) != ""
+	}
+	if !running() {
+		t.Fatal("pgrep cannot see the connector; the test cannot observe what it needs to")
+	}
+
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	cmd.Wait()
+
+	deadline = time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if !running() {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatal("the connector outlived the relay it was spawned by")
 }

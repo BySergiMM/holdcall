@@ -42,6 +42,18 @@ func (f *fake) Sessions(limit int) ([]journal.SessionRow, error) {
 	return f.sessions, nil
 }
 
+func (f *fake) Session(id string) (journal.SessionRow, bool, error) {
+	if f.err != nil {
+		return journal.SessionRow{}, false, f.err
+	}
+	for _, r := range f.sessions {
+		if r.ID == id {
+			return r, true, nil
+		}
+	}
+	return journal.SessionRow{}, false, nil
+}
+
 func (f *fake) SessionEntries(id string, limit int) ([]journal.Entry, error) {
 	if f.err != nil {
 		return nil, f.err
@@ -101,7 +113,7 @@ func TestEventCarriesEveryFieldOfAnEntry(t *testing.T) {
 		ParamsDigest: sp("digest"), Decision: sp(journal.DecisionObserved),
 		OK: bp(true), DurationMS: ip(42), Anomaly: sp("batch"),
 		OccurredAt: "2026-08-07T10:00:00Z", MachineID: sp("m"), Client: sp("c"),
-		ProtocolVersion: sp("2025-06-18"), PrevHash: "prev", Hash: "hash",
+		ProtocolVersion: sp("2025-06-18"), Agent: sp("claude-code"), PrevHash: "prev", Hash: "hash",
 	}
 	got := EventFrom(e)
 
@@ -116,7 +128,7 @@ func TestEventCarriesEveryFieldOfAnEntry(t *testing.T) {
 		"params_digest": got.ParamsDigest != nil, "decision": got.Decision != nil,
 		"ok": got.OK != nil, "duration_ms": got.DurationMS != nil, "anomaly": got.Anomaly != nil,
 		"machine_id": got.MachineID != nil, "client": got.Client != nil,
-		"protocol_version": got.ProtocolVersion != nil,
+		"protocol_version": got.ProtocolVersion != nil, "agent": got.Agent != nil,
 	} {
 		if !ok {
 			t.Errorf("field %s was dropped by the projection", name)

@@ -139,3 +139,27 @@ func TestAnImpostorCannotDecideCalls(t *testing.T) {
 		t.Fatal("an impostor was allowed to authorize a call")
 	}
 }
+
+// The management commands used to dial the socket path and trust whatever
+// answered -- and nim connector set carries the plaintext secret. Every
+// command now goes through DialDaemon, which refuses a listener that is not
+// this binary before a byte is sent; this is that refusal, against the same
+// impostor the relay tests use.
+func TestDialDaemonRefusesAnImpostor(t *testing.T) {
+	harvest := filepath.Join(t.TempDir(), "harvest.jsonl")
+	cfg := startImpostor(t, harvest)
+
+	conn, err := DialDaemon(cfg)
+	if err == nil {
+		conn.Close()
+		t.Fatal("DialDaemon handed back a connection to a process that is not Nim")
+	}
+	if !strings.Contains(err.Error(), "not Nim") {
+		t.Errorf("the refusal does not say what was wrong: %v", err)
+	}
+	// Nothing was said to it: a management command that had got this far
+	// would have sent a secret next.
+	if b, _ := os.ReadFile(harvest); len(b) != 0 {
+		t.Errorf("the impostor received %q before the refusal", b)
+	}
+}

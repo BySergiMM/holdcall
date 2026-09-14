@@ -1,5 +1,7 @@
 // Package journal is the local record of what agents did. SQLite is the source
-// of truth; the Supabase mirror is a copy of these rows and never the reverse.
+// of truth. A Supabase mirror of these rows is planned (M8) and blocked on the
+// chain being unkeyed; nothing in the engine syncs anything today, and when
+// something does it will copy from here and never the reverse.
 //
 // The record is append-only and hash-chained. Append-only in fact, not by
 // convention: a call produces two entries, one when it is seen and one when it
@@ -31,6 +33,14 @@ const (
 	KindCallOutcome  = "call.outcome"
 	KindSessionEnd   = "session.end"
 	KindAnomaly      = "anomaly"
+
+	// A policy change is an entry in the chain, so that an audit of the rules
+	// is possible and not only an audit of the calls. Both carry the rule's
+	// scope in agent, connector and tool, its effect in decision, and no
+	// session: session_id is the empty string, which the encoding keeps
+	// distinct from null.
+	KindRuleAdd    = "rule.add"
+	KindRuleRemove = "rule.remove"
 )
 
 // The decisions an entry can carry.
@@ -51,12 +61,23 @@ const (
 	DecisionRejected = "rejected"
 )
 
-const schema = `
-create table if not exists nim_journal (
+// journalTableBody is everything after the table name in nim_journal's
+// definition. It is held apart from the schema because SQLite stores a table's
+// CREATE statement verbatim after its first two keywords (upper-cased, with IF
+// NOT EXISTS dropped), so the text is also how an existing database says
+// whether it was created by this build -- see rebuildJournalTable.
+//
+// Changing a single byte here makes every existing journal rebuild its table
+// once, on the next open, copying every row across unchanged. That is the
+// intended cost of a schema change, not an accident to avoid; it is what lets
+// a CHECK constraint grow when a milestone adds a kind, which ALTER TABLE
+// cannot do.
+const journalTableBody = `(
     chain_seq        integer primary key,
     schema_version   integer not null,
     kind             text    not null check (kind in
-                       ('session.start','call.request','call.outcome','session.end','anomaly')),
+                       ('session.start','call.request','call.outcome','session.end','anomaly',
+                        'rule.add','rule.remove')),
     session_id       text    not null,
     seq              integer,
     connector        text,
@@ -67,7 +88,7 @@ create table if not exists nim_journal (
     ok               integer,
     duration_ms      integer,
     anomaly          text    check (anomaly is null or anomaly in
-                       ('batch','malformed_json','framing','duplicate_id')),
+                       ('batch','malformed_json','framing','duplicate_id','duplicate_key','unreadable_call')),
     occurred_at      text    not null,
     machine_id       text,
     client           text,
@@ -75,8 +96,14 @@ create table if not exists nim_journal (
     agent            text,
     prev_hash        text    not null,
     hash             text    not null
-);
+)`
 
+// journalTableStored is what sqlite_master holds for a table this build made.
+const journalTableStored = "CREATE TABLE nim_journal " + journalTableBody
+
+// journalIndexes are recreated after a rebuild; the schema below creates them
+// too, so they are one list.
+const journalIndexes = `
 create index if not exists nim_journal_occurred_at_idx on nim_journal (occurred_at desc);
 create index if not exists nim_journal_kind_idx        on nim_journal (kind);
 
@@ -90,7 +117,11 @@ create index if not exists nim_journal_kind_idx        on nim_journal (kind);
 -- distinct, so those stay unconstrained -- a session can have as many anomalies
 -- as it produces.
 create unique index if not exists nim_journal_entry_idx on nim_journal (session_id, seq, kind);
+`
 
+const schema = `
+create table if not exists nim_journal ` + journalTableBody + `;
+` + journalIndexes + `
 -- Connector metadata. Not part of the chain, and deliberately so: the chain
 -- records what happened, and this is configuration that decides what may
 -- happen. Mixing the two would put a mutable row inside an append-only record.
@@ -133,6 +164,34 @@ create table if not exists nim_agents (
     exec_path   text    not null,
     enrolled_at text    not null
 );
+
+-- Policy. A rule refuses one tool, for every session or for those of one
+-- enrolled agent, on every connector or on one. Rules only ever deny: a call
+-- no rule names is allowed, exactly as it was when the list lived in
+-- config.toml. What changed is where it lives and what a change leaves
+-- behind. This is the one table an authorization decision reads, which is the
+-- standing decision config.toml broke; and every insert or delete here is
+-- paired, in the same transaction, with a rule.add or rule.remove entry in
+-- the chain, so the rules have a history that verifies like the calls do.
+--
+-- Deny-only is deliberate and temporary in the same sense the deny list was:
+-- an allow rule needs a precedence between allow and deny, which is a policy
+-- language, and that is a later milestone with a spike in front of it.
+--
+-- A null agent or connector means "every"; '' is never stored, which is what
+-- lets a session with no derived agent match only the rules that name none.
+create table if not exists nim_rules (
+    id          integer primary key autoincrement,
+    agent       text,
+    connector   text,
+    tool        text    not null,
+    effect      text    not null check (effect in ('deny')),
+    created_at  text    not null
+);
+
+create unique index if not exists nim_rules_scope_idx
+    on nim_rules (ifnull(agent, ''), ifnull(connector, ''), tool);
+create index if not exists nim_rules_tool_idx on nim_rules (tool);
 `
 
 // migrations are additive statements applied after schema, each of which must
@@ -153,7 +212,76 @@ func migrate(db *sql.DB) error {
 			return fmt.Errorf("migration %q: %w", stmt, err)
 		}
 	}
-	return nil
+	_, err := rebuildJournalTable(db)
+	return err
+}
+
+// rebuildJournalTable brings an existing nim_journal up to this build's
+// definition when the two differ, and reports whether it did.
+//
+// Adding a column is an ALTER TABLE; changing a CHECK constraint is not.
+// SQLite has no way to widen `kind in (...)` in place, and a milestone that
+// adds a kind of entry -- rule.add here -- would otherwise be refused by every
+// database created before it. So the table is rebuilt, the way SQLite's own
+// documentation prescribes: a new table under the real name, every row copied
+// across in chain order, the old one dropped. The rows are copied verbatim,
+// chain_seq, prev_hash and hash included, so the chain that comes out is the
+// chain that went in; a test holds it to that.
+//
+// The trigger is the stored CREATE statement not matching journalTableStored
+// byte for byte. Views are dropped first because a rename rewrites any view
+// that names the table, and syncViews puts them back afterwards. The whole
+// thing is one immediate transaction, so a second process opening the same
+// file waits rather than finding half a table.
+func rebuildJournalTable(db *sql.DB) (rebuilt bool, err error) {
+	var stored sql.NullString
+	err = db.QueryRow(
+		`select sql from sqlite_master where type = 'table' and name = 'nim_journal'`).Scan(&stored)
+	if err != nil {
+		return false, fmt.Errorf("reading the journal table definition: %w", err)
+	}
+	if stored.Valid && stored.String == journalTableStored {
+		return false, nil
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return false, fmt.Errorf("rebuilding the journal table: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Re-read under the write lock: another handle may have rebuilt it while
+	// this one waited, and rebuilding a table that is already right is how two
+	// opens would collide.
+	if err := tx.QueryRow(
+		`select sql from sqlite_master where type = 'table' and name = 'nim_journal'`).Scan(&stored); err != nil {
+		return false, fmt.Errorf("reading the journal table definition: %w", err)
+	}
+	if stored.String == journalTableStored {
+		return false, nil
+	}
+
+	const columns = `chain_seq, schema_version, kind, session_id, seq, connector, tool,
+		params_digest, decision, ok, duration_ms, anomaly, occurred_at,
+		machine_id, client, protocol_version, agent, prev_hash, hash`
+	for _, stmt := range []string{
+		`drop view if exists nim_sessions`,
+		`drop view if exists nim_calls`,
+		`alter table nim_journal rename to nim_journal_rebuild`,
+		`create table nim_journal ` + journalTableBody,
+		`insert into nim_journal (` + columns + `)
+		   select ` + columns + ` from nim_journal_rebuild order by chain_seq`,
+		`drop table nim_journal_rebuild`,
+		journalIndexes,
+	} {
+		if _, err := tx.Exec(stmt); err != nil {
+			return false, fmt.Errorf("rebuilding the journal table: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("rebuilding the journal table: %w", err)
+	}
+	return true, nil
 }
 
 // Views keep the shape the mirror already expects, without letting anything
@@ -174,6 +302,7 @@ select
     s.session_id      as id,
     s.machine_id      as machine_id,
     s.client          as client,
+    s.agent           as agent,
     s.connector       as connector,
     s.occurred_at     as started_at,
     (select e.occurred_at from nim_journal e
@@ -188,6 +317,13 @@ where s.kind = 'session.start'`},
 	// every outcome written so far carries ok. A denied call has no outcome and
 	// never will, so telling "no outcome" apart from "outcome says nothing"
 	// decides whether it reads as refused or as still running.
+	//
+	// The session is joined on the left. It used to be an inner join, which
+	// made a call whose session.start was never written -- the daemon accepted
+	// the start and failed to commit it, then recovered -- vanish from every
+	// call-shaped surface while the totals still counted it. Such a call is
+	// shown with no connector and no agent, and Loss() counts it, so the
+	// discrepancy is a number rather than something noticed by diffing.
 	{"nim_calls", `create view nim_calls as
 select
     r.chain_seq     as chain_seq,
@@ -195,6 +331,7 @@ select
     r.session_id    as session_id,
     r.seq           as seq,
     s.connector     as connector,
+    s.agent         as agent,
     r.tool          as tool,
     r.params_digest as params_digest,
     r.decision      as decision,
@@ -203,7 +340,7 @@ select
     o.duration_ms   as duration_ms,
     r.occurred_at   as occurred_at
 from nim_journal r
-join nim_journal s
+left join nim_journal s
   on s.kind = 'session.start' and s.session_id = r.session_id
 left join nim_journal o
   on o.kind = 'call.outcome' and o.session_id = r.session_id and o.seq = r.seq
@@ -247,7 +384,7 @@ func syncViews(db *sql.DB) error {
 			tx.Rollback()
 			return err
 		}
-		if err == nil && stored.Valid && stored.String == v.ddl {
+		if err == nil && stored.Valid && stored.String == storedForm(v.ddl) {
 			tx.Rollback()
 			continue
 		}
@@ -279,7 +416,20 @@ func viewMatches(db *sql.DB, name, ddl string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return stored.Valid && stored.String == ddl, nil
+	return stored.Valid && stored.String == storedForm(ddl), nil
+}
+
+// storedForm is how sqlite_master will hold a CREATE statement: the first two
+// keywords upper-cased, the rest verbatim. Comparing against the statement as
+// written never matched, so every open dropped and recreated both views under
+// a write lock while this file said the steady state was a read. A test now
+// holds the comparison to matching.
+func storedForm(ddl string) string {
+	words := strings.SplitN(ddl, " ", 3)
+	if len(words) < 3 {
+		return ddl
+	}
+	return strings.ToUpper(words[0]) + " " + strings.ToUpper(words[1]) + " " + words[2]
 }
 
 // Entry is one immutable record. Nullable fields are pointers so that an absent
@@ -500,9 +650,26 @@ func (j *Journal) Append(e Entry) error {
 	}
 	defer tx.Rollback()
 
+	if err := j.appendTx(tx, e); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// appendTx links and writes one entry inside a transaction the caller owns and
+// will commit. Callers hold j.mu: the head is read here and the next entry
+// chained to it, and two of these interleaved would both claim the same
+// chain_seq.
+//
+// It exists apart from Append so that a change which must leave an entry --
+// a policy rule added or removed -- can write the change and its entry in one
+// transaction. Either order of two transactions can lie on failure: a rule
+// with no entry, or an entry describing a rule that was never stored. One
+// transaction cannot.
+func (j *Journal) appendTx(tx *sql.Tx, e Entry) error {
 	var headSeq sql.NullInt64
 	var headHash sql.NullString
-	err = tx.QueryRow(
+	err := tx.QueryRow(
 		`select chain_seq, hash from nim_journal order by chain_seq desc limit 1`,
 	).Scan(&headSeq, &headHash)
 	if err != nil && err != sql.ErrNoRows {
@@ -531,10 +698,7 @@ func (j *Journal) Append(e Entry) error {
 		e.ParamsDigest, e.Decision, e.OK, e.DurationMS, e.Anomaly, e.OccurredAt,
 		e.MachineID, e.Client, e.ProtocolVersion, e.Agent, e.PrevHash, e.Hash,
 	)
-	if err != nil {
-		return err
-	}
-	return tx.Commit()
+	return err
 }
 
 // Head reports the length of the chain and its last hash. Both are printed by
@@ -553,6 +717,17 @@ func (j *Journal) Head() (length int64, hash string, err error) {
 		return 0, "", err
 	}
 	return seq.Int64, h.String, nil
+}
+
+// SessionExists reports whether a session.start has ever been recorded under
+// id. The daemon asks before accepting one: a session id names a session, and a
+// second start under the same name would let a second connection write into
+// the first one's story.
+func (j *Journal) SessionExists(id string) (bool, error) {
+	var n int
+	err := j.db.QueryRow(
+		`select count(*) from nim_journal where kind = ? and session_id = ?`, KindSessionStart, id).Scan(&n)
+	return n > 0, err
 }
 
 // CountCalls is the number of tool calls seen. Used by `nim status`.
@@ -755,6 +930,23 @@ func (j *Journal) DeleteAgent(name string) error {
 	}
 	_, err := j.db.Exec(`delete from nim_agents where name = ?`, name)
 	return err
+}
+
+// AgentNamed looks up an enrolment by the name the operator gave it.
+func (j *Journal) AgentNamed(name string) (Agent, bool, error) {
+	var a Agent
+	var enrolledAt string
+	err := j.db.QueryRow(
+		`select name, exec_dev, exec_ino, exec_path, enrolled_at from nim_agents where name = ?`, name).
+		Scan(&a.Name, &a.ExecDev, &a.ExecIno, &a.ExecPath, &enrolledAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Agent{}, false, nil
+	}
+	if err != nil {
+		return Agent{}, false, err
+	}
+	a.EnrolledAt, _ = time.Parse(time.RFC3339Nano, enrolledAt)
+	return a, true, nil
 }
 
 // AgentByImage finds the enrolment matching an executable identity.

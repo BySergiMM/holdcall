@@ -36,6 +36,13 @@ type LossReport struct {
 	UnfinishedSessions int // includes any session running right now
 	SessionsWithGaps   int
 	MissingCallEntries int
+	// CallsWithoutSession counts call.request entries whose session.start was
+	// never written. session.start is one-way, so the daemon can accept it and
+	// fail to commit it, then recover and record every call that follows; those
+	// calls are real and decided, but belong to a session the journal has no
+	// start for. They used to be invisible to nim log and the console while the
+	// totals still counted them.
+	CallsWithoutSession int
 }
 
 func (j *Journal) Loss() (LossReport, error) {
@@ -67,13 +74,23 @@ func (j *Journal) Loss() (LossReport, error) {
 		return r, err
 	}
 	r.MissingCallEntries = int(missing.Int64)
-	return r, nil
+
+	err = j.db.QueryRow(`
+		select count(*) from nim_journal r
+		 where r.kind = 'call.request'
+		   and not exists (select 1 from nim_journal s
+		                    where s.kind = 'session.start' and s.session_id = r.session_id)
+	`).Scan(&r.CallsWithoutSession)
+	return r, err
 }
 
-// Anomalies counts the messages NIM saw but could not account for: batches that
-// slip past inspection, JSON it could not parse, more than one value in a
-// frame, and reused in-flight ids. None of them are blocked in this milestone.
-// Counting them turns a blind spot into a number.
+// Anomalies counts the messages Nim saw and could not account for. Since M2
+// most of them are refused rather than relayed -- a frame that is not JSON, a
+// frame carrying two messages, an object naming a key twice, a call with no
+// readable tool name, and a batch carrying a tools/call -- while a batch with
+// no call in it and a reused in-flight id are relayed and merely counted.
+// readmodel.AnomalyDisposition says which is which, so that a surface never has
+// to guess. Counting them turns a blind spot into a number.
 func (j *Journal) Anomalies() (map[string]int, error) {
 	rows, err := j.db.Query(
 		`select anomaly, count(*) from nim_journal where kind = ? group by anomaly order by anomaly`,
@@ -144,10 +161,14 @@ func (j *Journal) EntriesSince(since int64, limit int) ([]Entry, error) {
 // running right now and one whose daemon died, and the journal cannot tell them
 // apart -- so neither can anything built on this.
 type SessionRow struct {
-	ChainSeq      int64
-	ID            string
-	MachineID     *string
-	Client        *string
+	ChainSeq  int64
+	ID        string
+	MachineID *string
+	Client    *string
+	// Agent is the enrolled program the daemon derived the session from, or
+	// nil when no enrolment matched. Client, beside it, is the label the relay
+	// chose; this is the one the kernel answered.
+	Agent         *string
 	Connector     *string
 	StartedAt     string
 	EndedAt       *string
@@ -165,20 +186,7 @@ func (j *Journal) Sessions(limit int) ([]SessionRow, error) {
 	if limit <= 0 || limit > MaxEntriesPerRead {
 		limit = MaxEntriesPerRead
 	}
-	rows, err := j.db.Query(`
-		select s.chain_seq, s.id, s.machine_id, s.client, s.connector, s.started_at, s.ended_at,
-		       (select count(*) from nim_journal r
-		         where r.kind = 'call.request' and r.session_id = s.id),
-		       (select count(*) from nim_journal d
-		         where d.kind = 'call.request' and d.session_id = s.id
-		           and d.decision in ('deny','rejected')),
-		       (select count(*) from nim_journal o
-		         where o.kind = 'call.outcome' and o.session_id = s.id),
-		       (select count(*) from nim_journal a
-		         where a.kind = 'anomaly'      and a.session_id = s.id)
-		  from nim_sessions s
-		 order by s.chain_seq desc
-		 limit ?`, limit)
+	rows, err := j.db.Query(sessionQuery+` order by s.chain_seq desc limit ?`, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -186,19 +194,63 @@ func (j *Journal) Sessions(limit int) ([]SessionRow, error) {
 
 	var out []SessionRow
 	for rows.Next() {
-		var s SessionRow
-		var machineID, client, connector, endedAt sql.NullString
-		if err := rows.Scan(&s.ChainSeq, &s.ID, &machineID, &client, &connector,
-			&s.StartedAt, &endedAt, &s.CallsRecorded, &s.Denied, &s.Outcomes, &s.Anomalies); err != nil {
+		s, err := scanSession(rows)
+		if err != nil {
 			return nil, err
 		}
-		s.MachineID = nullable(machineID)
-		s.Client = nullable(client)
-		s.Connector = nullable(connector)
-		s.EndedAt = nullable(endedAt)
 		out = append(out, s)
 	}
 	return out, rows.Err()
+}
+
+// Session reads one session by id. found is false, with no error, when no
+// session.start was ever recorded under it -- which is also what a session
+// whose start was lost looks like, so a caller holding entries for an id this
+// cannot find should say so rather than show an empty summary.
+func (j *Journal) Session(id string) (SessionRow, bool, error) {
+	rows, err := j.db.Query(sessionQuery+` where s.id = ? limit 1`, id)
+	if err != nil {
+		return SessionRow{}, false, err
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return SessionRow{}, false, rows.Err()
+	}
+	s, err := scanSession(rows)
+	if err != nil {
+		return SessionRow{}, false, err
+	}
+	return s, true, rows.Err()
+}
+
+// sessionQuery is one session with its counts, shared by the list and the
+// single lookup so the two cannot disagree about what a session is.
+const sessionQuery = `
+	select s.chain_seq, s.id, s.machine_id, s.client, s.agent, s.connector, s.started_at, s.ended_at,
+	       (select count(*) from nim_journal r
+	         where r.kind = 'call.request' and r.session_id = s.id),
+	       (select count(*) from nim_journal d
+	         where d.kind = 'call.request' and d.session_id = s.id
+	           and d.decision in ('deny','rejected')),
+	       (select count(*) from nim_journal o
+	         where o.kind = 'call.outcome' and o.session_id = s.id),
+	       (select count(*) from nim_journal a
+	         where a.kind = 'anomaly'      and a.session_id = s.id)
+	  from nim_sessions s`
+
+func scanSession(rows *sql.Rows) (SessionRow, error) {
+	var s SessionRow
+	var machineID, client, agent, connector, endedAt sql.NullString
+	if err := rows.Scan(&s.ChainSeq, &s.ID, &machineID, &client, &agent, &connector,
+		&s.StartedAt, &endedAt, &s.CallsRecorded, &s.Denied, &s.Outcomes, &s.Anomalies); err != nil {
+		return SessionRow{}, err
+	}
+	s.MachineID = nullable(machineID)
+	s.Client = nullable(client)
+	s.Agent = nullable(agent)
+	s.Connector = nullable(connector)
+	s.EndedAt = nullable(endedAt)
+	return s, nil
 }
 
 // SessionEntries returns everything recorded for one session, in journal order.
@@ -235,8 +287,11 @@ type CallRow struct {
 	ChainSeq   int64
 	OccurredAt string
 	Connector  string
-	Tool       string
-	Decision   string
+	// Agent is the session's derived agent, "" when none was derived or when
+	// the session.start itself is missing.
+	Agent    string
+	Tool     string
+	Decision string
 	// HasOutcome says whether the call finished. OK says how it finished, and is
 	// meaningless without this: a call with no outcome and a call whose outcome
 	// carried nothing would otherwise look the same.
@@ -253,7 +308,7 @@ type CallRow struct {
 // a fact about the journal.
 func (j *Journal) RecentCalls(limit int) ([]CallRow, error) {
 	rows, err := j.db.Query(
-		`select chain_seq, occurred_at, connector, tool, decision, has_outcome, ok, duration_ms
+		`select chain_seq, occurred_at, connector, agent, tool, decision, has_outcome, ok, duration_ms
 		   from nim_calls order by chain_seq desc limit ?`, limit)
 	if err != nil {
 		return nil, err
@@ -263,18 +318,19 @@ func (j *Journal) RecentCalls(limit int) ([]CallRow, error) {
 	var out []CallRow
 	for rows.Next() {
 		var c CallRow
-		// Nullable, all three of them. A tools/call with no params.name records
-		// no tool, a session that reported no connector records none, and
-		// scanning either into a string turns `nim log` into an error message
-		// about SQL. The decision is null only in journals older than M2.
-		var connector, tool, decision sql.NullString
+		// Nullable, all of them. A tools/call with no params.name records no
+		// tool, a session that reported no connector records none, most
+		// sessions derive no agent, and scanning any of those into a string
+		// turns `nim log` into an error message about SQL. The decision is null
+		// only in journals older than M2.
+		var connector, agent, tool, decision sql.NullString
 		var ok sql.NullBool
 		var duration sql.NullInt64
-		if err := rows.Scan(&c.ChainSeq, &c.OccurredAt, &connector, &tool, &decision,
+		if err := rows.Scan(&c.ChainSeq, &c.OccurredAt, &connector, &agent, &tool, &decision,
 			&c.HasOutcome, &ok, &duration); err != nil {
 			return nil, err
 		}
-		c.Connector, c.Tool, c.Decision = connector.String, tool.String, decision.String
+		c.Connector, c.Agent, c.Tool, c.Decision = connector.String, agent.String, tool.String, decision.String
 		if ok.Valid {
 			c.OK = &ok.Bool
 		}

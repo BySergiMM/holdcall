@@ -56,10 +56,23 @@ func New(src readmodel.Source, socketPath string) *Server {
 	return s
 }
 
-// Handler wraps the routes with the two rules that make this safe to leave
-// running: nothing but GET, and no guessing at content types.
+// Handler wraps the routes with the three rules that make this safe to leave
+// running: nothing but GET, no guessing at content types, and no answering to
+// a name that is not loopback.
+//
+// The last one is what Listen's loopback bind does not give. A page on any
+// site can point a script at http://its-own-name:7717 and have DNS answer
+// 127.0.0.1 for that name -- rebinding -- after which the browser treats the
+// console as the page's own origin and hands it the record: tool names,
+// connectors, session ids, digests, the chain head. The bind address never
+// sees the difference; the Host header does, so a request that arrived under
+// any other name is refused before a route runs.
 func (s *Server) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !hostIsLoopback(r.Host) {
+			http.Error(w, "the console answers only to a loopback name", http.StatusMisdirectedRequest)
+			return
+		}
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			w.Header().Set("Allow", "GET, HEAD")
 			http.Error(w, "the console only reads", http.StatusMethodNotAllowed)
@@ -68,6 +81,15 @@ func (s *Server) Handler() http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		s.mux.ServeHTTP(w, r)
 	})
+}
+
+// hostIsLoopback reports whether a Host header names this machine and nothing
+// else: localhost, or a literal loopback address, with or without a port.
+func hostIsLoopback(host string) bool {
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	return isLoopback(strings.Trim(host, "[]"))
 }
 
 // Listen binds the console. The address must be loopback: this serves the

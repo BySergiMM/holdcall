@@ -37,7 +37,16 @@ is updated.
 chain, not the content.
 
 `kind` is one of `session.start`, `call.request`, `call.outcome`, `session.end`,
-`anomaly`.
+`anomaly`, `rule.add`, `rule.remove`.
+
+`rule.add` and `rule.remove` record a policy change: a rule that refuses
+`tool` for the sessions in its scope. They carry the scope in `agent` (null:
+every session) and `connector` (null: every connector), the tool in `tool`,
+and the effect in `decision`, which is always `deny` today. They carry no
+session: `session_id` is the empty string, which the encoding keeps distinct
+from null, and `seq` is null. The rule and its entry are written in one SQLite
+transaction, so the chain never describes a rule that was not stored and no
+rule exists that the chain does not know about.
 
 `decision` is one of `observed`, `allow`, `deny`, `approved`, `rejected`. M2
 writes `allow` and `deny`. `observed` is what earlier milestones wrote, when
@@ -45,7 +54,12 @@ nothing was authorized at all, and it is still what those entries hold — which
 why enforcement needed no migration. `approved` and `rejected` belong to human
 approval and are not written yet. See *What a decision means* below.
 
-`anomaly` is one of `batch`, `malformed_json`, `framing`, `duplicate_id`.
+`anomaly` is one of `batch`, `malformed_json`, `framing`, `duplicate_id`,
+`duplicate_key`, `unreadable_call`. Since M2 the relay refuses most of them
+rather than relaying them: a frame that is not JSON, a frame carrying two
+messages, an object naming a key twice, a call with no readable tool name, and
+a batch carrying a `tools/call`. A batch carrying none and a reused in-flight
+id are relayed and counted. `nim status` prints which beside each count.
 
 Fields absent for a kind are NULL, and NULL is encoded distinctly from an empty
 string.
@@ -139,10 +153,10 @@ Encoded as the exact UTF-8 bytes held in the column. No escaping, no trimming,
 no case folding, and **no Unicode normalisation**.
 
 Normalisation is deliberately absent. It belongs to the decision path — where
-two spellings of one repository name must not resolve differently — and NIM does
-not decide anything yet. Normalising here would mean the journal recorded
-something other than what was observed, which is the opposite of what a journal
-is for.
+two spellings of one repository name must not resolve differently — and the
+decision path does not normalise either: a rule matches the exact bytes of
+`params.name`. Normalising here would mean the journal recorded something other
+than what was observed, which is the opposite of what a journal is for.
 
 ### Integers
 
@@ -176,14 +190,17 @@ Those questions are real, but they belong to two other places:
 - **Anomaly detection** — batch, malformed JSON and framing are counted and
   recorded as `anomaly` entries, and from M2 the frames that could hide a
   `tools/call` are refused rather than relayed. They are not canonicalised.
-  This is not the full set of JSON ambiguities, and it is not meant to be. In
-  particular **duplicate object keys are not detected**: `{"name":"a","name":"b"}`
-  is accepted by every parser involved, each picks one, and Go picks the last —
-  so the journal records `b` while a server whose parser prefers the first would
-  act on `a`. Noticing that requires parsing strictly and deciding what the
-  message *is*, which is the same work as canonicalising the request, and
-  belongs with it. The standard library gives no signal that a duplicate was
-  seen, so there is no cheap detection to bolt on in the meantime.
+  **Duplicate object keys are detected**, at the two levels Nim reads: the
+  top-level object and `params`. An earlier version of this paragraph said
+  they were not, and understated the consequence -- `"method":5,"method":
+  "tools/call"` did not merely record the wrong name, it put a `tools/call` in
+  front of the connector with no decision at all, because Go's typed decoder
+  read the frame as nothing (F-013). Objects are now read key by key, by the
+  exact bytes of each key; a key that appears twice at a level Nim reads is
+  refused as a `duplicate_key` anomaly, and a key that differs only in case is
+  a different key, to Nim exactly as to a server. Keys inside
+  `params.arguments` are the tool's business: they are digested as bytes and
+  never interpreted, so a repeat there is not one.
 - **Request canonicalisation (not in this milestone)** — when NIM starts
   deciding, the message it authorises must be the message it emits, which needs
   JCS-style canonical JSON with NFC and rejection of duplicate keys. That work
@@ -191,16 +208,27 @@ Those questions are real, but they belong to two other places:
   would change bytes for no benefit.
 
 `params_digest` is therefore still `sha256` over the raw `params.arguments`
-bytes as they arrived. Digests written under `schema_version` 1 are **not**
-comparable with digests written under any later version that canonicalises
-first. The version field is what makes that safe.
+bytes as they arrived. When the `arguments` key is absent the digest is of no
+bytes at all (`e3b0c442…`); when it is present and `null`, of the four bytes
+`null`. A reader comparing digests has to know that "no arguments" has a fixed
+value. A call whose `params` cannot be read as an object with a string `name`
+is refused before any digest is taken, so a digest always belongs to a call
+Nim read. Digests written under `schema_version` 1 are **not** comparable with
+digests written under any later version that canonicalises first. The version
+field is what makes that safe.
 
 ## Chain
 
     genesis        := sha256("nim.journal.v1.genesis" 0x0A || machine_id)
-    hash(n)        := sha256(raw_bytes(prev_hash(n)) || canonical_encode_v1(entry n))
+    hash(n)        := sha256(raw_bytes(prev_hash(n)) || canonical_encode_v{schema_version(n)}(entry n))
     prev_hash(1)   := genesis
     prev_hash(n)   := hash(n-1)
+
+The encoder is the one the entry's own `schema_version` names: `v1` for
+entries written before `agent` existed, `v2` after. An earlier version of this
+formula said `canonical_encode_v1` for every entry, which a second
+implementation transcribing it would have followed into rejecting every v2
+entry. See *Verifying a journal that spans versions*.
 
 `raw_bytes` is the 32-byte decoding of the hex-encoded previous hash, not its
 hex text. Hashes are stored as lowercase hex.

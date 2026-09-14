@@ -2,6 +2,9 @@ package mcp
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -68,8 +71,12 @@ func TestParseRecognisesToolCalls(t *testing.T) {
 	if env.IsResponse() {
 		t.Error("a request must not look like a response")
 	}
-	if got := env.ToolName(); got != "send_email" {
-		t.Errorf("tool name = %q", got)
+	call, err := env.Call()
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+	if call.Name != "send_email" {
+		t.Errorf("tool name = %q", call.Name)
 	}
 	if env.Key() != "7" {
 		t.Errorf("key = %q", env.Key())
@@ -224,20 +231,149 @@ func TestFailedToolCallsAreRecognised(t *testing.T) {
 
 // Arguments never leave the machine; only this digest does.
 func TestArgumentsDigestIsStableAndDoesNotLeak(t *testing.T) {
-	a, _ := Parse([]byte(`{"method":"tools/call","params":{"name":"t","arguments":{"secret":"hunter2"}}}`))
-	b, _ := Parse([]byte(`{"method":"tools/call","params":{"name":"t","arguments":{"secret":"hunter2"}}}`))
-	c, _ := Parse([]byte(`{"method":"tools/call","params":{"name":"t","arguments":{"secret":"other"}}}`))
+	digest := func(raw string) string {
+		env, _ := Parse([]byte(raw))
+		call, err := env.Call()
+		if err != nil {
+			t.Fatalf("Call(%s): %v", raw, err)
+		}
+		return call.Digest
+	}
+	a := digest(`{"method":"tools/call","params":{"name":"t","arguments":{"secret":"hunter2"}}}`)
+	b := digest(`{"method":"tools/call","params":{"name":"t","arguments":{"secret":"hunter2"}}}`)
+	c := digest(`{"method":"tools/call","params":{"name":"t","arguments":{"secret":"other"}}}`)
 
-	if a.ArgumentsDigest() != b.ArgumentsDigest() {
+	if a != b {
 		t.Error("identical arguments must digest identically")
 	}
-	if a.ArgumentsDigest() == c.ArgumentsDigest() {
+	if a == c {
 		t.Error("different arguments must digest differently")
 	}
-	if strings.Contains(a.ArgumentsDigest(), "hunter2") {
+	if strings.Contains(a, "hunter2") {
 		t.Error("the digest leaked the argument")
 	}
-	if len(a.ArgumentsDigest()) != 64 {
-		t.Errorf("expected a sha256 hex digest, got %d chars", len(a.ArgumentsDigest()))
+	if len(a) != 64 {
+		t.Errorf("expected a sha256 hex digest, got %d chars", len(a))
+	}
+
+	// Stated in docs/journal-format.md, so it is held to here: no arguments key
+	// digests to the hash of no bytes, and a null one to the hash of `null`.
+	if got := digest(`{"method":"tools/call","params":{"name":"t"}}`); got != sha256Hex("") {
+		t.Errorf("absent arguments digest to %s, want the digest of nothing", got)
+	}
+	if got := digest(`{"method":"tools/call","params":{"name":"t","arguments":null}}`); got != sha256Hex("null") {
+		t.Errorf("null arguments digest to %s, want the digest of `null`", got)
+	}
+}
+
+func sha256Hex(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
+}
+
+// ---------- objects that do not mean one thing ----------
+
+// The bypass this closes, reproduced against the relay before the fix: Go's
+// typed decoder matches keys case-insensitively, lets the last of several
+// matches win, and carries on past a member of the wrong type, while Python
+// and JavaScript take the last exact key. Every frame below was a tools/call
+// to a server and something else to Nim.
+func TestAnObjectNamingAKeyTwiceIsRefusedNotGuessed(t *testing.T) {
+	for _, raw := range []string{
+		`{"jsonrpc":"2.0","id":1,"method":5,"method":"tools/call","params":{"name":"rm"}}`,
+		`{"jsonrpc":"2.0","id":1,"method":"ping","method":"tools/call","params":{"name":"rm"}}`,
+		`{"jsonrpc":"2.0","id":1,"id":2,"method":"tools/call","params":{"name":"rm"}}`,
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"a"},"params":{"name":"rm"}}`,
+	} {
+		env, anomaly := Classify([]byte(raw))
+		if anomaly != AnomalyDuplicateKey {
+			t.Errorf("Classify(%s) = %q, want %q", raw, anomaly, AnomalyDuplicateKey)
+		}
+		if env.IsToolCall() {
+			t.Errorf("Classify(%s) produced an envelope from an object it should not have read", raw)
+		}
+		if _, ok := Parse([]byte(raw)); ok {
+			t.Errorf("Parse(%s) accepted an object that names a key twice", raw)
+		}
+	}
+}
+
+// A key that differs only in case is a different key, to Nim exactly as to a
+// server. `"Method":"ping"` beside `"method":"tools/call"` used to make Nim
+// read ping.
+func TestKeysAreMatchedByExactBytes(t *testing.T) {
+	env, anomaly := Classify([]byte(
+		`{"jsonrpc":"2.0","id":1,"ID":2,"method":"tools/call","Method":"ping","params":{"name":"delete_repository","Name":"list"}}`))
+	if anomaly != AnomalyNone {
+		t.Fatalf("anomaly = %q; case-variant keys are distinct keys, not duplicates", anomaly)
+	}
+	if !env.IsToolCall() {
+		t.Fatal("the tools/call was read as something else")
+	}
+	if env.Key() != "1" {
+		t.Errorf("id = %s, want 1: the answer would go out under an id the client never sent", env.Key())
+	}
+	call, err := env.Call()
+	if err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+	if call.Name != "delete_repository" {
+		t.Errorf("tool = %q; the daemon would decide on one tool while the server ran another", call.Name)
+	}
+}
+
+// A tools/call Nim cannot read as one tool name is refused, not decided on a
+// guess. The daemon used to see "" for every one of these.
+func TestACallWithoutOneReadableNameIsRefused(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want error
+	}{
+		{`{"id":1,"method":"tools/call"}`, ErrUnreadableCall},
+		{`{"id":1,"method":"tools/call","params":"delete_repository"}`, ErrUnreadableCall},
+		{`{"id":1,"method":"tools/call","params":{}}`, ErrUnreadableCall},
+		{`{"id":1,"method":"tools/call","params":{"name":0}}`, ErrUnreadableCall},
+		{`{"id":1,"method":"tools/call","params":{"name":["rm"]}}`, ErrUnreadableCall},
+		{`{"id":1,"method":"tools/call","params":{"name":"a","name":"rm"}}`, ErrDuplicateKey},
+		{`{"id":1,"method":"tools/call","params":{"name":"rm","arguments":{},"arguments":{"x":1}}}`, ErrDuplicateKey},
+	}
+	for _, c := range cases {
+		env, anomaly := Classify([]byte(c.raw))
+		if anomaly != AnomalyNone || !env.IsToolCall() {
+			t.Fatalf("%s: not read as a tools/call (anomaly %q)", c.raw, anomaly)
+		}
+		if _, err := env.Call(); !errors.Is(err, c.want) {
+			t.Errorf("%s: Call() = %v, want %v", c.raw, err, c.want)
+		}
+	}
+
+	// Keys inside arguments are the tool's business, not Nim's: they are
+	// digested as bytes and never interpreted, so a repeat there is not one.
+	env, _ := Classify([]byte(`{"id":1,"method":"tools/call","params":{"name":"rm","arguments":{"a":1,"a":2}}}`))
+	if _, err := env.Call(); err != nil {
+		t.Errorf("a repeated key inside arguments was refused: %v", err)
+	}
+}
+
+// A method that is not a string names nothing a server can dispatch; the frame
+// is relayed for the server to reject, as it would be with no Nim in the way.
+func TestANonStringMethodIsNotACall(t *testing.T) {
+	env, anomaly := Classify([]byte(`{"jsonrpc":"2.0","id":1,"method":["tools/call"],"params":{"name":"rm"}}`))
+	if anomaly != AnomalyNone || env.IsToolCall() {
+		t.Fatalf("anomaly = %q, tool call = %v", anomaly, env.IsToolCall())
+	}
+}
+
+// A batch element is read as strictly as a frame: a tools/call hidden behind a
+// repeated key inside an element used to make the whole batch look harmless.
+func TestABatchElementNamingAKeyTwiceIsUnreadable(t *testing.T) {
+	raw := `[{"jsonrpc":"2.0","id":1,"method":"ping"},{"jsonrpc":"2.0","id":2,"method":"ping","method":"tools/call","params":{"name":"rm"}}]`
+	if _, ok := BatchElements([]byte(raw)); ok {
+		t.Fatal("a batch with an ambiguous element was read as readable")
+	}
+	raw = `[{"jsonrpc":"2.0","id":2,"method":"tools/call","Method":"ping","params":{"name":"rm"}}]`
+	envs, ok := BatchElements([]byte(raw))
+	if !ok || len(envs) != 1 || !envs[0].IsToolCall() {
+		t.Fatal("a case-variant key hid the tools/call in a batch element")
 	}
 }

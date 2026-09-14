@@ -69,14 +69,20 @@ jobs:
       # credential read, a BUSY_SNAPSHOT under concurrent journal writes), and
       # each was reproducible only under contention.
       #
+      # -shuffle=on because the dashboard says the suite runs shuffled, and
+      # for a while it said so while this line did not shuffle anything. A
+      # test that passes only after the one before it has run is a test that
+      # proves less than it claims; the seed is printed, so a failure can be
+      # replayed with -shuffle=<seed>.
+      #
       # -v is not optional either, and for a less obvious reason: without it a
       # package whose adversarial tests all skipped prints exactly the same
       # "ok" as one where they all passed. pipefail keeps the pipe into tee
       # from swallowing a real failure.
-      - name: go test -race -v
+      - name: go test -race -shuffle -v
         run: |
           set -o pipefail
-          go test -race -count=1 -v ./... 2>&1 | tee /tmp/gotest.log
+          go test -race -shuffle=on -count=1 -v ./... 2>&1 | tee /tmp/gotest.log
 
       # And having made skips visible, refuse to ignore them: any test the
       # dashboard cites as evidence for a verified guarantee must have run.

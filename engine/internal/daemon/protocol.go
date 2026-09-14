@@ -34,6 +34,15 @@ type Request struct {
 	// it returns a connector's command rather than accepting one.
 	AgentName string `json:"agent_name,omitempty"`
 	AgentPath string `json:"agent_path,omitempty"`
+
+	// RuleTool, RuleAgent and RuleConnector describe a rule for the policy.*
+	// kinds. RuleAgent names an enrolment and is not an identity claim: it
+	// says whose sessions the rule is for, and the daemon checks that such
+	// an enrolment exists rather than taking the name to mean anything on
+	// its own. An empty RuleAgent or RuleConnector means every.
+	RuleTool      string `json:"rule_tool,omitempty"`
+	RuleAgent     string `json:"rule_agent,omitempty"`
+	RuleConnector string `json:"rule_connector,omitempty"`
 }
 
 const (
@@ -45,6 +54,10 @@ const (
 	KindAgentAdd    = "agent.add"
 	KindAgentList   = "agent.list"
 	KindAgentRemove = "agent.remove"
+
+	KindPolicyDeny   = "policy.deny"
+	KindPolicyRemove = "policy.remove"
+	KindPolicyList   = "policy.list"
 )
 
 // String redacts Secret so that even a future fmt.Printf/log.Printf("%v", req)
@@ -81,6 +94,18 @@ type Response struct {
 
 	// agent.list
 	Agents []AgentInfo `json:"agents,omitempty"`
+
+	// policy.list; also the one rule policy.deny and policy.remove acted on.
+	Rules []RuleInfo `json:"rules,omitempty"`
+}
+
+// RuleInfo is one rule as reported to the CLI. Agent and Connector are empty
+// when the rule applies to every one.
+type RuleInfo struct {
+	Agent     string `json:"agent,omitempty"`
+	Connector string `json:"connector,omitempty"`
+	Tool      string `json:"tool"`
+	CreatedAt string `json:"created_at"`
 }
 
 // ConnectorInfo is non-secret connector metadata: which env var name a
@@ -114,8 +139,8 @@ func (r Response) String() string {
 	if len(r.Env) > 0 {
 		env = "<redacted>"
 	}
-	return fmt.Sprintf("Response{ID:%s Error:%q Found:%v Env:%s Connectors:%d Agents:%d}",
-		r.ID, r.Error, r.Found, env, len(r.Connectors), len(r.Agents))
+	return fmt.Sprintf("Response{ID:%s Error:%q Found:%v Env:%s Connectors:%d Agents:%d Rules:%d}",
+		r.ID, r.Error, r.Found, env, len(r.Connectors), len(r.Agents), len(r.Rules))
 }
 
 // SendRequest writes req and reads back its Response on conn. Used by the

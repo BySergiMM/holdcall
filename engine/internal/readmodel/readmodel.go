@@ -44,6 +44,7 @@ type SnapshotSource interface {
 // SessionSource backs the session list and one session's detail.
 type SessionSource interface {
 	Sessions(limit int) ([]journal.SessionRow, error)
+	Session(id string) (journal.SessionRow, bool, error)
 	SessionEntries(id string, limit int) ([]journal.Entry, error)
 }
 
@@ -89,6 +90,13 @@ type Event struct {
 	Client          *string `json:"client,omitempty"`
 	ProtocolVersion *string `json:"protocol_version,omitempty"`
 
+	// Agent is the enrolled program the daemon derived a session from, on
+	// session.start, and the scope of a rule on rule.add and rule.remove. It
+	// is hashed like every other field, so a reader recomputing an entry's
+	// hash from this projection needs it; it was missing for a while, which
+	// made `nim log --json` an incomplete account of a v2 entry.
+	Agent *string `json:"agent,omitempty"`
+
 	PrevHash string `json:"prev_hash"`
 	Hash     string `json:"hash"`
 }
@@ -113,6 +121,7 @@ func EventFrom(e journal.Entry) Event {
 		MachineID:       copyString(e.MachineID),
 		Client:          copyString(e.Client),
 		ProtocolVersion: copyString(e.ProtocolVersion),
+		Agent:           copyString(e.Agent),
 		PrevHash:        e.PrevHash,
 		Hash:            e.Hash,
 	}

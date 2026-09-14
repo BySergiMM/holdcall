@@ -28,8 +28,8 @@ justifying a timeout; the tail is the thing that has to stay clear of it.
 | Go | 1.26.5 |
 | Build | `CGO_ENABLED=0`, `modernc.org/sqlite` (pure Go) |
 | Journal | `synchronous=FULL`, WAL, `_txlock=immediate` |
-| Date | 2026-08-11 |
-| State | `integration/trunk` |
+| Date | 2026-09-14 |
+| State | `m1-bootstrap`, after M4 (a decision reads the rules table) |
 
 Unloaded laptop, on battery, no other significant work running. These are not
 server numbers and are not claimed to be.
@@ -37,26 +37,32 @@ server numbers and are not claimed to be.
 ## Decision path — what a `tools/call` waits for
 
 The whole round trip a relay blocks on: write `call.request` to the socket,
-evaluate the deny list, append the chained entry to SQLite **and commit it**,
-write the decision back, read it. The journal write is included deliberately —
-the entry is durable before the answer is sent, and excluding it would measure
-something Nim never does.
+look the call up in the rules table, append the chained entry to SQLite **and
+commit it**, write the decision back, read it. The journal write is included
+deliberately — the entry is durable before the answer is sent, and excluding it
+would measure something Nim never does.
 
 | Benchmark | p50 | p95 | p99 | max |
 |---|---|---|---|---|
-| `DecisionRoundTrip` (one relay) | 0.075 ms | 0.166 ms | 0.266 ms | 0.91 ms |
-| `DecisionRoundTripContended` (16 relays) | 1.04 ms | 1.41 ms | 1.59 ms | 3.58 ms |
-| `DecisionDenied` (one relay, refused) | 0.073 ms | 0.102 ms | 0.125 ms | 0.36 ms |
+| `DecisionRoundTrip` (one relay) | 0.091 ms | 0.182 ms | 0.263 ms | 1.00 ms |
+| `DecisionRoundTripContended` (16 relays) | 1.22 ms | 1.76 ms | 1.96 ms | 8.45 ms |
+| `DecisionDenied` (one relay, refused) | 0.092 ms | 0.133 ms | 0.169 ms | 0.42 ms |
 
 **What this justifies.** `decisionTimeout` is 2 s — three orders of magnitude
 past the worst p99 above. It cannot fire because the daemon is busy, only
 because it is wedged or gone, which is what makes fail-closed a safety net
 rather than a latency policy.
 
-**Deny is not slower than allow.** It does the same journal write, and the deny
-list is a linear scan of exact names. If those diverged it would mean the
-policy check had become the expensive part; for a list of exact strings it
-must not, and it does not.
+**What M4 cost.** The decision now reads `nim_rules` — one indexed query per
+call, against the one table a decision may read — where it used to scan a
+list in memory. p50 moved from 0.075 ms to 0.091 ms and p99 stayed where it
+was; the commit still dominates. The contended `max` roughly doubled on this
+run, which is one sample at the tail of sixteen relays fighting for one write
+lock and is not a figure to build on.
+
+**Deny is not slower than allow.** It does the same journal write and the same
+rule lookup. If those diverged it would mean the rules had become the expensive
+part; for an indexed exact-name lookup they must not, and they do not.
 
 ## Credential lookup — spawn time, once per session
 
@@ -73,17 +79,17 @@ is that Nim's own part of a credential lookup is free next to everything else.
 
 | Benchmark | Result |
 |---|---|
-| `Append` (one writer, committed) | 79 µs/op |
-| `AppendContended` (4 writers) | 65 µs/op |
-| `CanonicalEncode` (no I/O) | 176 ns/op |
-| `Verify` (2000-entry chain) | 2.95 ms |
+| `Append` (one writer, committed) | 75 µs/op |
+| `AppendContended` (4 writers) | 70 µs/op |
+| `CanonicalEncode` (no I/O) | 185 ns/op |
+| `Verify` (2000-entry chain) | 3.20 ms |
 
-**The commit dominates.** Encoding an entry costs 176 ns; committing it costs
-about 79 µs — 450× more. Hashing is not where the time goes, and any future
+**The commit dominates.** Encoding an entry costs 185 ns; committing it costs
+about 75 µs — 400× more. Hashing is not where the time goes, and any future
 argument about the chain being expensive should start here.
 
-**Verification stays cheap but grows.** 2000 entries in 2.95 ms is roughly
-1.5 µs per entry, and it is linear: a million-entry journal is about 1.5 s.
+**Verification stays cheap but grows.** 2000 entries in 3.2 ms is roughly
+1.6 µs per entry, and it is linear: a million-entry journal is about 1.6 s.
 That is fine for `nim verify` on demand and would not be fine on every write,
 which is why nothing verifies on the write path.
 
@@ -93,20 +99,27 @@ Every message pays the framing cost; only a `tools/call` pays inspection.
 
 | Benchmark | Result | Throughput |
 |---|---|---|
-| `RelayFramingSmall` | 8.7 µs / 64 msgs | 13 MB/s |
-| `RelayFramingLarge` (512 KiB) | 2.6 ms / 64 msgs | 200 MB/s |
-| `RelayInspectSmall` | 2.1 µs | 54 MB/s |
-| `RelayInspectLarge` (512 KiB args) | 5.9 ms | 89 MB/s |
-| `ArgumentsDigest` 1 KiB | 3.5 µs | 291 MB/s |
-| `ArgumentsDigest` 64 KiB | 204 µs | 322 MB/s |
-| `ArgumentsDigest` 512 KiB | 1.6 ms | 321 MB/s |
+| `RelayFramingSmall` | 5.4 µs / 64 msgs | 21 MB/s |
+| `RelayFramingLarge` (512 KiB) | 3.0 ms / 64 msgs | 177 MB/s |
+| `RelayInspectSmall` | 3.6 µs | 31 MB/s |
+| `RelayInspectLarge` (512 KiB args) | 4.8 ms | 109 MB/s |
+| `ArgumentsDigest` 1 KiB | 4.0 µs | 257 MB/s |
+| `ArgumentsDigest` 64 KiB | 201 µs | 327 MB/s |
+| `ArgumentsDigest` 512 KiB | 1.6 ms | 320 MB/s |
+
+**Inspection got stricter, and a small message pays for it.** Since M4 an
+object is read key by key, refusing a key that appears twice, instead of one
+`json.Unmarshal` into a struct — that is what closed the duplicate-key bypass
+(F-013). `RelayInspectSmall` went from 2.1 µs to 3.6 µs per message. A
+tools/call is the only message that pays it, it is paid once, and it is a
+fraction of the journal commit that follows.
 
 **The digest is the size-proportional cost.** Nothing else Nim does per call
 scales with payload size — messages are never re-serialised, only inspected —
 so `ArgumentsDigest` is the floor for a large `tools/call`, and it runs at
 roughly SHA-256's own speed.
 
-**A 512 KiB tool call costs about 6 ms of inspection.** Against a network round
+**A 512 KiB tool call costs about 5 ms of inspection.** Against a network round
 trip to a real service, that is not the thing anyone will notice. Against a
 local server returning instantly, it is measurable, and it is the number to
 watch if inspection ever grows beyond a digest.

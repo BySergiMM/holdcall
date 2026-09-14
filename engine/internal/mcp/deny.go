@@ -22,6 +22,12 @@ const (
 	DeniedNoDecision = "Nim could not reach a decision and denied the call. Do not retry automatically."
 )
 
+// DeniedUnreadable explains a tools/call Nim refused because it could not read
+// which tool it named. Its own sentence, because it is neither a rule nor an
+// outage: the frame was the problem, and sending the same bytes again will
+// meet the same refusal.
+const DeniedUnreadable = "Nim refused this call: it could not read the tool name unambiguously. Do not retry automatically."
+
 // DeniedBatch explains a refused batch.
 const DeniedBatch = "Nim refused this batch: it carries a tools/call, and Nim does not decide batch elements one by one. Send the calls individually."
 

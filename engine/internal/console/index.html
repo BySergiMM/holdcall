@@ -148,7 +148,7 @@ tbody tr.sel{background:#1d2836}
     <div class="panel">
       <div class="hd">Sessions — newest first</div>
       <div class="scroll"><table>
-        <thead><tr><th>#</th><th>session</th><th>state</th><th>connector</th><th>client</th>
+        <thead><tr><th>#</th><th>session</th><th>state</th><th>agent</th><th>connector</th><th>client</th>
           <th>calls recorded</th><th>denied</th><th>outcomes</th><th>anomalies</th><th>started</th></tr></thead>
         <tbody id="session-rows"></tbody>
       </table></div>
@@ -161,6 +161,9 @@ tbody tr.sel{background:#1d2836}
         anything that went missing.</p>
         <p class="note"><b>connector</b> and <b>client</b> are labels the relay reported for
         itself. They are self-asserted, not facts Nim established.</p>
+        <p class="note"><b>agent</b> is the opposite kind of thing: the enrolled program the
+        daemon derived from the kernel — the process that spawned the relay, and the file it
+        was executing. Empty when no enrolment matched, which is the ordinary state.</p>
       </div>
     </div>
   </section>
@@ -242,8 +245,10 @@ function renderOverview() {
   gr.appendChild(cell(g.missing_call_entries, "call entries missing",
     "gaps in a session's seq", g.missing_call_entries ? "warn" : ""));
   gr.appendChild(cell(g.sessions_with_gaps, "sessions with gaps"));
+  gr.appendChild(cell(g.calls_without_session, "calls without a session",
+    "decided, but their session.start never reached the journal", g.calls_without_session ? "warn" : ""));
   gr.appendChild(cell(g.anomalies_total, "anomalies recorded",
-    "messages relayed without inspection", g.anomalies_total ? "warn" : ""));
+    "frames Nim could not account for", g.anomalies_total ? "warn" : ""));
 
   const an = $("#ov-anomalies"); an.replaceChildren();
   const kinds = Object.keys(g.anomalies || {}).sort();
@@ -257,7 +262,9 @@ function renderOverview() {
     }
     an.appendChild(dl);
     an.appendChild(el("p", "note",
-      "These messages were relayed without being inspected. Nothing is blocked at this stage; they are counted so the blind spot has a number."));
+      "What the relay did with each kind: malformed_json, framing, duplicate_key and unreadable_call were refused and never reached the connector; " +
+      "a batch was refused if it carried a tools/call and relayed otherwise; a duplicate_id was relayed, and its second answer cannot be matched to a call. " +
+      "They are counted so the blind spot has a number."));
   }
 
   const alerts = $("#alerts"); alerts.replaceChildren();
@@ -325,7 +332,7 @@ function renderSessions() {
   const list = (snapshot && snapshot.sessions) || [];
   if (!list.length) {
     const tr = el("tr"), td = el("td", "empty", "No sessions recorded.");
-    td.colSpan = 10; tr.appendChild(td); rows.appendChild(tr); return;
+    td.colSpan = 11; tr.appendChild(td); rows.appendChild(tr); return;
   }
   for (const s of list) {
     const tr = el("tr");
@@ -334,7 +341,7 @@ function renderSessions() {
     add(s.chain_seq, "num");
     add(shortId(s.id));
     add(s.state, s.state === "unfinished" ? "warn" : "dim");
-    add(s.connector); add(s.client);
+    add(s.agent, s.agent ? "" : "dim"); add(s.connector); add(s.client);
     add(s.calls_recorded); add(s.denied, s.denied ? "warn" : "dim"); add(s.outcomes);
     add(s.anomalies, s.anomalies ? "warn" : "");
     add(when(s.started_at), "dim");
@@ -365,6 +372,7 @@ function select(e) {
   row("schema_version", e.schema_version);
   row("session_id", e.session_id); row("occurred_at", e.occurred_at);
   row("seq", e.seq); row("connector", e.connector); row("client", e.client);
+  row("agent", e.agent);
   row("machine_id", e.machine_id); row("tool", e.tool);
   row("params_digest", e.params_digest);
   row("decision", e.decision);
@@ -387,6 +395,7 @@ async function selectSession(s) {
   const row = (k, v) => { if (v === undefined || v === null || v === "") return;
     dl.appendChild(el("dt", null, k)); dl.appendChild(el("dd", null, String(v))); };
   row("session_id", d.session.id); row("state", d.session.state);
+  row("agent", d.session.agent);
   row("connector", d.session.connector); row("client", d.session.client);
   row("machine_id", d.session.machine_id);
   row("started_at", d.session.started_at); row("ended_at", d.session.ended_at);

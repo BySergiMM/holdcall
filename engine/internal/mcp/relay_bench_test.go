@@ -68,8 +68,9 @@ func benchInspect(b *testing.B, msg []byte) {
 			b.Fatalf("unexpected anomaly %q", anomaly)
 		}
 		if env.IsToolCall() {
-			_ = env.ToolName()
-			_ = env.ArgumentsDigest()
+			if _, err := env.Call(); err != nil {
+				b.Fatalf("unexpected refusal: %v", err)
+			}
 		}
 	}
 }
@@ -101,7 +102,9 @@ func BenchmarkArgumentsDigest(b *testing.B) {
 			b.SetBytes(int64(kib * 1024))
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				_ = env.ArgumentsDigest()
+				if _, err := env.Call(); err != nil {
+					b.Fatalf("unexpected refusal: %v", err)
+				}
 			}
 		})
 	}

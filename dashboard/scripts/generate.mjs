@@ -19,6 +19,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync, readdirSync, statSync, mkdirSync, existsSync } from "node:fs";
 import { join, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import { SENSITIVE } from "./sensitive.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const dashboard = join(here, "..");
@@ -153,18 +154,7 @@ const enumCheck = (value, allowed, where) => {
 // is walked here rather than trusted, and the build fails rather than
 // publishing one.
 
-const SENSITIVE = [
-  ["a GitHub token", /gh[pousr]_[A-Za-z0-9]{16,}/],
-  ["an AWS key id", /AKIA[0-9A-Z]{16}/],
-  ["a Slack token", /xox[abprs]-[A-Za-z0-9-]{10,}/],
-  ["a private key block", /-----BEGIN [A-Z ]*PRIVATE KEY-----/],
-  ["a bearer token", /bearer\s+[A-Za-z0-9._-]{20,}/i],
-  ["an assignment that looks like a secret", /(SECRET|TOKEN|PASSWORD|API_?KEY|PRIVATE_?KEY)\s*[=:]\s*["']?[A-Za-z0-9._\-/+]{12,}/],
-  ["an absolute macOS user path", /\/Users\/[A-Za-z0-9._-]+\//],
-  ["an absolute Linux user path", /\/home\/[A-Za-z0-9._-]+\//],
-  ["a Windows user path", /[A-Z]:\\Users\\[A-Za-z0-9._-]+/],
-];
-
+// One list, shared with scan-output.mjs -- see sensitive.mjs for why.
 function scanStrings(node, path = "state") {
   if (typeof node === "string") {
     for (const [what, re] of SENSITIVE) {

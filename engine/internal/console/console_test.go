@@ -409,3 +409,76 @@ func TestListenRefusesNonLoopback(t *testing.T) {
 		t.Error("Listen accepted a malformed address")
 	}
 }
+
+// A loopback bind is not a loopback name. A page on another site can have its
+// own name resolve to 127.0.0.1 and then read the console as if it were its
+// own origin -- unless the console refuses to answer under that name.
+func TestTheConsoleAnswersOnlyToALoopbackName(t *testing.T) {
+	srv, _ := serve(t, func(j *journal.Journal) {
+		j.Append(session("s1", "github"))
+	})
+
+	for _, host := range []string{"127.0.0.1:7717", "localhost:7717", "[::1]:7717", "localhost", "127.0.0.1"} {
+		req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/snapshot", nil)
+		req.Host = host
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("%s: %v", host, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("Host %q was refused with %d; it names this machine", host, resp.StatusCode)
+		}
+	}
+
+	for _, host := range []string{"attacker.example:7717", "nim.internal", "127.0.0.1.attacker.example:7717", "10.0.0.5:7717"} {
+		for _, path := range []string{"/", "/api/snapshot", "/api/events", "/api/sessions/s1"} {
+			req, _ := http.NewRequest(http.MethodGet, srv.URL+path, nil)
+			req.Host = host
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatalf("%s: %v", host, err)
+			}
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusMisdirectedRequest {
+				t.Errorf("Host %q reading %s got %d; a rebound name must be refused", host, path, resp.StatusCode)
+			}
+		}
+	}
+}
+
+// The agent the daemon derived reaches the browser, on the session list and
+// on the session detail, beside the label the relay chose.
+func TestTheDerivedAgentReachesTheBrowser(t *testing.T) {
+	srv, _ := serve(t, func(j *journal.Journal) {
+		s := session("s1", "github")
+		s.Agent = sp("claude-code")
+		j.Append(s)
+		j.Append(journal.Entry{Kind: journal.KindCallRequest, SessionID: "s1", Seq: ip(1),
+			Tool: sp("t"), ParamsDigest: sp("d"), Decision: sp(journal.DecisionAllow),
+			OccurredAt: time.Now().UTC().Format(time.RFC3339Nano)})
+	})
+
+	var snap struct {
+		Sessions []readmodel.Session `json:"sessions"`
+	}
+	_, body := get(t, srv, "/api/snapshot")
+	if err := json.Unmarshal(body, &snap); err != nil {
+		t.Fatal(err)
+	}
+	if len(snap.Sessions) != 1 || snap.Sessions[0].Agent == nil || *snap.Sessions[0].Agent != "claude-code" {
+		t.Fatalf("the session list does not carry the agent: %+v", snap.Sessions)
+	}
+
+	var detail readmodel.SessionDetail
+	_, body = get(t, srv, "/api/sessions/s1")
+	if err := json.Unmarshal(body, &detail); err != nil {
+		t.Fatal(err)
+	}
+	if detail.Session.Agent == nil || *detail.Session.Agent != "claude-code" {
+		t.Errorf("the session detail does not carry the agent: %+v", detail.Session)
+	}
+	if len(detail.Events) == 0 || detail.Events[0].Agent == nil || *detail.Events[0].Agent != "claude-code" {
+		t.Errorf("the session.start event does not carry the agent: %+v", detail.Events)
+	}
+}

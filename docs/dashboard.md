@@ -62,9 +62,10 @@ This is not decorative, and it is not theoretical. The first run of the real
 memory that did not exist. The `done`-with-pending-work rule failed on its first
 run too, catching M2. The claims were corrected; the checks were not relaxed.
 
-`scripts/generate.test.mjs` is a mutation-test suite over all of it: 34 tests
-that corrupt a copy of `state.json` in each of the ways above and require a
-refusal. Most of them exist because the attack worked first — a deliberate
+`scripts/generate.test.mjs` is a mutation-test suite over all of it: three
+dozen tests that corrupt a copy of `state.json` in each of the ways above and
+require a refusal, one of which walks every shape in `scripts/sensitive.mjs`
+-- the one list both scanners read -- and proves each is caught. Most of them exist because the attack worked first — a deliberate
 red-team pass on 2026-08-12 tried sixteen bypasses and fourteen got through.
 A check nobody has watched fail has not been shown to work.
 
@@ -77,11 +78,13 @@ go green when a cited test was *skipped* rather than run, via
 ## What it deliberately cannot do
 
 **No runtime state, ever.** The journal, live sessions, enrolled agents,
-connectors and daemon health are not on the page and are not going on it. Nim is
-local-first; that state lives on the machine running Nim, and shipping it to a
-hosted page would export the thing it is supposed to protect. The runtime
-section says NOT AVAILABLE and names the local command for each datum instead.
-`nim console` serves that over loopback, which is where it belongs.
+rules, connectors and daemon health are not on the page and are not going on
+it. Nim is local-first; that state lives on the machine running Nim, and
+shipping it to a hosted page would export the thing it is supposed to protect.
+The runtime section says NOT AVAILABLE and names the local command for each
+datum instead: `nim console` serves the journal and its sessions over
+loopback, and `nim agent list`, `nim policy list` and `nim connector list`
+show the rest.
 
 **No secrets, by construction and then by scanning anyway.** The generator reads
 `engine/`, `docs/` and `git log`. It never opens `nim.db`, the socket, or a
@@ -146,28 +149,31 @@ any path resolving outside `out/`, and needs no network.
 
 ## Deployment
 
-Prepared, not deployed.
+Deployed, publicly, by a deliberate decision (D-003 on the page, 2026-08-12):
+the page is written to be public, states its own limits, and carries no
+runtime data, no secrets and no local paths -- enforced at build time, not
+promised. Deployment protection on the Vercel project is off. That decision is
+about this page only and extends to nothing else the project publishes.
 
-`vercel.json` sets `github.enabled: false`, so even if the repository is ever
-linked to the project again, a push will not deploy on its own. It also sends
-`X-Robots-Tag: noindex, nofollow, noarchive, nosnippet`, a strict
-`Content-Security-Policy` (`default-src 'none'`, no external origins — the page
-loads nothing off-host), `X-Frame-Options: DENY` and `Referrer-Policy:
-no-referrer`.
+How it got there is worth keeping. An earlier version of this section said the
+project had Vercel Authentication enabled and that a deployment would be
+readable only by the team. Reading the setting was not enough: the protection
+was scoped `all_except_custom_domains`, Vercel treats the project's own
+assigned production domain as a custom domain, and the page was readable by
+anyone at that hostname for about two minutes before it was noticed by
+fetching every hostname anonymously (F-011). The lesson is the general one:
+verify access control by fetching, never by reading the configuration that is
+supposed to provide it.
 
-Checked read-only on 2026-08-12: the Vercel project `nim` already has **Vercel
-Authentication** enabled for `all_except_custom_domains`, and no custom domain
-is attached. A deployment would therefore be readable only by members of the
-Vercel team, not by the public.
+Two things remain true:
 
-Two things to know before that changes:
+- `vercel.json` sets `github.enabled: false`, so a push never deploys on its
+  own; deployment is `vercel deploy --prebuilt` from `dashboard/`, by hand.
+- Sixteen historical deployment URLs and one stale branch alias also answer
+  publicly (F-012), serving Vercel's failure page and an abandoned placeholder.
+  Deleting them is destructive and is a human's call, not this repository's.
 
-- **A custom domain bypasses it.** The protection is scoped
-  `all_except_custom_domains`. Attaching a domain would make the page public
-  unless Trusted IPs or password protection is enabled first.
-- **Nothing reconnects GitHub to Vercel automatically**, and nothing should.
-  Deployment is a deliberate act: `vercel deploy --prebuilt` from `dashboard/`,
-  or the Vercel dashboard.
-
-Whether to deploy at all is D-003 on the page, and is not a decision this
-repository should take by itself.
+The build still sends `X-Robots-Tag: noindex, nofollow, noarchive, nosnippet`
+(D-005: public and indexed are different things), a strict
+`Content-Security-Policy` (`default-src 'none'`), `X-Frame-Options: DENY` and
+`Referrer-Policy: no-referrer`.

@@ -91,7 +91,7 @@ needed: the vnode check answers the question actually being asked.
 | 7 | As the impostor, choose the command a credential is injected into | **blocked** | `impostor_test.go` |
 | 8 | As the impostor, harvest tool names and argument digests | **blocked** | `impostor_test.go` |
 | 9 | Exhaust daemon memory with an unterminated line | **blocked** (1 MiB cap) | `peer_authz_test.go` |
-| 10 | Bypass the deny list | **blocked** | `decide_test.go`, `enforce_test.go` |
+| 10 | Bypass the rules (until M4, the deny list) | **blocked** | `decide_test.go`, `enforce_test.go` |
 | 11 | Smuggle a `tools/call` inside a JSON-RPC batch | **blocked** (batch refused whole) | `enforce_test.go` |
 | 12 | Smuggle a call in a frame Go cannot parse but the server can | **blocked** (frame refused) | `enforce_test.go` |
 | 13 | Kill the daemon to disable enforcement | **blocked** (denies) | `enforce_test.go` |
@@ -101,13 +101,31 @@ needed: the vnode check answers the question actually being asked.
 | 17 | Leak call arguments into the journal | **none found** (digest only) | `journal_test.go` |
 | 18 | Defeat peer identity by swapping the file at the peer's launch path | **blocked** (linux and darwin) | `pathswap_test.go` |
 | 19 | Pass `--expect-head` a head the journal has grown past | **no longer misreported** | `journal_test.go` |
+| 20 | Smuggle a `tools/call` behind a repeated or case-variant JSON key | **blocked** (refused, anomaly recorded) | `mcp_test.go`, `enforce_test.go` |
+| 21 | Name one tool to the daemon and another to the server | **blocked** (exact keys; unreadable call refused) | `enforce_test.go` |
+| 22 | Start a session under an id another connection opened | **blocked** (daemon-wide, for all time) | `decide_test.go` |
+| 23 | Bind the socket first and receive the secret from `nim connector set` | **blocked** | `impostor_test.go` |
+| 24 | Change the rules by editing `config.toml` | **blocked** (file refused) | `config_test.go`, `e2e_test.go` |
+| 25 | Change the rules without a journal entry | **blocked** (one transaction) | `rules_test.go` |
+| 26 | Read the console from another site through DNS rebinding | **blocked** (loopback Host only) | `console_test.go` |
+| 27 | Leave a connector running after the relay is asked to stop | **blocked** for SIGTERM/SIGINT; SIGKILL still open | `e2e_test.go` |
 
 Live vulnerabilities found by audit rather than hypotheticals: **1** (any local
 process could read every credential), **3** (the journal was writable by
 anything), **6–8** (the daemon was impersonable, which the merge itself
-introduced), and **18** (peer identity compared a filename rather than the
-running image). Each has a regression test that fails against the code as it
-was.
+introduced), **9** (one unauthenticated connection could exhaust the daemon's
+memory), **18** (peer identity compared a filename rather than the running
+image), and on 2026-09-14 **20–21** (a repeated `method` key put a `tools/call`
+in front of the connector with no decision, no entry and no anomaly; a
+case-variant `Name` had the daemon decide on one tool while the server ran
+another) and **22** (a second connection could start a session under a live
+id). Each has a regression test that fails against the code as it was. **23**
+was found by reading rather than running: the relay verified the daemon, the
+management commands did not, and one of them carries the plaintext secret.
+
+The table above is the attacks someone thought of, and `dashboard/data/state.json`
+is the copy the build checks -- every test named there must exist. When the two
+disagree, the dashboard is the one that was checked.
 
 **18 qualified 2–8 on darwin until it was fixed**, because all of those rest on
 peer identity, and until the vnode check replaced the path comparison they were
@@ -138,9 +156,24 @@ the attack that read every secret. The daemon returns the command; the caller
 never supplies one.
 
 **Purpose binding** commits a connection to one job on its first request, so a
-credential lookup cannot pivot to a second connector mid-connection.
+credential lookup cannot pivot to a second connector mid-connection, and a
+policy connection cannot ask for a credential.
 
-**Fail-closed** covers every way of not getting a decision.
+**The rules** are the authorization model, as far as one exists: a deny per
+`(agent, connector, tool)`, in SQLite, changed only through the daemon over the
+same verified socket as everything else, and every change one transaction with
+its entry in the chain. Rules only deny. What a rule is worth is bounded by
+what an enrolment is worth -- anything that can run this binary as this user
+can make either -- and the entry is what makes that visible afterwards, not
+what prevents it.
+
+**Strict reading** of the one message Nim acts on. Objects are read by exact
+key and a repeated key is refused, because that is the one shape on which
+parsers legitimately disagree, and a `tools/call` Nim cannot read as one tool
+name is refused before the daemon is asked.
+
+**Fail-closed** covers every way of not getting a decision, including a rule
+lookup that fails.
 
 ## Agent identity
 
@@ -155,9 +188,16 @@ it.
 Recorded on `session.start` at schema_version 2, and covered by the chain:
 altering it after the fact breaks the entry's hash.
 
-**Nothing decides anything on it yet.** Enrolment and derivation are in place;
-grants are a later milestone, and that milestone has to state what an unknown
-agent may do rather than inherit an answer from here.
+**Rules decide on it.** A rule can be scoped to an enrolled agent and applies
+to the sessions derived as that agent, and to no other. A session no enrolment
+matched -- the ordinary state -- meets only the rules that name no agent, and
+because rules only deny, that is the same ceiling every session had before
+agents existed. `docs/decisions/0002-what-an-unknown-agent-may-do.md` is the
+argument, and why it has to be made again for allow rules.
+
+**An enrolment change leaves no journal entry** (F-018). Re-enrolling a name
+against another executable moves every rule scoped to it, and the chain says
+nothing. The rules are in the chain; what they are scoped to is not yet.
 
 What it establishes: two different client programs are different agents. What
 it does not: two windows of the same program are the same agent, because they
@@ -173,18 +213,26 @@ it can register a connector.
 | **Windows socket directory has no real ACL** | high, on Windows | `os.Chmod` only toggles the read-only attribute. Confidentiality rests on default temp-directory ACLs. |
 | **PATH resolution on the registered command** | medium | The registered argv is spawned through normal PATH lookup, so a caller that already controls PATH can front-run the binary name. Closing it needs process inversion. |
 | **The credential is handed to the connector** | medium | Injected into the downstream's environment, so a compromised connector has its own secret and, on Linux, any same-user process can read `/proc/<pid>/environ`. Nim cannot revoke what it has given away. |
-| **Policy lives in `config.toml`** | medium | Anything able to write that file can empty the deny list, and the change leaves no journal entry. Scaffolding; belongs in SQLite. |
 | **The journal is unkeyed** | medium | See the threat model. Only `--expect-head` covers rewriting. |
-| **No agent identity** | — | Every decision is per-tool, not per-agent. Not a vulnerability; the reason grants, budgets and approval cannot be built yet. |
+| **Enrolment changes are not journaled** | medium | A rule is scoped to a name; the name's binding to an executable can change with no chain entry (F-018). |
+| **Rules only deny** | — | An unenrolled program has what the global rules allow. Not a vulnerability; the reason an allow model is M4.5, with D-002 to answer again. |
+| **A relay killed with SIGKILL cannot stop its connector** | low | Only a connector that reads its stdin notices. SIGTERM and SIGINT are handled; nothing can handle SIGKILL. |
 
 ## Re-running the attacks
 
-The regression tests are the attacks:
+The regression tests are the attacks, and they are spread across every
+package, so the honest command is the whole suite -- it takes under a minute:
 
 ```bash
 cd engine
-go test -race -run 'Impostor|NonNim|Credential|Connection|Unauthenticated' ./... -v
+go test -race -shuffle=on -count=1 -v ./...
 ```
+
+The `-run` pattern this section used to give selected the tests behind rows
+2–9 and none of the others, while saying it re-ran the attacks. The exact test
+names per row are in `dashboard/data/state.json`, which the build checks
+against the tree; `.github/scripts/assert-evidence-ran.sh` then refuses a CI
+run in which any of them was skipped rather than run.
 
 The manual ones (leakage into logs and the database) are worth repeating by
 hand after any change to logging or the journal schema, because they are

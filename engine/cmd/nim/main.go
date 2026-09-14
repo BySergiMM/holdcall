@@ -52,6 +52,8 @@ func main() {
 		err = runConnector(os.Args[2:])
 	case "agent":
 		err = runAgent(os.Args[2:])
+	case "policy":
+		err = runPolicy(os.Args[2:])
 	case "verify":
 		err = runVerify(os.Args[2:])
 	case "version", "--version", "-v":
@@ -91,6 +93,23 @@ func usage() {
 
   nim console [--addr 127.0.0.1:7717]
         Serve a local, read-only view of what has been recorded.
+
+  nim connector set <name> --env KEY -- <command> [args...]
+  nim connector list | remove <name>
+        Hold a downstream server's credential, bound to the one command it
+        may be injected into. The secret is read from stdin, never argv.
+
+  nim agent add <name> <path-to-executable>
+  nim agent list | remove <name>
+        Enrol a client program, identified by the file it executes.
+
+  nim policy deny <tool> [--agent <name>] [--connector <name>]
+  nim policy remove <tool> [--agent <name>] [--connector <name>]
+  nim policy list
+        Refuse a tool, for every session or for one agent or connector. Every
+        change is an entry in the journal.
+
+  nim version
 
 `)
 }
@@ -234,7 +253,8 @@ func renderStatus(w io.Writer, snap readmodel.Snapshot) {
 
 // renderGaps reports what the journal can tell about its own incompleteness.
 func renderGaps(w io.Writer, gaps readmodel.Gaps) {
-	if gaps.UnfinishedSessions == 0 && gaps.SessionsWithGaps == 0 && len(gaps.Anomalies) == 0 {
+	if gaps.UnfinishedSessions == 0 && gaps.SessionsWithGaps == 0 && gaps.CallsWithoutSession == 0 &&
+		len(gaps.Anomalies) == 0 {
 		// Not "no gaps": events dropped on the daemon's write path leave no
 		// trace to find, so this can only speak for the ones that do.
 		fmt.Fprintln(w, "         gaps           none of the detectable kinds found")
@@ -244,12 +264,21 @@ func renderGaps(w io.Writer, gaps readmodel.Gaps) {
 		fmt.Fprintf(w, "         gaps           %d call(s) missing across %d session(s): reported but not recorded\n",
 			gaps.MissingCallEntries, gaps.SessionsWithGaps)
 	}
+	if gaps.CallsWithoutSession > 0 {
+		fmt.Fprintf(w, "         orphaned       %d call(s) whose session.start never reached the journal\n",
+			gaps.CallsWithoutSession)
+	}
 	if gaps.UnfinishedSessions > 0 {
 		fmt.Fprintf(w, "         unfinished     %d session(s) with no end (a session running now looks the same)\n",
 			gaps.UnfinishedSessions)
 	}
+	// What became of each kind is stated next to its count, from the one
+	// place that knows: "relayed without inspection" was written when nothing
+	// was refused, and kept being printed about frames the relay had refused
+	// since M2.
 	for _, name := range sortedKeys(gaps.Anomalies) {
-		fmt.Fprintf(w, "         anomaly        %-16s %d (relayed without inspection)\n", name, gaps.Anomalies[name])
+		fmt.Fprintf(w, "         anomaly        %-16s %d (%s)\n", name, gaps.Anomalies[name],
+			readmodel.AnomalyDisposition(name))
 	}
 }
 
@@ -269,6 +298,9 @@ func runLog(args []string) error {
 			sinceSet = true
 		}
 	})
+	if *limit <= 0 {
+		return fmt.Errorf("-n must be a positive number of entries")
+	}
 
 	// --json and --follow both mean "the entry stream", which is a different
 	// view from the default: every kind of entry, in the journal's own order,
@@ -296,7 +328,7 @@ func runLog(args []string) error {
 	// timestamp is shown because it is useful, but it does not decide the
 	// order: it is a value an entry carries, and a value can be wrong.
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "#\tWHEN\tCONNECTOR\tTOOL\tDECISION\tRESULT\tMS")
+	fmt.Fprintln(w, "#\tWHEN\tAGENT\tCONNECTOR\tTOOL\tDECISION\tRESULT\tMS")
 	for _, c := range calls {
 		// The same derivation the console uses, so a call cannot read as refused
 		// in a browser and as unanswered here. A completed call is worth more
@@ -313,8 +345,8 @@ func runLog(args []string) error {
 		if c.DurationMS != nil {
 			ms = fmt.Sprintf("%d", *c.DurationMS)
 		}
-		fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			c.ChainSeq, shortTime(c.OccurredAt), c.Connector, c.Tool, c.Decision, result, ms)
+		fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			c.ChainSeq, shortTime(c.OccurredAt), c.Agent, c.Connector, c.Tool, c.Decision, result, ms)
 	}
 	w.Flush()
 
@@ -356,6 +388,13 @@ func streamEntries(asJSON, follow bool, since int64, sinceSet bool, limit int) e
 			return err
 		}
 		cursor = length
+	}
+	// The page size is what the journal will actually return, not what was
+	// asked for: it caps a read, and comparing the page against the larger
+	// number stopped a dump after one page while reporting success -- an
+	// export of a 3000-entry journal came back with 1000 and exit status 0.
+	if limit > journal.MaxEntriesPerRead {
+		limit = journal.MaxEntriesPerRead
 	}
 
 	out := bufio.NewWriter(os.Stdout)
@@ -410,6 +449,9 @@ func formatEvent(ev readmodel.Event) string {
 	}
 	if ev.Client != nil {
 		add("client=%s", *ev.Client)
+	}
+	if ev.Agent != nil {
+		add("agent=%s", *ev.Agent)
 	}
 	if ev.Tool != nil {
 		add("tool=%s", *ev.Tool)
@@ -524,22 +566,20 @@ func runVerify(args []string) error {
 		fmt.Println("That file seeds the chain. Its absence is missing verification material, not")
 		fmt.Println("evidence of a problem: restore it and the whole chain can be checked again.")
 		fmt.Println("Everything from entry 2 onwards is self-consistent.")
+		// The one check that detects truncation is still answered here. A
+		// missing seed says nothing about whether a head recorded earlier is
+		// in the chain, and the operator who ran this with --expect-head
+		// asked exactly that.
+		if *expect != "" {
+			fmt.Println()
+			reportExpectedHead(state)
+		}
 		return nil
 	}
 
 	fmt.Printf("journal self-consistent: %d entries, head %s\n", state.Entries, state.Head)
 	if *expect != "" {
-		if state.ExpectedHeadAt == state.Entries {
-			fmt.Println("head matches the one you recorded, so nothing before it has been rewritten")
-			return nil
-		}
-		// The journal grew, which is the ordinary case for any head recorded
-		// before the agent kept working. Saying so is the difference between a
-		// check an operator keeps running and one they learn to ignore.
-		fmt.Printf("the head you recorded is entry %d of %d, so the journal has grown by %d entries\n",
-			state.ExpectedHeadAt, state.Entries, state.Entries-state.ExpectedHeadAt)
-		fmt.Println("nothing at or before it has been rewritten; the entries after it are covered")
-		fmt.Println("only by the chain itself, so record the new head to cover them too.")
+		reportExpectedHead(state)
 		return nil
 	}
 	fmt.Println()
@@ -548,6 +588,23 @@ func runVerify(args []string) error {
 	fmt.Println("recompute the chain, and a shorter one checks out just as cleanly. Pass")
 	fmt.Println("--expect-head with a hash you recorded earlier to cover that too.")
 	return nil
+}
+
+// reportExpectedHead says where a head recorded earlier was found. Only
+// called once Check has established the chain contains it: a chain that did
+// not is reported as broken before this is reached.
+func reportExpectedHead(state readmodel.JournalState) {
+	if state.ExpectedHeadAt == state.Entries {
+		fmt.Println("head matches the one you recorded, so nothing before it has been rewritten")
+		return
+	}
+	// The journal grew, which is the ordinary case for any head recorded
+	// before the agent kept working. Saying so is the difference between a
+	// check an operator keeps running and one they learn to ignore.
+	fmt.Printf("the head you recorded is entry %d of %d, so the journal has grown by %d entries\n",
+		state.ExpectedHeadAt, state.Entries, state.Entries-state.ExpectedHeadAt)
+	fmt.Println("nothing at or before it has been rewritten; the entries after it are covered")
+	fmt.Println("only by the chain itself, so record the new head to cover them too.")
 }
 
 // openJournal opens the journal for reading and nothing else.

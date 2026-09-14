@@ -15,11 +15,6 @@ import (
 
 // start brings up a daemon on a private socket and returns a dialler for it.
 func start(t testing.TB) (cfg config.Config, dbPath string) {
-	return startWithPolicy(t, config.Policy{})
-}
-
-// startWithPolicy is the same, with a deny list.
-func startWithPolicy(t testing.TB, policy config.Policy) (cfg config.Config, dbPath string) {
 	t.Helper()
 
 	home := t.TempDir()
@@ -30,7 +25,6 @@ func startWithPolicy(t testing.TB, policy config.Policy) (cfg config.Config, dbP
 
 	cfg = config.Config{
 		Daemon: config.Daemon{Socket: sock, DataDir: filepath.Join(home, "data")},
-		Policy: policy,
 	}
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("test socket is unusable: %v", err)
@@ -52,6 +46,40 @@ func startWithPolicy(t testing.TB, policy config.Policy) (cfg config.Config, dbP
 	}
 	t.Fatal("daemon did not come up")
 	return cfg, ""
+}
+
+// deny adds a rule the way the CLI does: over its own connection, as a
+// policy request. The daemon is the only writer of the rules, so a test that
+// wants one has to ask it -- which is also what makes the rule's journal entry
+// part of every test that uses this.
+func deny(t testing.TB, cfg config.Config, tool, agent, connector string) {
+	t.Helper()
+	conn, err := net.Dial("unix", cfg.Daemon.Socket)
+	if err != nil {
+		t.Fatalf("dialling for a rule: %v", err)
+	}
+	defer conn.Close()
+	resp, err := SendRequest(conn, Request{
+		ID: "rule", Kind: KindPolicyDeny, RuleTool: tool, RuleAgent: agent, RuleConnector: connector,
+	})
+	if err != nil {
+		t.Fatalf("policy.deny: %v", err)
+	}
+	if resp.Error != "" {
+		t.Fatalf("policy.deny %s: %s", tool, resp.Error)
+	}
+}
+
+// enrol records an enrolment straight into the journal the daemon is using:
+// what matters to a decision test is that a name exists for a rule to be
+// scoped to, and the derivation itself has its own tests.
+func enrol(t testing.TB, dbPath, name string) {
+	t.Helper()
+	j := openJournal(t, dbPath)
+	if err := j.SetAgent(journal.Agent{Name: name, ExecDev: 1, ExecIno: uint64(len(name)) + 1,
+		ExecPath: "/enrolled/by/test/" + name, EnrolledAt: time.Now()}); err != nil {
+		t.Fatalf("enrolling %s: %v", name, err)
+	}
 }
 
 func openJournal(t testing.TB, path string) *journal.Journal {

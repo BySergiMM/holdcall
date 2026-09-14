@@ -806,3 +806,154 @@ func TestAFullQueueRefuses(t *testing.T) {
 }
 
 var _ io.WriteCloser = (*syncBuf)(nil)
+
+// ---------- 16. objects that do not mean one thing ----------
+
+// answers reads every message Nim itself sent the client, in order.
+func answers(t *testing.T, client *syncBuf) []struct {
+	ID     json.RawMessage `json:"id"`
+	Result struct {
+		IsError bool `json:"isError"`
+		Content []struct {
+			Text string `json:"text"`
+		} `json:"content"`
+	} `json:"result"`
+} {
+	t.Helper()
+	var out []struct {
+		ID     json.RawMessage `json:"id"`
+		Result struct {
+			IsError bool `json:"isError"`
+			Content []struct {
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"result"`
+	}
+	for _, line := range strings.Split(strings.TrimSpace(client.String()), "\n") {
+		if line == "" {
+			continue
+		}
+		var a struct {
+			ID     json.RawMessage `json:"id"`
+			Result struct {
+				IsError bool `json:"isError"`
+				Content []struct {
+					Text string `json:"text"`
+				} `json:"content"`
+			} `json:"result"`
+		}
+		if err := json.Unmarshal([]byte(line), &a); err != nil {
+			t.Fatalf("Nim sent the client something that is not JSON-RPC: %v\n%s", err, line)
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
+// The bypass, as it was run against this relay before the fix: a repeated
+// `method` key made Go's typed decoder return an error, Classify shrugged and
+// handed back an empty envelope, and the frame went to the connector with no
+// decision, no entry and no anomaly -- where a Python or JavaScript parser read
+// the last value, tools/call, and ran the tool.
+func TestAToolCallHiddenBehindARepeatedKeyIsRefused(t *testing.T) {
+	frames := []string{
+		`{"jsonrpc":"2.0","id":1,"method":5,"method":"tools/call","params":{"name":"rm"}}` + "\n",
+		`{"jsonrpc":"2.0","id":2,"method":"ping","method":"tools/call","params":{"name":"rm"}}` + "\n",
+		`{"jsonrpc":"2.0","id":3,"id":4,"method":"tools/call","params":{"name":"rm"}}` + "\n",
+	}
+
+	g := newRig(t, newDaemon(t))
+	g.relay(frames...)
+
+	if n := len(g.connector.Bytes()); n != 0 {
+		t.Fatalf("a frame naming a key twice reached the connector: %q", g.connector.String())
+	}
+	if n := len(g.daemon.calls()); n != 0 {
+		t.Errorf("the daemon was asked to decide %d frames Nim could not read as one message", n)
+	}
+	// Not answered: with the id itself among the keys that may repeat, which
+	// id to answer under is the same question as which method was meant.
+	if s := g.client.String(); s != "" {
+		t.Errorf("Nim invented an answer to a frame it could not read: %q", s)
+	}
+	if got := g.daemon.await(t, len(frames), anomalyOf(mcp.AnomalyDuplicateKey)); len(got) != len(frames) {
+		t.Errorf("recorded %d duplicate_key anomalies, want %d", len(got), len(frames))
+	}
+}
+
+// A key in a different case is a different key -- to a server, and now to
+// Nim. `"Method":"ping"` used to win over `"method":"tools/call"` in Go's
+// decoder, `"Name":"list_repos"` over `"name":"delete_repository"`, and
+// `"ID":9` over `"id":1`: the daemon decided on one tool while the connector
+// ran another, and the journal said the harmless one had been called.
+func TestACaseVariantKeyCannotRenameTheCall(t *testing.T) {
+	frame := `{"jsonrpc":"2.0","id":1,"ID":9,"method":"tools/call","Method":"ping",` +
+		`"params":{"name":"delete_repository","Name":"list_repos","arguments":{}}}` + "\n"
+
+	d := newDaemon(t)
+	d.answer = func(ev daemon.Event) any {
+		if ev.Tool == "delete_repository" {
+			return deny("delete_repository is on the list")(ev)
+		}
+		return daemon.Decision{Kind: daemon.KindDecision, SessionID: ev.SessionID, Seq: ev.Seq,
+			Decision: journal.DecisionAllow}
+	}
+	g := newRig(t, d)
+	g.relay(frame)
+
+	if n := len(g.connector.Bytes()); n != 0 {
+		t.Fatalf("the denied call reached the connector under another name: %q", g.connector.String())
+	}
+	calls := g.daemon.calls()
+	if len(calls) != 1 || calls[0].Tool != "delete_repository" {
+		t.Fatalf("the daemon was asked about %+v; want exactly one call naming delete_repository", calls)
+	}
+	got := answers(t, g.client)
+	if len(got) != 1 || string(got[0].ID) != "1" || !got[0].Result.IsError {
+		t.Fatalf("the client was answered %+v; want one refusal under id 1, the id it sent", got)
+	}
+}
+
+// A tools/call Nim cannot read as exactly one tool name is refused before a
+// sequence number is spent or the daemon is asked. The daemon used to be asked
+// about tool "" for every one of these, and allowed it.
+func TestACallWithoutAReadableNameIsRefusedBeforeAnyDecision(t *testing.T) {
+	frames := []string{
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call"}` + "\n",
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":0}}` + "\n",
+		`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"a","name":"rm"}}` + "\n",
+		`{"jsonrpc":"2.0","method":"tools/call","params":{"arguments":{}}}` + "\n",
+	}
+
+	g := newRig(t, newDaemon(t))
+	g.relay(frames...)
+
+	if n := len(g.connector.Bytes()); n != 0 {
+		t.Fatalf("a call Nim could not name reached the connector: %q", g.connector.String())
+	}
+	if n := len(g.daemon.calls()); n != 0 {
+		t.Errorf("the daemon was asked to decide %d calls Nim could not name", n)
+	}
+	if g.shim.seq != 0 {
+		t.Errorf("seq advanced to %d for calls that were never decided", g.shim.seq)
+	}
+
+	got := answers(t, g.client)
+	if len(got) != 3 {
+		t.Fatalf("answered %d frames, want the three carrying an id", len(got))
+	}
+	for i, a := range got {
+		if string(a.ID) != fmt.Sprint(i+1) || !a.Result.IsError {
+			t.Errorf("answer %d = %+v; want a refusal under id %d", i, a, i+1)
+		}
+		if len(a.Result.Content) == 0 || a.Result.Content[0].Text != mcp.DeniedUnreadable {
+			t.Errorf("answer %d does not carry the unreadable-call refusal", i)
+		}
+	}
+	if n := len(g.daemon.await(t, 3, anomalyOf(mcp.AnomalyUnreadableCall))); n != 3 {
+		t.Errorf("recorded %d unreadable_call anomalies, want 3", n)
+	}
+	if n := len(g.daemon.await(t, 1, anomalyOf(mcp.AnomalyDuplicateKey))); n != 1 {
+		t.Errorf("recorded %d duplicate_key anomalies, want 1", n)
+	}
+}

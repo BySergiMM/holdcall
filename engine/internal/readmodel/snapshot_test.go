@@ -1,6 +1,8 @@
 package readmodel
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/BySergiMM/nim/engine/internal/journal"
@@ -204,5 +206,76 @@ func TestSessionsListsNewestFirstAndDetailFindsOne(t *testing.T) {
 
 	if _, found, err = Detail(src, "nope", 100); err != nil || found {
 		t.Error("an unknown session must report not found without an error")
+	}
+}
+
+// A session older than the listing window still gets its own summary: the
+// detail is looked up by id, not found in the newest page. It used to come
+// back with the right events beside an empty session in a state no reader was
+// written to handle.
+func TestDetailFindsASessionOutsideTheListingWindow(t *testing.T) {
+	rows := make([]journal.SessionRow, 0, MaxSessions+5)
+	for i := MaxSessions + 4; i >= 0; i-- {
+		rows = append(rows, journal.SessionRow{ChainSeq: int64(i + 1), ID: fmt.Sprintf("s%d", i), StartedAt: "t"})
+	}
+	src := &fake{
+		sessions: rows,
+		entries:  []journal.Entry{{ChainSeq: 1, Kind: journal.KindSessionStart, SessionID: "s0"}},
+	}
+
+	d, found, err := Detail(src, "s0", 100)
+	if err != nil || !found {
+		t.Fatalf("Detail = found %v, err %v", found, err)
+	}
+	if d.Session.ID != "s0" || d.Session.State != SessionUnfinished {
+		t.Fatalf("the summary was not looked up: %+v", d.Session)
+	}
+	if len(d.Events) != 1 {
+		t.Fatalf("%d events, want 1", len(d.Events))
+	}
+
+	// Entries with no session.start: real, but not a session to summarise.
+	src.entries = append(src.entries, journal.Entry{ChainSeq: 2, Kind: journal.KindCallRequest, SessionID: "lost"})
+	if _, found, _ := Detail(src, "lost", 100); found {
+		t.Error("entries with no session.start were presented as a session with an empty summary")
+	}
+}
+
+// The derived agent is projected beside the self-asserted client, on the
+// session and on the entry, and the orphaned-call count reaches the snapshot.
+func TestTheAgentAndTheOrphanCountAreProjected(t *testing.T) {
+	agent := "claude-code"
+	s := SessionFrom(journal.SessionRow{ID: "s", StartedAt: "t", Agent: &agent})
+	if s.Agent == nil || *s.Agent != "claude-code" {
+		t.Fatalf("session projection lost the agent: %+v", s)
+	}
+	*s.Agent = "changed"
+	if agent != "claude-code" {
+		t.Error("the projection aliased its input")
+	}
+
+	src := &fake{loss: journal.LossReport{CallsWithoutSession: 2}, anomalies: map[string]int{}}
+	snap, err := Take(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.Gaps.CallsWithoutSession != 2 {
+		t.Errorf("calls without session = %d, want 2", snap.Gaps.CallsWithoutSession)
+	}
+}
+
+// Every anomaly kind the relay can record has a stated disposition, and the
+// kinds the relay refuses say so. A surface printing "relayed" about a refused
+// frame is the failure this exists to prevent.
+func TestEveryAnomalyKindHasADisposition(t *testing.T) {
+	refused := map[string]bool{"malformed_json": true, "framing": true, "duplicate_key": true, "unreadable_call": true}
+	for _, kind := range []string{"batch", "malformed_json", "framing", "duplicate_id", "duplicate_key", "unreadable_call"} {
+		d := AnomalyDisposition(kind)
+		if d == "unknown kind" {
+			t.Errorf("%s has no disposition", kind)
+		}
+		if refused[kind] && !strings.HasPrefix(d, "refused") {
+			t.Errorf("%s is refused by the relay but described as %q", kind, d)
+		}
 	}
 }
