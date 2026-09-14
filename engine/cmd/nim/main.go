@@ -65,6 +65,10 @@ func main() {
 		err = runPolicy(os.Args[2:])
 	case "verify":
 		err = runVerify(os.Args[2:])
+	case "init":
+		err = runInit(os.Args[2:])
+	case "doctor":
+		err = runDoctor(os.Args[2:])
 	case "version", "--version", "-v":
 		fmt.Println(versionString())
 	case "help", "--help", "-h":
@@ -125,6 +129,17 @@ func usage() {
   nim policy list
         Refuse a tool, for every session or for one agent or connector. Every
         change is an entry in the journal.
+
+  nim init [--client <name>] [--config <path>] [--write] [--repoint]
+        Rewrite MCP client configs so every stdio server goes through Nim.
+        Without --write this only prints what would change.
+
+  nim init --undo <backup file>
+        Restore a config file from a backup nim init --write made.
+
+  nim doctor
+        A read-only health check: one line per check, OK/WARN/FAIL and a
+        remedy for anything not OK. Exits 1 only if something FAILed.
 
   nim version
 
