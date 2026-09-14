@@ -20,6 +20,20 @@ same-origin requests and no external ones. It is an observability view of the
 local journal, deliberately read-only and deliberately unreachable from a
 network interface. It is not a website and cannot be hosted.
 
+## Releases
+
+`.github/workflows/release.yml` builds the five cross-compiled targets, runs
+the engine test suite against them first, and publishes a GitHub Release with
+`nim_<tag>_<os>_<arch>` archives and a `SHA256SUMS` covering all of them.
+Nothing in it runs on its own: it triggers only on a tag matching `v*` being
+pushed, which is a human action this repository does not take by itself, and
+`workflow_dispatch` builds and checksums the same five archives as a dry run
+without ever creating a release. The `publish` job is the only one with
+`contents: write`, and only for the length of that job. `install.sh` at the
+root downloads a release archive, verifies its checksum against `SHA256SUMS`,
+and refuses on any mismatch; `tools/install-rig/test.sh` proves the refusal
+bites.
+
 ## History worth keeping
 
 Between 2026-08-11 11:39 and 14:13 the Vercel project `nim` was connected to

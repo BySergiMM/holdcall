@@ -1,0 +1,269 @@
+name: Release
+
+# A pushed tag matching v* builds the five targets and publishes a GitHub
+# Release. workflow_dispatch runs the identical build and packaging steps as
+# a dry run -- for trying a release before cutting the tag that makes it real
+# -- and stops short of the publish step, because there is no tag a human
+# pushed for the release to be named after.
+#
+# Nothing here pushes a tag or creates a release on its own initiative. Both
+# only happen because a human already pushed a tag matching v*.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: >-
+          Tag to build for (e.g. v0.1.0). Dry run: the archives and
+          SHA256SUMS are uploaded to this workflow run, no release is
+          created.
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Same checks as ci.yml's test job, ubuntu only: a release built from code
+  # that fails its own test suite is a worse outcome than a slower release.
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: engine
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: engine/go.mod
+          cache-dependency-path: engine/go.sum
+
+      - name: Install libsecret (linux)
+        run: sudo apt-get update && sudo apt-get install -y libsecret-tools
+
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt'd:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test -race -v
+        run: |
+          set -o pipefail
+          go test -race -count=1 -v ./... 2>&1 | tee /tmp/gotest.log
+
+      - name: adversarial tests must have run, not skipped
+        run: ../.github/scripts/assert-evidence-ran.sh /tmp/gotest.log
+
+  # Resolves the one tag, commit and build time every target and the release
+  # itself agree on, so five matrix jobs that started seconds apart do not
+  # each stamp their binary with a slightly different builtAt.
+  prepare:
+    name: prepare
+    needs: test
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.vars.outputs.tag }}
+      built_at: ${{ steps.vars.outputs.built_at }}
+      is_release: ${{ steps.vars.outputs.is_release }}
+    steps:
+      - name: Determine the tag, and whether this run may publish
+        id: vars
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            tag="${{ inputs.tag }}"
+            is_release=false
+          else
+            tag="${GITHUB_REF_NAME}"
+            is_release=true
+          fi
+          case "$tag" in
+            v*) ;;
+            *)
+              echo "tag '$tag' does not match v*" >&2
+              exit 1
+              ;;
+          esac
+          {
+            echo "tag=$tag"
+            echo "is_release=$is_release"
+            echo "built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    name: build (${{ matrix.goos }}/${{ matrix.goarch }})
+    needs: prepare
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: engine
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: darwin
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: engine/go.mod
+          cache-dependency-path: engine/go.sum
+
+      # -trimpath and -s -w keep the build's own filesystem paths and debug
+      # symbols out of a binary meant to leave this machine. The three -X
+      # values are what makes `nim version` mean something after install --
+      # without them every release would print the same 0.0.0-dev a plain
+      # `go build` does.
+      - name: Build
+        env:
+          CGO_ENABLED: '0'
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          BUILT_AT: ${{ needs.prepare.outputs.built_at }}
+        run: |
+          mkdir -p build
+          out="build/nim"
+          [ "$GOOS" = "windows" ] && out="build/nim.exe"
+          go build -trimpath \
+            -ldflags "-s -w -X main.version=${TAG} -X main.commit=${GITHUB_SHA} -X main.builtAt=${BUILT_AT}" \
+            -o "$out" ./cmd/nim
+
+      # tar.gz everywhere except windows, which gets a zip because that is
+      # what its users can open without installing anything extra.
+      - name: Package
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          name="nim_${TAG}_${GOOS}_${GOARCH}"
+          stage="dist/${name}"
+          mkdir -p "$stage"
+          if [ "$GOOS" = "windows" ]; then
+            cp build/nim.exe "$stage/nim.exe"
+          else
+            cp build/nim "$stage/nim"
+          fi
+          cp ../README.md ../LICENSE "$stage/"
+          (
+            cd dist
+            if [ "$GOOS" = "windows" ]; then
+              zip -rq "${name}.zip" "${name}"
+            else
+              tar czf "${name}.tar.gz" "${name}"
+            fi
+            rm -rf "${name}"
+          )
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nim_${{ needs.prepare.outputs.tag }}_${{ matrix.goos }}_${{ matrix.goarch }}
+          path: |
+            engine/dist/*.tar.gz
+            engine/dist/*.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: publish
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    # The only job with write access, and only for as long as this job runs.
+    # test, prepare and build never touch anything outside their own run, so
+    # contents: read (set once, above) is enough for all of them.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download every platform's archive
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: 'nim_*'
+          merge-multiple: true
+
+      - name: Checksum every archive
+        working-directory: dist
+        run: |
+          shopt -s nullglob
+          files=(*.tar.gz *.zip)
+          if [ "${#files[@]}" -ne 5 ]; then
+            echo "expected 5 archives (one per target), found ${#files[@]}: ${files[*]:-none}" >&2
+            exit 1
+          fi
+          sha256sum "${files[@]}" > SHA256SUMS
+
+      # "Generated notes" here means the tag's own section of CHANGELOG.md,
+      # not GitHub's commit-log autogeneration -- this project's changelog is
+      # written by hand and is the more honest source. Refusing when the
+      # section is missing means a release can never ship with no notes
+      # behind it, the same reasoning docs/dashboard.md applies to a claim
+      # with no evidence.
+      - name: Extract this tag's section of CHANGELOG.md
+        id: notes
+        env:
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          notes="$(mktemp)"
+          awk -v tag="$TAG" '
+            $0 ~ ("^## \\[" tag "\\]") { found = 1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md > "$notes"
+          if [ ! -s "$notes" ]; then
+            echo "CHANGELOG.md has no '## [$TAG]' section; refusing to publish a release with no notes behind it." >&2
+            exit 1
+          fi
+          echo "path=$notes" >> "$GITHUB_OUTPUT"
+
+      - name: Publish the release
+        if: needs.prepare.outputs.is_release == 'true'
+        # Pinned to a commit, not a tag: this step has contents: write and a
+        # floating tag on a third-party action would let its maintainer's
+        # account push a new commit onto v3 and run under that permission.
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          body_path: ${{ steps.notes.outputs.path }}
+          fail_on_unmatched_files: true
+          files: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/SHA256SUMS
+
+      # Dry run: the archives already exist as this workflow run's artifacts
+      # from each build job, but not bundled with SHA256SUMS anywhere. This
+      # step exists so a dry run leaves one place to download exactly what a
+      # real release would have shipped, and nothing else -- no release, no
+      # tag, no visible change to the repository.
+      - name: Upload the dry-run bundle
+        if: needs.prepare.outputs.is_release != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: nim_${{ needs.prepare.outputs.tag }}_dry-run
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/SHA256SUMS
+          if-no-files-found: error

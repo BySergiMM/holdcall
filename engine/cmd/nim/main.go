@@ -17,6 +17,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"runtime"
 	"sort"
 	"text/tabwriter"
 	"time"
@@ -29,7 +30,15 @@ import (
 	"github.com/BySergiMM/nim/engine/internal/shim"
 )
 
-var version = "0.0.0-dev"
+// Set by the release workflow with -ldflags "-X main.xxx=...". A build made
+// any other way -- `go build`, `go run`, a developer's own binary -- is
+// exactly the case these defaults describe: it did not come from a tagged
+// release and has no commit or build time to report.
+var (
+	version = "0.0.0-dev"
+	commit  = "unknown"
+	builtAt = "unknown"
+)
 
 func main() {
 	if len(os.Args) < 2 {
@@ -57,7 +66,7 @@ func main() {
 	case "verify":
 		err = runVerify(os.Args[2:])
 	case "version", "--version", "-v":
-		fmt.Println("nim", version)
+		fmt.Println(versionString())
 	case "help", "--help", "-h":
 		usage()
 	default:
@@ -68,6 +77,14 @@ func main() {
 		fmt.Fprintln(os.Stderr, "nim:", err)
 		os.Exit(1)
 	}
+}
+
+// versionString is what `nim version` prints. It is a function rather than a
+// literal Println call so a test can check the shape without spawning the
+// binary or depending on the ldflags a particular build was made with.
+func versionString() string {
+	return fmt.Sprintf("nim %s (%s, built %s, %s/%s, %s)",
+		version, commit, builtAt, runtime.GOOS, runtime.GOARCH, runtime.Version())
 }
 
 func usage() {

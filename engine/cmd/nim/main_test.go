@@ -3,6 +3,8 @@ package main
 import (
 	"flag"
 	"io"
+	"regexp"
+	"runtime"
 	"slices"
 	"testing"
 )
@@ -182,5 +184,39 @@ func TestAgentAddResolvesThePathBeforeSendingIt(t *testing.T) {
 	}
 	if path != "/resolved./Claude" {
 		t.Fatalf("the resolved path was not used, got %q", path)
+	}
+}
+
+// versionShape is the format documented for `nim version`:
+//
+//	nim <version> (<commit>, built <builtAt>, <goos>/<goarch>, <go version>)
+//
+// A build made with plain `go build` has no tag, commit or build time to
+// report, so this must hold for the "unknown" defaults just as much as for a
+// release built with -ldflags -- the release workflow is not what this test
+// exercises, only the shape it depends on.
+var versionShape = regexp.MustCompile(`^nim (\S+) \((\S+), built (\S+), (\S+)/(\S+), (go\S+)\)$`)
+
+func TestVersionStringHasTheDocumentedShape(t *testing.T) {
+	got := versionString()
+
+	m := versionShape.FindStringSubmatch(got)
+	if m == nil {
+		t.Fatalf("versionString() = %q, does not match the documented shape", got)
+	}
+	if m[1] != version {
+		t.Errorf("version = %q, want %q", m[1], version)
+	}
+	if m[2] != commit {
+		t.Errorf("commit = %q, want %q", m[2], commit)
+	}
+	if m[3] != builtAt {
+		t.Errorf("builtAt = %q, want %q", m[3], builtAt)
+	}
+	if m[4] != runtime.GOOS || m[5] != runtime.GOARCH {
+		t.Errorf("platform = %s/%s, want %s/%s", m[4], m[5], runtime.GOOS, runtime.GOARCH)
+	}
+	if m[6] != runtime.Version() {
+		t.Errorf("go version = %q, want %q", m[6], runtime.Version())
 	}
 }
