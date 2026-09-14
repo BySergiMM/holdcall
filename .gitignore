@@ -4,6 +4,10 @@
 *.test
 *.out
 
+# Release artifacts. The release workflow builds these under engine/dist/;
+# unanchored so it also catches a local build in the same place.
+dist/
+
 # Node
 node_modules/
 .next/
