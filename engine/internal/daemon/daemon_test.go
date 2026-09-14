@@ -76,7 +76,7 @@ func deny(t testing.TB, cfg config.Config, tool, agent, connector string) {
 func enrol(t testing.TB, dbPath, name string) {
 	t.Helper()
 	j := openJournal(t, dbPath)
-	if err := j.SetAgent(journal.Agent{Name: name, ExecDev: 1, ExecIno: uint64(len(name)) + 1,
+	if err := j.AddAgent(journal.Agent{Name: name, ExecDev: 1, ExecIno: uint64(len(name)) + 1,
 		ExecPath: "/enrolled/by/test/" + name, EnrolledAt: time.Now()}); err != nil {
 		t.Fatalf("enrolling %s: %v", name, err)
 	}

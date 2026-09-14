@@ -6,7 +6,10 @@ import (
 	"regexp"
 	"runtime"
 	"slices"
+	"strings"
 	"testing"
+
+	"github.com/BySergiMM/nim/engine/internal/readmodel"
 )
 
 // server is the stand-in downstream every case below binds its connector to.
@@ -184,6 +187,27 @@ func TestAgentAddResolvesThePathBeforeSendingIt(t *testing.T) {
 	}
 	if path != "/resolved./Claude" {
 		t.Fatalf("the resolved path was not used, got %q", path)
+	}
+}
+
+// `nim log --follow` and `nim log --json` both go through formatEvent (or
+// json.Marshal, in the --json case) for whatever readmodel.Stream hands back,
+// so an agent.add entry has to render like any other: the enrolment's name in
+// agent, and now the path the operator enrolled, so an enrolment does not
+// show as a bare name with nothing behind it the way a rule.add with no scope
+// would.
+func TestFormatEventRendersAnAgentEntry(t *testing.T) {
+	agent, execPath := "claude-code", "/usr/local/bin/claude"
+	ev := readmodel.Event{
+		ChainSeq: 7, Kind: "agent.add", SessionID: "", OccurredAt: "2026-09-14T00:00:00Z",
+		Agent: &agent, ExecPath: &execPath,
+	}
+	line := formatEvent(ev)
+
+	for _, want := range []string{"agent.add", "agent=claude-code", "exec_path=/usr/local/bin/claude"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("formatEvent did not render %q:\n%s", want, line)
+		}
 	}
 }
 

@@ -195,9 +195,13 @@ because rules only deny, that is the same ceiling every session had before
 agents existed. `docs/decisions/0002-what-an-unknown-agent-may-do.md` is the
 argument, and why it has to be made again for allow rules.
 
-**An enrolment change leaves no journal entry** (F-018). Re-enrolling a name
-against another executable moves every rule scoped to it, and the chain says
-nothing. The rules are in the chain; what they are scoped to is not yet.
+**An enrolment change is a journal entry** (F-018, closed). `agent.add` and
+`agent.remove` are written by `AddAgent` and `RemoveAgent` in the same
+transaction as the change to `nim_agents`, exactly as `rule.add` and
+`rule.remove` are. Re-enrolling a name against another executable now writes a
+fresh `agent.add` carrying the new identity, so the chain says which
+executable every rule scoped to that name applied to, and when that changed.
+The rules are in the chain; what they are scoped to is too.
 
 What it establishes: two different client programs are different agents. What
 it does not: two windows of the same program are the same agent, because they
@@ -214,7 +218,6 @@ it can register a connector.
 | **PATH resolution on the registered command** | medium | The registered argv is spawned through normal PATH lookup, so a caller that already controls PATH can front-run the binary name. Closing it needs process inversion. |
 | **The credential is handed to the connector** | medium | Injected into the downstream's environment, so a compromised connector has its own secret and, on Linux, any same-user process can read `/proc/<pid>/environ`. Nim cannot revoke what it has given away. |
 | **The journal is unkeyed** | medium | See the threat model. Only `--expect-head` covers rewriting. |
-| **Enrolment changes are not journaled** | medium | A rule is scoped to a name; the name's binding to an executable can change with no chain entry (F-018). |
 | **Rules only deny** | — | An unenrolled program has what the global rules allow. Not a vulnerability; the reason an allow model is M4.5, with D-002 to answer again. |
 | **A relay killed with SIGKILL cannot stop its connector** | low | Only a connector that reads its stdin notices. SIGTERM and SIGINT are handled; nothing can handle SIGKILL. |
 

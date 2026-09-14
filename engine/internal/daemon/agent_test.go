@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/BySergiMM/nim/engine/internal/journal"
 )
 
 // anExecutable writes a file that looks enough like a program to be enrolled,
@@ -283,9 +285,18 @@ func TestAConnectionCannotMixAgentAndOtherPurposes(t *testing.T) {
 	}
 }
 
-// Enrolment must not touch the journal's chain. Agents are configuration, and
-// the record of what happened has to stay a record of what happened.
-func TestEnrolmentAppendsNothingToTheChain(t *testing.T) {
+// Enrolment now writes into the chain -- the opposite of what this test used
+// to assert.
+//
+// It read "Agents are configuration, and the record of what happened has to
+// stay a record of what happened" until F-018: a rule is scoped to an
+// enrolled name, and re-enrolling that name moves every rule scoped to it to
+// a different executable with nothing in the chain saying so. Once a rule's
+// scope depends on an enrolment, the enrolment is no longer pure
+// configuration the way a connector is -- it is part of what the rules mean,
+// and an audit of the rules without an audit of what they were scoped to is
+// not an audit. handleAgentList stays a read: listing must not itself write.
+func TestEnrolmentEntersTheChain(t *testing.T) {
 	j := freshJournal(t)
 	before, _, err := j.Head()
 	if err != nil {
@@ -301,7 +312,15 @@ func TestEnrolmentAppendsNothingToTheChain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Head: %v", err)
 	}
-	if after != before {
-		t.Fatalf("enrolment added %d entries to the chain", after-before)
+	if after != before+2 {
+		t.Fatalf("enrolling and removing one agent wrote %d entries to the chain, want 2", after-before)
+	}
+
+	entries, err := j.EntriesSince(before, 10)
+	if err != nil {
+		t.Fatalf("EntriesSince: %v", err)
+	}
+	if len(entries) != 2 || entries[0].Kind != journal.KindAgentAdd || entries[1].Kind != journal.KindAgentRemove {
+		t.Fatalf("the chain does not show one agent.add followed by one agent.remove: %+v", entries)
 	}
 }

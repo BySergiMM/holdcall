@@ -83,6 +83,94 @@ func TestAChainSpanningBothVersionsVerifies(t *testing.T) {
 	}
 }
 
+// A v3 entry -- one carrying exec_path and exec_id, written by AddAgent --
+// verifies under its own encoding, the same proof the v1 and v2 entries
+// already have.
+func TestAV3EntryVerifies(t *testing.T) {
+	j, _ := openTemp(t)
+	if err := j.AddAgent(Agent{
+		Name: "claude-code", ExecDev: 7, ExecIno: 42, ExecPath: "/bin/claude", EnrolledAt: time.Now(),
+	}); err != nil {
+		t.Fatalf("AddAgent: %v", err)
+	}
+
+	entries, err := j.EntriesSince(0, 10)
+	if err != nil {
+		t.Fatalf("EntriesSince: %v", err)
+	}
+	if len(entries) != 1 || entries[0].SchemaVersion != SchemaVersion3 {
+		t.Fatalf("AddAgent did not write one v3 entry: %+v", entries)
+	}
+	if entries[0].ExecPath == nil || *entries[0].ExecPath != "/bin/claude" ||
+		entries[0].ExecID == nil || *entries[0].ExecID != "7:42" {
+		t.Fatalf("the agent.add entry does not carry the enrolment: %+v", entries[0])
+	}
+
+	rep, err := j.Verify("")
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if !rep.OK {
+		t.Fatalf("a v3 entry did not verify: %s", rep.Problem)
+	}
+}
+
+// A chain spanning all three versions has to check out end to end, because
+// that is what an install upgraded across two schema changes becomes.
+func TestAChainSpanningV1V2AndV3Verifies(t *testing.T) {
+	j, _ := openTemp(t)
+
+	v1 := Entry{
+		ChainSeq: 1, SchemaVersion: SchemaVersion1,
+		Kind: KindSessionStart, SessionID: "old", OccurredAt: nowRFC(),
+		PrevHash: j.genesis,
+	}
+	v1.Hash = chainHash(v1.PrevHash, canonicalEncodeV1(v1))
+	if _, err := j.db.Exec(
+		`insert into nim_journal
+		   (chain_seq, schema_version, kind, session_id, occurred_at, prev_hash, hash)
+		 values (?,?,?,?,?,?,?)`,
+		v1.ChainSeq, v1.SchemaVersion, v1.Kind, v1.SessionID, v1.OccurredAt, v1.PrevHash, v1.Hash,
+	); err != nil {
+		t.Fatalf("seeding v1: %v", err)
+	}
+
+	agent := "claude-code"
+	v2 := Entry{
+		ChainSeq: 2, SchemaVersion: SchemaVersion2,
+		Kind: KindSessionStart, SessionID: "newer", Agent: &agent, OccurredAt: nowRFC(),
+		PrevHash: v1.Hash,
+	}
+	v2.Hash = chainHash(v2.PrevHash, canonicalEncodeV2(v2))
+	if _, err := j.db.Exec(
+		`insert into nim_journal
+		   (chain_seq, schema_version, kind, session_id, agent, occurred_at, prev_hash, hash)
+		 values (?,?,?,?,?,?,?,?)`,
+		v2.ChainSeq, v2.SchemaVersion, v2.Kind, v2.SessionID, v2.Agent, v2.OccurredAt, v2.PrevHash, v2.Hash,
+	); err != nil {
+		t.Fatalf("seeding v2: %v", err)
+	}
+
+	// Everything after it is written by the current build, at v3, linking to
+	// the v2 entry's hash.
+	if err := j.AddAgent(Agent{
+		Name: "cursor", ExecDev: 1, ExecIno: 2, ExecPath: "/bin/cursor", EnrolledAt: time.Now(),
+	}); err != nil {
+		t.Fatalf("AddAgent: %v", err)
+	}
+
+	rep, err := j.Verify("")
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if !rep.OK {
+		t.Fatalf("a chain spanning v1, v2 and v3 did not verify: %s", rep.Problem)
+	}
+	if rep.Entries != 3 {
+		t.Fatalf("walked %d entries, want 3", rep.Entries)
+	}
+}
+
 // The version an entry was written under decides how it is hashed. If the two
 // encoders ever produced the same bytes for the same entry, the version would
 // be decorative and a v2 entry could be re-read as v1 without detection.
@@ -112,6 +200,39 @@ func TestTheTwoEncodingsAreDistinct(t *testing.T) {
 	}
 	if !strings.Contains(string(v2), agent) {
 		t.Error("the v2 encoding did not contain the agent")
+	}
+}
+
+// The same proof again for v2 and v3. If they ever produced the same bytes
+// for the same entry, exec_path and exec_id could be dropped from a v3 entry
+// and it would still verify as v2.
+func TestTheV2AndV3EncodingsAreDistinct(t *testing.T) {
+	agent, path, id := "claude-code", "/bin/claude", "7:42"
+	e := Entry{
+		ChainSeq: 1, Kind: KindAgentAdd, SessionID: "", OccurredAt: "t",
+		Agent: &agent, ExecPath: &path, ExecID: &id,
+	}
+	e.SchemaVersion = SchemaVersion2
+	v2 := canonicalEncodeV2(e)
+	e.SchemaVersion = SchemaVersion3
+	v3 := canonicalEncodeV3(e)
+
+	if string(v2) == string(v3) {
+		t.Fatal("v2 and v3 encoded the same entry identically")
+	}
+	if !strings.HasPrefix(string(v2), "nim.journal.v2\n") {
+		t.Error("v2 does not carry the v2 domain")
+	}
+	if !strings.HasPrefix(string(v3), "nim.journal.v3\n") {
+		t.Error("v3 does not carry the v3 domain")
+	}
+	// v2 cannot express exec_path or exec_id at all, which is why a new
+	// version was needed rather than two new fields grafted onto v2.
+	if strings.Contains(string(v2), path) || strings.Contains(string(v2), id) {
+		t.Error("the v2 encoding contained exec_path or exec_id")
+	}
+	if !strings.Contains(string(v3), path) || !strings.Contains(string(v3), id) {
+		t.Error("the v3 encoding did not contain exec_path and exec_id")
 	}
 }
 

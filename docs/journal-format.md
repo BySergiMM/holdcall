@@ -31,13 +31,15 @@ is updated.
 | 14 | `machine_id` | string, nullable | `session.start` |
 | 15 | `client` | string, nullable | `session.start` |
 | 16 | `protocol_version` | string, nullable | `session.end` |
-| 17 | `agent` | string, nullable | `session.start` (schema_version 2 only) |
+| 17 | `agent` | string, nullable | `session.start` (from schema_version 2); `rule.add`, `rule.remove`; `agent.add`, `agent.remove` (schema_version 3 only) |
+| 18 | `exec_path` | string, nullable | `agent.add`, `agent.remove` (schema_version 3 only) |
+| 19 | `exec_id` | string, nullable | `agent.add`, `agent.remove` (schema_version 3 only) |
 
 `prev_hash` and `hash` are stored alongside but are **not** encoded: they are the
 chain, not the content.
 
 `kind` is one of `session.start`, `call.request`, `call.outcome`, `session.end`,
-`anomaly`, `rule.add`, `rule.remove`.
+`anomaly`, `rule.add`, `rule.remove`, `agent.add`, `agent.remove`.
 
 `rule.add` and `rule.remove` record a policy change: a rule that refuses
 `tool` for the sessions in its scope. They carry the scope in `agent` (null:
@@ -47,6 +49,21 @@ session: `session_id` is the empty string, which the encoding keeps distinct
 from null, and `seq` is null. The rule and its entry are written in one SQLite
 transaction, so the chain never describes a rule that was not stored and no
 rule exists that the chain does not know about.
+
+`agent.add` and `agent.remove` record an enrolment change: the binding of a
+name the operator chose to an executable, which is what a rule's `agent`
+scope actually names. They carry the enrolment in `agent` (the name), `exec_path`
+(the path the operator typed) and `exec_id` (the resolved identity, see
+*canonical_encode_v3* below). `agent.add` carries the enrolment being made;
+`agent.remove` carries the one being removed, not nulls, so the chain says
+what stopped being enrolled rather than only that something did. They carry
+no session, exactly like a rule: `session_id` is the empty string and `seq`
+is null. The enrolment and its entry are written in one SQLite transaction --
+`AddAgent` and `RemoveAgent` -- so the chain never describes an enrolment that
+was not stored and no enrolment exists that the chain does not know about.
+Re-enrolling a name writes a fresh `agent.add` carrying the new identity; it
+does not rewrite the old one, because entries are never modified after they
+are written.
 
 `decision` is one of `observed`, `allow`, `deny`, `approved`, `rejected`. M2
 writes `allow` and `deny`. `observed` is what earlier milestones wrote, when
@@ -135,13 +152,40 @@ The genesis is **not** versioned with the entry encoding — it is still
 has nothing to do with how many fields an entry has; changing it would
 invalidate every existing chain for no reason.
 
+## canonical_encode_v3
+
+Identical to v2 except that the domain is `nim.journal.v3` and there are
+**nineteen** fields, the last two being `exec_path` and `exec_id`:
+
+    output := "nim.journal.v3" 0x0A || field(1) || ... || field(19)
+
+`exec_path` and `exec_id` are the path an enrolment change carries and the
+identity it resolves to, rendered as `"<dev>:<ino>"` in decimal — the same
+pair that decides whether a running process matches the enrolment, encoded as
+one string so a second implementation does not have to guess a separator for
+two integers. Both are null on every kind except `agent.add` and
+`agent.remove`, exactly as `agent` is null off `session.start`, `rule.add` and
+`rule.remove`.
+
+The domain differs from v2 for the same reason v2's differs from v1: two more
+fields hashed under the v2 domain would let the same entry produce a different
+hash depending on which build read it, which is precisely what a version
+exists to prevent. `agent` could not simply be reused for `exec_path` or
+`exec_id` either — it already carries the enrolment's *name* on `agent.add`
+and `agent.remove`, and collapsing the name and the identity into one field
+would make a re-enrolment indistinguishable from the enrolment it replaced.
+
+The genesis is unaffected by v3 for the same reason it is unaffected by v2: it
+is not versioned with the entry encoding.
+
 ## Verifying a journal that spans versions
 
 `schema_version` is stored per entry and verification dispatches on what each
 entry says, never on what the current build writes. A journal written before
-`agent` existed keeps verifying with the v1 encoder, and a chain containing
-both versions checks out end to end — the chain links by hash, and each
-entry's own encoding is decided by its own stored version.
+`agent` existed keeps verifying with the v1 encoder, one written before
+`exec_path` and `exec_id` existed keeps verifying with the v2 encoder, and a
+chain containing all three versions checks out end to end — the chain links by
+hash, and each entry's own encoding is decided by its own stored version.
 
 An entry claiming a version this build does not know is refused by name rather
 than encoded under a guess. Encoding it under whatever rules happen to be
@@ -225,10 +269,11 @@ field is what makes that safe.
     prev_hash(n)   := hash(n-1)
 
 The encoder is the one the entry's own `schema_version` names: `v1` for
-entries written before `agent` existed, `v2` after. An earlier version of this
-formula said `canonical_encode_v1` for every entry, which a second
-implementation transcribing it would have followed into rejecting every v2
-entry. See *Verifying a journal that spans versions*.
+entries written before `agent` existed, `v2` after, `v3` for entries carrying
+`exec_path` and `exec_id`. An earlier version of this formula said
+`canonical_encode_v1` for every entry, which a second implementation
+transcribing it would have followed into rejecting every v2 entry. See
+*Verifying a journal that spans versions*.
 
 `raw_bytes` is the 32-byte decoding of the hex-encoded previous hash, not its
 hex text. Hashes are stored as lowercase hex.

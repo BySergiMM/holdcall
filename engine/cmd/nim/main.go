@@ -470,6 +470,9 @@ func formatEvent(ev readmodel.Event) string {
 	if ev.Agent != nil {
 		add("agent=%s", *ev.Agent)
 	}
+	if ev.ExecPath != nil {
+		add("exec_path=%s", *ev.ExecPath)
+	}
 	if ev.Tool != nil {
 		add("tool=%s", *ev.Tool)
 	}

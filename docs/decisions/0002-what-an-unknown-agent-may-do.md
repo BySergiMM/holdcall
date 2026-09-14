@@ -58,7 +58,12 @@ added to the deny-only model as a convenience.
 ## What an enrolment is worth
 
 The same as a connector registration or a rule: anything able to run this
-binary as this user can make one, change one, or remove one. That is a property
-of running everything as one OS user, and it is why every policy change is an
-entry in the chain -- the record is what makes a change visible afterwards, not
-what prevents it. `docs/security.md` says the same under *What protects what*.
+binary as this user can make one, change one, or remove one. That is a
+property of running everything as one OS user, and running everything as one
+OS user is not what stops an enrolment being abused -- the record is. So the
+entry is now the record: `agent.add` and `agent.remove` carry every enrolment
+change the same way `rule.add` and `rule.remove` carry every policy change,
+written in the same transaction as the change itself (F-018, closed). A rule
+names an agent; the chain now says what that name was bound to at every point
+it could have been asked to enforce anything, not only what the rule said.
+`docs/security.md` says the same under *What protects what*.

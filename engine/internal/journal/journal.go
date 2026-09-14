@@ -41,6 +41,16 @@ const (
 	// distinct from null.
 	KindRuleAdd    = "rule.add"
 	KindRuleRemove = "rule.remove"
+
+	// An enrolment change is an entry in the chain for the same reason a rule
+	// change is: a rule is scoped to a name, and a name's binding to an
+	// executable can move under it. Both carry the name in agent, the
+	// operator-typed path in exec_path and the resolved identity in exec_id,
+	// and no session, exactly like a rule. On agent.remove both exec fields
+	// carry the enrolment that was removed, not nulls, so the chain says what
+	// was removed rather than only that something was.
+	KindAgentAdd    = "agent.add"
+	KindAgentRemove = "agent.remove"
 )
 
 // The decisions an entry can carry.
@@ -77,7 +87,7 @@ const journalTableBody = `(
     schema_version   integer not null,
     kind             text    not null check (kind in
                        ('session.start','call.request','call.outcome','session.end','anomaly',
-                        'rule.add','rule.remove')),
+                        'rule.add','rule.remove','agent.add','agent.remove')),
     session_id       text    not null,
     seq              integer,
     connector        text,
@@ -94,6 +104,8 @@ const journalTableBody = `(
     client           text,
     protocol_version text,
     agent            text,
+    exec_path        text,
+    exec_id          text,
     prev_hash        text    not null,
     hash             text    not null
 )`
@@ -204,6 +216,13 @@ create index if not exists nim_rules_tool_idx on nim_rules (tool);
 var migrations = []string{
 	`alter table nim_connectors add column command text`,
 	`alter table nim_journal add column agent text`,
+	// rebuildJournalTable's column list below names exec_path and exec_id on
+	// the renamed source table, so a database that reaches the rebuild
+	// without them -- any built before this version -- needs them added
+	// first. Without this, a table that predates schema_version 3 fails that
+	// rebuild's SELECT with "no such column: exec_path" instead of gaining it.
+	`alter table nim_journal add column exec_path text`,
+	`alter table nim_journal add column exec_id text`,
 }
 
 func migrate(db *sql.DB) error {
@@ -263,7 +282,7 @@ func rebuildJournalTable(db *sql.DB) (rebuilt bool, err error) {
 
 	const columns = `chain_seq, schema_version, kind, session_id, seq, connector, tool,
 		params_digest, decision, ok, duration_ms, anomaly, occurred_at,
-		machine_id, client, protocol_version, agent, prev_hash, hash`
+		machine_id, client, protocol_version, agent, exec_path, exec_id, prev_hash, hash`
 	for _, stmt := range []string{
 		`drop view if exists nim_sessions`,
 		`drop view if exists nim_calls`,
@@ -455,7 +474,19 @@ type Entry struct {
 	// the daemon from the kernel. Nil when no enrolment matched, which is the
 	// ordinary state for anyone who has not enrolled one. Never set from the
 	// wire: there is no field on Event for it, deliberately.
-	Agent    *string
+	//
+	// On agent.add and agent.remove, Agent is instead the enrolment's name --
+	// the same column, doing the same job it does for a rule's scope: naming
+	// who the entry is about.
+	Agent *string
+	// ExecPath and ExecID are set on agent.add and agent.remove: the path the
+	// operator enrolled, and the resolved identity as "<dev>:<ino>" decimal.
+	// On agent.add they describe the enrolment being made; on agent.remove
+	// they describe the one being removed, so the chain says what was
+	// removed rather than only that something was. Every other kind leaves
+	// both null.
+	ExecPath *string
+	ExecID   *string
 	PrevHash string
 	Hash     string
 }
@@ -692,11 +723,11 @@ func (j *Journal) appendTx(tx *sql.Tx, e Entry) error {
 		`insert into nim_journal
 		   (chain_seq, schema_version, kind, session_id, seq, connector, tool,
 		    params_digest, decision, ok, duration_ms, anomaly, occurred_at,
-		    machine_id, client, protocol_version, agent, prev_hash, hash)
-		 values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		    machine_id, client, protocol_version, agent, exec_path, exec_id, prev_hash, hash)
+		 values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		e.ChainSeq, e.SchemaVersion, e.Kind, e.SessionID, e.Seq, e.Connector, e.Tool,
 		e.ParamsDigest, e.Decision, e.OK, e.DurationMS, e.Anomaly, e.OccurredAt,
-		e.MachineID, e.Client, e.ProtocolVersion, e.Agent, e.PrevHash, e.Hash,
+		e.MachineID, e.Client, e.ProtocolVersion, e.Agent, e.ExecPath, e.ExecID, e.PrevHash, e.Hash,
 	)
 	return err
 }
@@ -874,19 +905,58 @@ type Agent struct {
 	EnrolledAt time.Time
 }
 
-// SetAgent enrols an agent, replacing any enrolment under the same name.
+// execID renders an enrolment's identity the way it is hashed into the chain:
+// "<dev>:<ino>" in decimal. It exists so the value written by AddAgent and
+// RemoveAgent, and the value docs/journal-format.md defines, are provably the
+// same computation.
+func execID(dev, ino uint64) string {
+	return fmt.Sprintf("%d:%d", dev, ino)
+}
+
+// agentEntry is what an enrolment change looks like in the chain: the name in
+// agent, the enrolled path and resolved identity in exec_path and exec_id,
+// and no session -- an enrolment belongs to no session, exactly like a rule.
+func agentEntry(kind string, a Agent, at string) Entry {
+	name, path, id := a.Name, a.ExecPath, execID(a.ExecDev, a.ExecIno)
+	return Entry{
+		Kind:       kind,
+		SessionID:  "",
+		Agent:      &name,
+		ExecPath:   &path,
+		ExecID:     &id,
+		OccurredAt: at,
+	}
+}
+
+// AddAgent enrols an agent and records the agent.add entry in the same
+// transaction: the enrolment never exists without the chain knowing about it,
+// and the chain never describes an enrolment that was not stored.
 //
-// Replacing is deliberate and is how re-enrolment works. It is needed more
-// often than it looks: an inode survives, but a device number can change when
-// filesystems are mounted differently across a reboot, and an application that
-// updates itself becomes a different file. Both leave an enrolment that no
-// longer matches anything, which must be repairable without deleting and
-// re-adding.
-func (j *Journal) SetAgent(a Agent) error {
+// It replaces any enrolment under the same name -- re-enrolment -- and this is
+// deliberate and needed more often than it looks: an inode survives, but a
+// device number can change when filesystems are mounted differently across a
+// reboot, and an application that updates itself becomes a different file.
+// Both leave an enrolment that no longer matches anything, which must be
+// repairable without deleting and re-adding.
+//
+// A re-enrolment writes a fresh agent.add carrying the NEW identity, not an
+// update to the old entry -- entries are never modified after they are
+// written -- and that is the whole point: every rule scoped to this name now
+// applies to a different executable, and F-018 was that nothing said so.
+func (j *Journal) AddAgent(a Agent) error {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+
 	if j.readOnly {
 		return errReadOnly
 	}
-	_, err := j.db.Exec(
+	tx, err := j.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(
 		`insert into nim_agents (name, exec_dev, exec_ino, exec_path, enrolled_at)
 		 values (?, ?, ?, ?, ?)
 		 on conflict (name) do update set
@@ -896,8 +966,14 @@ func (j *Journal) SetAgent(a Agent) error {
 		   enrolled_at = excluded.enrolled_at`,
 		a.Name, a.ExecDev, a.ExecIno, a.ExecPath,
 		a.EnrolledAt.UTC().Format(time.RFC3339Nano),
-	)
-	return err
+	); err != nil {
+		return err
+	}
+	at := a.EnrolledAt.UTC().Format(time.RFC3339Nano)
+	if err := j.appendTx(tx, agentEntry(KindAgentAdd, a, at)); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // ListAgents returns every enrolment, ordered by name.
@@ -922,14 +998,52 @@ func (j *Journal) ListAgents() ([]Agent, error) {
 	return out, rows.Err()
 }
 
-// DeleteAgent removes an enrolment. Removing one that was never enrolled is
-// not an error, so a caller that only wants it gone need not check first.
-func (j *Journal) DeleteAgent(name string) error {
+// RemoveAgent deletes the enrolment named name and records the agent.remove
+// entry -- carrying the enrolment that was removed, not nulls -- in the same
+// transaction.
+//
+// Removing a name that is not enrolled writes nothing and reports found =
+// false: there is no enrolment to describe removing, so nothing is recorded,
+// exactly as RemoveRule refuses a change to nothing rather than treating it as
+// a success. Unlike RemoveRule this is not an error -- the daemon's handler
+// treats found = false as the idempotent success `nim agent remove` has
+// always been; the caller decides what "not found" means, not this method.
+func (j *Journal) RemoveAgent(name string) (a Agent, found bool, err error) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+
 	if j.readOnly {
-		return errReadOnly
+		return Agent{}, false, errReadOnly
 	}
-	_, err := j.db.Exec(`delete from nim_agents where name = ?`, name)
-	return err
+	tx, err := j.db.Begin()
+	if err != nil {
+		return Agent{}, false, err
+	}
+	defer tx.Rollback()
+
+	var enrolledAt string
+	err = tx.QueryRow(
+		`select name, exec_dev, exec_ino, exec_path, enrolled_at from nim_agents where name = ?`, name).
+		Scan(&a.Name, &a.ExecDev, &a.ExecIno, &a.ExecPath, &enrolledAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Agent{}, false, nil
+	}
+	if err != nil {
+		return Agent{}, false, err
+	}
+	a.EnrolledAt, _ = time.Parse(time.RFC3339Nano, enrolledAt)
+
+	if _, err := tx.Exec(`delete from nim_agents where name = ?`, name); err != nil {
+		return Agent{}, false, err
+	}
+	at := time.Now().UTC().Format(time.RFC3339Nano)
+	if err := j.appendTx(tx, agentEntry(KindAgentRemove, a, at)); err != nil {
+		return Agent{}, false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Agent{}, false, err
+	}
+	return a, true, nil
 }
 
 // AgentNamed looks up an enrolment by the name the operator gave it.

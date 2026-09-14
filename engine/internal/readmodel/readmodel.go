@@ -95,7 +95,17 @@ type Event struct {
 	// is hashed like every other field, so a reader recomputing an entry's
 	// hash from this projection needs it; it was missing for a while, which
 	// made `nim log --json` an incomplete account of a v2 entry.
+	//
+	// On agent.add and agent.remove it is instead the enrolment's name.
 	Agent *string `json:"agent,omitempty"`
+
+	// ExecPath and ExecID are set on agent.add and agent.remove: the path the
+	// operator enrolled and the resolved identity as "<dev>:<ino>" decimal.
+	// On agent.add they describe the enrolment made; on agent.remove, the one
+	// removed. Both are hashed like every other field, so a reader
+	// recomputing a v3 entry's hash needs them.
+	ExecPath *string `json:"exec_path,omitempty"`
+	ExecID   *string `json:"exec_id,omitempty"`
 
 	PrevHash string `json:"prev_hash"`
 	Hash     string `json:"hash"`
@@ -122,6 +132,8 @@ func EventFrom(e journal.Entry) Event {
 		Client:          copyString(e.Client),
 		ProtocolVersion: copyString(e.ProtocolVersion),
 		Agent:           copyString(e.Agent),
+		ExecPath:        copyString(e.ExecPath),
+		ExecID:          copyString(e.ExecID),
 		PrevHash:        e.PrevHash,
 		Hash:            e.Hash,
 	}

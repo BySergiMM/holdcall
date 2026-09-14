@@ -59,14 +59,20 @@ func TestReadModelSurfaceIsFrozen(t *testing.T) {
 		value any
 		want  []string
 	}{
+		// exec_path and exec_id may be present: they are set on agent.add and
+		// agent.remove, the path the operator enrolled and the resolved
+		// identity, exactly as the journal defines them at schema_version 3.
+		// They are added here for the same reason "agent" was -- the journal
+		// carries the value and hashes it, so a read model that could not
+		// show it would be hiding something the chain commits to.
 		{"Event", Event{}, []string{
 			"agent", "anomaly", "chain_seq", "client", "connector", "decision", "duration_ms",
-			"hash", "kind", "machine_id", "occurred_at", "ok", "params_digest",
+			"exec_id", "exec_path", "hash", "kind", "machine_id", "occurred_at", "ok", "params_digest",
 			"prev_hash", "protocol_version", "schema_version", "seq", "session_id", "tool",
 		}},
 		{"Page", Page{}, []string{
 			"agent", "anomaly", "chain_seq", "client", "connector", "cursor", "decision",
-			"duration_ms", "events", "hash", "kind", "machine_id", "occurred_at",
+			"duration_ms", "events", "exec_id", "exec_path", "hash", "kind", "machine_id", "occurred_at",
 			"ok", "params_digest", "prev_hash", "protocol_version", "schema_version",
 			"seq", "session_id", "tool",
 		}},
