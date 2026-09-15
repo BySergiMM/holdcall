@@ -11,10 +11,11 @@ func ptr(s string) *string { return &s }
 
 // The precedence docs/decisions/0003-allow-rules-and-precedence.md states,
 // enumerated: specificity first (exact tool over default, named agent or
-// connector over unnamed), deny over allow at equal specificity, and no
-// candidates at all is left to the caller to read as the M4 baseline. Pure
-// and table-driven on purpose: no SQLite, no daemon, just the rule sets a
-// database query could plausibly hand back.
+// connector over unnamed), deny over ask over allow at equal specificity
+// (0003's 2026-09-15 addendum extends the original deny-over-allow to the
+// third effect M6 adds), and no candidates at all is left to the caller to
+// read as the M4 baseline. Pure and table-driven on purpose: no SQLite, no
+// daemon, just the rule sets a database query could plausibly hand back.
 func TestDecideAppliesSpecificityThenDenyOverAllow(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -102,6 +103,51 @@ func TestDecideAppliesSpecificityThenDenyOverAllow(t *testing.T) {
 				{ID: 3, Connector: sc, Tool: "rm", Effect: DecisionDeny},
 			},
 			wantFound: true, wantID: 3,
+		},
+		{
+			name:       "the only candidate wins even when it asks",
+			candidates: []Rule{{ID: 1, Tool: "rm", Effect: DecisionAsk}},
+			wantFound:  true, wantID: 1,
+		},
+		{
+			name: "an ask beats an allow at equal specificity",
+			candidates: []Rule{
+				{ID: 1, Agent: sa, Tool: "rm", Effect: DecisionAllow},
+				{ID: 2, Agent: sa, Tool: "rm", Effect: DecisionAsk},
+			},
+			wantFound: true, wantID: 2,
+		},
+		{
+			name: "a deny beats an ask at equal specificity",
+			candidates: []Rule{
+				{ID: 1, Agent: sa, Tool: "rm", Effect: DecisionAsk},
+				{ID: 2, Agent: sa, Tool: "rm", Effect: DecisionDeny},
+			},
+			wantFound: true, wantID: 2,
+		},
+		{
+			name: "a deny beats an ask regardless of which was added first",
+			candidates: []Rule{
+				{ID: 1, Agent: sa, Tool: "rm", Effect: DecisionDeny},
+				{ID: 2, Agent: sa, Tool: "rm", Effect: DecisionAsk},
+			},
+			wantFound: true, wantID: 1,
+		},
+		{
+			name: "an exact-tool ask beats a default deny naming the same scope",
+			candidates: []Rule{
+				{ID: 1, Agent: sa, Connector: sc, Tool: RuleToolDefault, Effect: DecisionDeny},
+				{ID: 2, Agent: sa, Connector: sc, Tool: "rm", Effect: DecisionAsk},
+			},
+			wantFound: true, wantID: 2,
+		},
+		{
+			name: "an exact-tool allow beats a default ask naming the same scope",
+			candidates: []Rule{
+				{ID: 1, Agent: sa, Tool: RuleToolDefault, Effect: DecisionAsk},
+				{ID: 2, Agent: sa, Tool: "rm", Effect: DecisionAllow},
+			},
+			wantFound: true, wantID: 2,
 		},
 		{
 			name: "order of the candidate slice never changes the winner",

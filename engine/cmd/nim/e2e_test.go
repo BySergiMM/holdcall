@@ -305,6 +305,15 @@ func (s *stack) allow(t *testing.T, args ...string) {
 	}
 }
 
+// askRule is deny and allow's third counterpart, added for M6.
+func (s *stack) askRule(t *testing.T, args ...string) {
+	t.Helper()
+	out, err := s.run(t, append([]string{"policy", "ask"}, args...)...)
+	if err != nil || !strings.Contains(out, "recorded in the journal") {
+		t.Fatalf("nim policy ask %v: %v\n%s", args, err, out)
+	}
+}
+
 // policyDefault sets deny or allow across every tool through the real CLI:
 // nim policy default deny|allow [--agent] [--connector].
 func (s *stack) policyDefault(t *testing.T, effect string, args ...string) {
@@ -675,6 +684,118 @@ func TestADefaultDenyClosesEverythingAndAnAgentScopedAllowReopensOneToolForOneAg
 	}
 	if !verdict(beta) {
 		t.Error("beta was still refused after the default was removed; the M4 baseline is allow")
+	}
+}
+
+// idFromApproveOutput pulls the id nim approve printed for one call, from
+// its own "id  <value>" line -- the same text an operator reads to type
+// nim approve/reject <id>.
+func idFromApproveOutput(t *testing.T, out string) string {
+	t.Helper()
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 2 && fields[0] == "id" {
+			return fields[1]
+		}
+	}
+	t.Fatalf("could not find an id line in nim approve's output:\n%s", out)
+	return ""
+}
+
+// waitForApproveToList polls nim approve until its output contains marker --
+// the daemon receives call.arguments a moment after it answers pending, and
+// this is a separate process racing that, not something the relay can be
+// asked to wait for.
+func (s *stack) waitForApproveToList(t *testing.T, marker string) string {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	var out string
+	for time.Now().Before(deadline) {
+		out, _ = s.run(t, "approve")
+		if strings.Contains(out, marker) {
+			return out
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("nim approve never listed a call carrying %q:\n%s", marker, out)
+	return ""
+}
+
+// M6, human approval, run end to end the way every milestone since M2 has
+// been: the real binary, a real relay, a real connector. An ask rule holds
+// a call; nim approve from the CLI lists it with its real arguments -- not
+// a summary, not anything the model that asked for the call could have
+// written -- and approving it is what lets the connector's own answer reach
+// the client. A second call under the same rule is rejected, and the client
+// sees the refusal rather than anything from the connector.
+func TestRealApprovalHoldsACallForAHumanWhoDecidesItThroughTheCLI(t *testing.T) {
+	s := build(t)
+	s.daemon(t)
+	s.askRule(t, "send_email")
+	r := s.serve(t)
+
+	approved := `{"jsonrpc":"2.0","id":1,"method":"tools/call",` +
+		`"params":{"name":"send_email","arguments":{"to":"ceo@example.com","subject":"quarterly numbers"}}}`
+	r.send(t, approved)
+
+	out := s.waitForApproveToList(t, "ceo@example.com")
+	if !strings.Contains(out, "quarterly numbers") {
+		t.Fatalf("nim approve did not show the full real arguments:\n%s", out)
+	}
+	if !strings.Contains(out, "send_email") {
+		t.Fatalf("nim approve did not name the tool:\n%s", out)
+	}
+	id := idFromApproveOutput(t, out)
+
+	if out, err := s.run(t, "approve", id); err != nil || !strings.Contains(out, "recorded in the journal") {
+		t.Fatalf("nim approve %s: %v\n%s", id, err, out)
+	}
+
+	gotID, isError, text := decodeLine(t, r.next(t))
+	if gotID != "1" || isError {
+		t.Errorf("the approved call came back as id=%s isError=%v (%q)", gotID, isError, text)
+	}
+	if !strings.Contains(s.received(t), approved) {
+		t.Errorf("the connector did not receive the approved call verbatim:\n%s", s.received(t))
+	}
+
+	// A second call under the same rule, this time refused.
+	refused := `{"jsonrpc":"2.0","id":2,"method":"tools/call",` +
+		`"params":{"name":"send_email","arguments":{"to":"someone-else@example.com"}}}`
+	r.send(t, refused)
+
+	out = s.waitForApproveToList(t, "someone-else@example.com")
+	id = idFromApproveOutput(t, out)
+	if out, err := s.run(t, "reject", id, "--reason", "not needed"); err != nil || !strings.Contains(out, "recorded in the journal") {
+		t.Fatalf("nim reject %s: %v\n%s", id, err, out)
+	}
+
+	_, isError, text = decodeLine(t, r.next(t))
+	if !isError {
+		t.Error("a rejected call was not answered as an error")
+	}
+	if !strings.Contains(text, "human") {
+		t.Errorf("the client was told %q, want the human-refusal text", text)
+	}
+	if got := s.received(t); strings.Contains(got, "someone-else@example.com") {
+		t.Errorf("the rejected call reached the connector:\n%s", got)
+	}
+
+	r.kill()
+
+	// And the record agrees with what a human did.
+	logOut, err := s.run(t, "log")
+	if err != nil {
+		t.Fatalf("nim log: %v\n%s", err, logOut)
+	}
+	if !strings.Contains(logOut, "approved") || !strings.Contains(logOut, "rejected") {
+		t.Errorf("nim log does not show both human decisions:\n%s", logOut)
+	}
+	if strings.Contains(logOut, "ceo@example.com") || strings.Contains(logOut, "someone-else@example.com") {
+		t.Errorf("nim log printed a call's real arguments:\n%s", logOut)
+	}
+	if out, err := s.run(t, "verify"); err != nil || !strings.Contains(out, "self-consistent") {
+		t.Errorf("nim verify: %v\n%s", err, out)
 	}
 }
 

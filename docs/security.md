@@ -23,6 +23,22 @@ The adversary is **a downstream MCP server**: code the operator did not write,
 running as the same user, spawned by Nim itself. Everything below is written
 against that.
 
+**Human approval (M6) is written against a second adversary: the model
+driving the client**, not only the server on the other side of a call. An
+`ask` rule exists because the operator does not trust a call's own
+arguments to be decided by policy alone, and the thing that produces those
+arguments -- picks the tool, writes the parameters, and would write a
+summary of them if `nim approve` showed one -- is the model, not the
+server. `docs/decisions/0005-human-approval.md` is the argument in full;
+the short form is that `nim approve` prints the real `params.arguments`
+because a model motivated to get a dangerous call approved has every reason
+to describe it as something else. **The human operator is trusted, in this
+model as in the base one.** Approval defends against the model choosing to
+ask for something it should not, not against the person running `nim`
+choosing to approve it anyway -- that is the operator doing what they are
+entitled to do with a machine they run as themselves, the same boundary
+"a user who reconfigures their client" already draws below.
+
 Not in the model, and worth being explicit about:
 
 - **A user who reconfigures their client.** Nothing stops a client being
@@ -113,6 +129,7 @@ needed: the vnode check answers the question actually being asked.
 | 29 | Read a secret from `nim init`'s own output | **blocked** (env values never shown) | `rewrite_test.go` |
 | 30 | Read a connector's secret through the console | **blocked** (none is there to read) | `console_test.go` |
 | 31 | Speak the newer `server/discover` handshake so the client cannot parse Nim's refusals | **blocked** (refusals follow the negotiated dialect) | `dialect_test.go`, `deny_test.go`, `tools/relay-rig` |
+| 32 | Approve your own call from the model | **blocked only by circumstance, stated honestly rather than claimed further**: peer identity refuses anything that is not the `nim` binary, so a model that cannot execute commands has no way to reach `nim approve` at all -- but a model with shell access, which many agent setups grant, runs `nim approve` exactly as an operator typing it would, and nothing on the socket tells the two apart. See *Threat model* above and `docs/decisions/0005-human-approval.md`. | `peer_authz_test.go` (the peer-identity floor); not closed beyond it |
 
 Live vulnerabilities found by audit rather than hypotheticals: **1** (any local
 process could read every credential), **3** (the journal was writable by
@@ -164,30 +181,46 @@ the attack that read every secret. The daemon returns the command; the caller
 never supplies one.
 
 **Purpose binding** commits a connection to one job on its first request, so a
-credential lookup cannot pivot to a second connector mid-connection, and a
-policy connection cannot ask for a credential.
+credential lookup cannot pivot to a second connector mid-connection, a policy
+connection cannot ask for a credential, and an approval connection --
+`approval.list`/`approval.decide`, M6 -- cannot either.
 
-**The rules** are the authorization model, as far as one exists: allow or
-deny per `(agent, connector, tool)`, in SQLite, changed only through the
+**The rules** are the authorization model, as far as one exists: deny, allow
+or ask per `(agent, connector, tool)`, in SQLite, changed only through the
 daemon over the same verified socket as everything else, and every change
 one transaction with its entry in the chain. `tool` is an exact name or `*`
 for a default; there is no matching shorter than that. Among the rules that
 match a call, the most specific wins -- an exact tool over a default, naming
 the agent or the connector over not naming it -- and a tie in specificity
-goes to deny; no matching rule at all is allow, the M4 baseline. One
-function, `journal.Decide`, is the whole of that precedence, table-driven
-tested and used by both the decision path and `nim policy explain`, so what
-the CLI says a call would get can never drift from what it actually gets.
-docs/decisions/0003-allow-rules-and-precedence.md is the argument. What a
-rule is worth is bounded by what an enrolment is worth -- anything that can
-run this binary as this user can make either -- and the entry is what makes
-that visible afterwards, not what prevents it. **A budget narrows what the
+goes to deny, then ask, then allow; no matching rule at all is allow, the M4
+baseline. One function, `journal.Decide`, is the whole of that precedence,
+table-driven tested and used by both the decision path and `nim policy
+explain`, so what the CLI says a call would get can never drift from what it
+actually gets. docs/decisions/0003-allow-rules-and-precedence.md, and its
+2026-09-15 addendum for `ask`, is the argument. What a rule is worth is
+bounded by what an enrolment is worth -- anything that can run this binary as
+this user can make either -- and the entry is what makes that visible
+afterwards, not what prevents it. **A budget narrows what the
 rules allow, never widens it.** Checked only once a rule has already said
 allow, a budget caps the number of allowed calls one session may make, scoped
 like a rule; it counts decisions, not outcomes, so a call the relay gave up
 on still spent its share, and it has no way to express "allow" itself, so it
 can never turn a rule's deny into anything else. docs/decisions/0004-budgets.md
 is the argument.
+
+**Human approval** (M6) is what an `ask` rule leads to: the call is held in
+memory, off the model's channel, until a human decides it through `nim
+approve`/`nim reject` or the approval timer rejects it for them. What it
+protects is narrower than what the rules above protect, and
+`docs/decisions/0005-human-approval.md` says so directly: it defends
+against *the model* choosing to ask for something dangerous, not against
+the operator choosing to approve it anyway. The real arguments a human sees
+never touch SQLite or a log line while the call is held -- `pendingRegistry`
+is memory only -- and the daemon writes the decision before it answers the
+relay, the same ordering every other verdict this project makes already
+keeps. See row 32 in the attack table for what this does not close: nothing
+here tells a human typing `nim approve` apart from a model that has been
+given a shell.
 
 **Strict reading** of the one message Nim acts on. Objects are read by exact
 key and a repeated key is refused, because that is the one shape on which

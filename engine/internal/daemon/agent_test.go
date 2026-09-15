@@ -291,16 +291,17 @@ func TestAConnectionCannotMixAgentAndOtherPurposes(t *testing.T) {
 	j := freshJournal(t)
 	store := newFakeStore()
 	locks := newTargetLocks()
+	approvals := newPendingRegistry()
 	path := anExecutable(t, "claude")
 
 	state := &requestState{}
 	if resp := handleRequest(Request{
 		ID: "1", Kind: KindAgentAdd, AgentName: "claude-code", AgentPath: path,
-	}, state, j, store, locks); resp.Error != "" {
+	}, state, j, store, locks, approvals); resp.Error != "" {
 		t.Fatalf("the first agent request should succeed: %s", resp.Error)
 	}
 	for _, kind := range []string{KindCredentialGet, KindConnectorList} {
-		resp := handleRequest(Request{ID: "2", Kind: kind, Target: "github"}, state, j, store, locks)
+		resp := handleRequest(Request{ID: "2", Kind: kind, Target: "github"}, state, j, store, locks, approvals)
 		if resp.Error != "unauthorized" {
 			t.Errorf("%s on an agent connection returned %q, want unauthorized", kind, resp.Error)
 		}
@@ -308,10 +309,10 @@ func TestAConnectionCannotMixAgentAndOtherPurposes(t *testing.T) {
 
 	// And the other way round.
 	other := &requestState{}
-	handleRequest(Request{ID: "1", Kind: KindConnectorList}, other, j, store, locks)
+	handleRequest(Request{ID: "1", Kind: KindConnectorList}, other, j, store, locks, approvals)
 	if resp := handleRequest(Request{
 		ID: "2", Kind: KindAgentList,
-	}, other, j, store, locks); resp.Error != "unauthorized" {
+	}, other, j, store, locks, approvals); resp.Error != "unauthorized" {
 		t.Errorf("agent.list on a connector connection returned %q, want unauthorized", resp.Error)
 	}
 }

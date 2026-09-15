@@ -430,7 +430,10 @@ func TestHandleDispatchesRequestsAndEventsOnTheSameConnection(t *testing.T) {
 	client, server := net.Pipe()
 	t.Cleanup(func() { client.Close(); server.Close() })
 	done := make(chan struct{})
-	go func() { handle(server, j, store, newTargetLocks(), newSessionRegistry()); close(done) }()
+	go func() {
+		handle(server, j, store, newTargetLocks(), newSessionRegistry(), newPendingRegistry(), testApprovalTimeout)
+		close(done)
+	}()
 
 	resp, err := SendRequest(client, Request{ID: "1", Kind: KindCredentialGet, Target: "github"})
 	if err != nil {
@@ -469,7 +472,10 @@ func TestHandleRejectsMixingCredentialAndConnectorRequestsOnOneConnection(t *tes
 	client, server := net.Pipe()
 	t.Cleanup(func() { client.Close(); server.Close() })
 	done := make(chan struct{})
-	go func() { handle(server, j, store, newTargetLocks(), newSessionRegistry()); close(done) }()
+	go func() {
+		handle(server, j, store, newTargetLocks(), newSessionRegistry(), newPendingRegistry(), testApprovalTimeout)
+		close(done)
+	}()
 
 	first, err := SendRequest(client, Request{ID: "1", Kind: KindCredentialGet, Target: "github"})
 	if err != nil || !first.Found {

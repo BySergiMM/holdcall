@@ -528,7 +528,104 @@ What it does not do, stated rather than implied:
 
 ## M6 — Human approval
 
-Out-of-band prompt showing real parameters, never a model-generated summary.
+**Status: done, 2026-09-15.** A third rule effect, `ask`, holds a call for a
+human instead of deciding it from a rule alone. `nim approve` shows the real
+`params.arguments`, pretty-printed, never a summary and never anything the
+model that asked for the call wrote about itself --
+`docs/decisions/0005-human-approval.md` is the design and the argument for
+why that has to be the real bytes.
+
+What landed:
+
+- **`effect` is `deny`, `allow` or `ask`.** `nim policy ask <tool> [--agent]
+  [--connector]` and `nim policy default ask` -- the third counterpart to
+  M4.5's `deny`/`allow`, through the same `nim_rules` CHECK-widening rebuild
+  that grew the column before. `journal.Decide`'s precedence gained one
+  line: at equal specificity, deny beats ask beats allow -- the 2026-09-15
+  addendum to `docs/decisions/0003-allow-rules-and-precedence.md` is the
+  argument, and `TestDecideAppliesSpecificityThenDenyOverAllow` in
+  `internal/journal/decide_test.go` carries the new cases beside the ones
+  M4.5 wrote.
+- **The wire holds a call rather than deciding it.** The daemon answers a
+  `call.request` an `ask` rule matches with `pending` (a value that exists
+  only on the wire -- `daemon.DecisionPending` -- and never reaches the
+  journal) and a hold id. The relay sends one `call.arguments` event
+  carrying the raw bytes of that call, and waits for the final answer on the
+  same connection, up to `[daemon] approval_timeout` (default `2m`, read by
+  both the daemon and the relay from one `config.Config`) -- the same wait
+  `decisionTimeout` already does for an ordinary verdict, extended only for
+  this case. Nothing about the call is journaled while it is held: no entry
+  exists for a call in this state, by construction, which is what keeps the
+  real arguments out of the record as surely as the digest already kept
+  ordinary arguments out of it.
+- **A human decides through `nim approve`/`nim reject`**, under their own
+  daemon purpose (`approval.list`, `approval.decide`) -- a connection
+  speaking it cannot pivot to asking for a credential, exactly as a policy
+  connection cannot
+  (`TestAnApprovalConnectionCannotAskForACredential`). The `call.request`
+  entry is written -- `approved` or `rejected`, values `docs/journal-format.md`
+  reserved for this back at M1.5 -- *before* the relay is told, the same
+  ordering allow and deny already keep
+  (`TestApprovingACallWritesApprovedBeforeTellingTheRelay`,
+  `TestRejectingACallWritesRejectedBeforeTellingTheRelay`). An approved call
+  forwards the exact bytes it arrived with, like any other allowed call; a
+  rejected one gets its own refusal text, `mcp.DeniedByHuman`, distinct from
+  an ordinary policy denial.
+- **Every way of not deciding fails to reject, not to allow.** Nobody
+  deciding within `approval_timeout` rejects the call and journals it --
+  the daemon's own timer, armed the moment the call starts being held, not
+  merely the relay giving up
+  (`TestAnApprovalTimeoutRejectsAndJournalsTheCall`). A session that ends
+  while one of its calls is still held is rejected the same way, whether
+  the end is explicit (`TestASessionThatEndsWhilePendingIsRejected`) or the
+  relay's connection simply drops
+  (`TestAConnectionThatDropsWhilePendingRejectsWhatItLeftPending`) -- so the
+  journal never ends up holding a call that was neither approved nor
+  rejected. The client is told which kind of refusal it got:
+  `mcp.DeniedByHuman` for an explicit reject or the daemon's own timeout,
+  `mcp.DeniedApprovalTimedOut` for the relay's own local backstop, when even
+  that answer never arrived.
+- **The human's reason for a rejection stays out of the chain.**
+  `nim reject <id> --reason <text>` logs the reason on the daemon's own log
+  and returns it to the CLI that asked; it is never written to the journal
+  and never reaches the client the call came from
+  (`TestTheRealArgumentsNeverReachTheJournalOrTheDaemonsLog` covers the
+  arguments themselves the same way).
+- **Held calls live only in memory.** `pendingRegistry`
+  (`internal/daemon/approval.go`) is the daemon's whole record of what is
+  waiting; nothing about a held call is in SQLite until it is decided.
+  `docs/decisions/0005-human-approval.md` states plainly what that costs: a
+  daemon killed outright loses every call it was holding with no journal
+  entry at all, the same way it already loses an in-flight session; a
+  daemon that shuts down by its connections closing rejects and journals
+  what it was holding on the way out.
+- **End to end with the real binary**
+  (`TestRealApprovalHoldsACallForAHumanWhoDecidesItThroughTheCLI`,
+  `cmd/nim/e2e_test.go`): a real relay makes a call under an `ask` rule,
+  `nim approve` from a separate process lists it with the real arguments,
+  approving it is what lets the connector's own answer reach the client, and
+  a second call under the same rule is rejected -- the client sees the
+  refusal, the connector never sees the call.
+
+What it does not do, stated rather than implied:
+
+- **Who may approve is "anyone who can run `nim` as this user," and that is
+  stated as the honest boundary, not glossed over.** Approval defends
+  against the model driving the client, not against the operator --
+  `docs/decisions/0005-human-approval.md`'s own section on this, and
+  `docs/security.md`'s attack row 32, "approve your own call from the
+  model," which is blocked only by the socket's peer identity and the fact
+  that the model cannot run commands unless the operator gave it a shell.
+- **No conditions on arguments decide whether to ask automatically.** `ask`
+  is a fourth value the same `(agent, connector, tool)`-keyed rule can hold;
+  nothing here reads `params.arguments` to decide when a rule should apply,
+  only after it already has.
+- **No queueing, no notification.** `nim approve` with nothing held prints
+  that nothing is held; an operator has to run it to find out anything is
+  waiting. Building a notification path was not this milestone's job.
+- **No delegation.** There is no second identity to hand approval to --
+  every approver is "whoever can run this binary as this user," which is
+  also everything an enrolment or a rule was already worth.
 
 ## M7 — Journal
 

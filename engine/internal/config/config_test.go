@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 // A deep install directory silently broke the daemon with "bind: invalid
@@ -66,6 +67,48 @@ func TestConfigTomlIsOptional(t *testing.T) {
 	}
 	if cfg.Daemon.DataDir == "" || cfg.Daemon.Socket == "" {
 		t.Fatal("defaults must produce a working configuration")
+	}
+	if time.Duration(cfg.Daemon.ApprovalTimeout) != DefaultApprovalTimeout {
+		t.Errorf("approval_timeout defaulted to %s, want %s", cfg.Daemon.ApprovalTimeout, DefaultApprovalTimeout)
+	}
+}
+
+// approval_timeout is read as a duration string, because TOML has no
+// duration type of its own, and a human who never sets it gets the default
+// rather than an unusable zero wait.
+func TestApprovalTimeoutIsReadAsADurationString(t *testing.T) {
+	t.Setenv(HomeEnvVar, t.TempDir())
+	if err := os.MkdirAll(Home(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(Path(), []byte("[daemon]\napproval_timeout = \"90s\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("a valid approval_timeout was refused: %v", err)
+	}
+	if got := time.Duration(cfg.Daemon.ApprovalTimeout); got != 90*time.Second {
+		t.Errorf("approval_timeout = %s, want 1m30s", got)
+	}
+}
+
+// A duration that cannot mean "wait" -- unparseable, zero or negative -- is
+// refused at load time rather than turned into an instant or infinite
+// timeout nobody asked for.
+func TestApprovalTimeoutRejectsWhatIsNotAPositiveDuration(t *testing.T) {
+	t.Setenv(HomeEnvVar, t.TempDir())
+	if err := os.MkdirAll(Home(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []string{"not-a-duration", "0s", "-5m"} {
+		body := "[daemon]\napproval_timeout = \"" + bad + "\"\n"
+		if err := os.WriteFile(Path(), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Load(); err == nil {
+			t.Errorf("approval_timeout = %q was accepted", bad)
+		}
 	}
 }
 

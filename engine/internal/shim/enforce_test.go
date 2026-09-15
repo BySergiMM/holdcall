@@ -34,6 +34,12 @@ type fakeDaemon struct {
 
 	// answer decides the reply to a call.request. A nil answer allows.
 	answer func(ev daemon.Event) any
+	// afterArguments, if set, decides the second reply once call.arguments
+	// arrives for a call this fakeDaemon already answered pending -- the
+	// shape a human's decision (or the approval timer) takes on the wire. A
+	// nil reply from it, or a nil afterArguments itself, leaves the shim
+	// waiting, which is how the approval-timeout tests use this.
+	afterArguments func(ev daemon.Event) any
 	// silent accepts the question and never replies.
 	silent bool
 	// hangUp closes the connection instead of replying.
@@ -79,26 +85,32 @@ func (d *fakeDaemon) serve(conn net.Conn) {
 
 		d.mu.Lock()
 		d.events = append(d.events, ev)
-		answer, silent, hangUp := d.answer, d.silent, d.hangUp
+		answer, afterArguments, silent, hangUp := d.answer, d.afterArguments, d.silent, d.hangUp
 		d.mu.Unlock()
 
-		if ev.Kind != daemon.KindCallRequest {
+		var reply any
+		switch {
+		case ev.Kind == daemon.KindCallArguments:
+			if afterArguments == nil {
+				continue // the shim waits, exactly like silent for call.request
+			}
+			reply = afterArguments(ev)
+		case ev.Kind != daemon.KindCallRequest:
 			continue
-		}
-		if hangUp {
+		case hangUp:
 			return
-		}
-		if silent {
+		case silent:
 			continue // the shim waits, and the clock runs
-		}
-		var reply any = daemon.Decision{
-			Kind:      daemon.KindDecision,
-			SessionID: ev.SessionID,
-			Seq:       ev.Seq,
-			Decision:  journal.DecisionAllow,
-		}
-		if answer != nil {
-			reply = answer(ev)
+		default:
+			reply = daemon.Decision{
+				Kind:      daemon.KindDecision,
+				SessionID: ev.SessionID,
+				Seq:       ev.Seq,
+				Decision:  journal.DecisionAllow,
+			}
+			if answer != nil {
+				reply = answer(ev)
+			}
 		}
 		if reply == nil {
 			continue
@@ -187,8 +199,18 @@ type rig struct {
 // all, which is the fail-closed case.
 func newRig(t *testing.T, d *fakeDaemon) *rig {
 	t.Helper()
+	return newRigWithApprovalTimeout(t, d, 0)
+}
 
-	r := &reporter{ch: make(chan item, 256), done: make(chan struct{})}
+// newRigWithApprovalTimeout is newRig for the tests that exercise a call an
+// ask rule holds: approvalTimeout has to be long enough for the fake
+// daemon's afterArguments reply to arrive within it, unlike every other test
+// here, which never sends one and so never needs the zero value newRig
+// leaves it at to mean anything.
+func newRigWithApprovalTimeout(t *testing.T, d *fakeDaemon, approvalTimeout time.Duration) *rig {
+	t.Helper()
+
+	r := &reporter{ch: make(chan item, 256), done: make(chan struct{}), approvalTimeout: approvalTimeout}
 	if d != nil {
 		conn, err := net.Dial("unix", d.path)
 		if err != nil {
@@ -797,7 +819,7 @@ func TestADeniedCallWithAnExplicitNullIDIsAnswered(t *testing.T) {
 // A queue with no room is not a reason to let a call through.
 func TestAFullQueueRefuses(t *testing.T) {
 	r := &reporter{ch: make(chan item), done: make(chan struct{})} // no capacity, no reader
-	if v := r.ask(daemon.Event{Kind: daemon.KindCallRequest, SessionID: "s1", Seq: 1}); v == verdictAllow {
+	if v := r.ask(daemon.Event{Kind: daemon.KindCallRequest, SessionID: "s1", Seq: 1}, nil); v == verdictAllow {
 		t.Fatal("a call was allowed by a reporter that could not even ask")
 	}
 	if r.lost != 1 {

@@ -13,8 +13,8 @@ import (
 	"github.com/BySergiMM/nim/engine/internal/shim"
 )
 
-const policyUsage = "nim policy deny|allow <tool> [--agent <name>] [--connector <name>] | " +
-	"nim policy default deny|allow [--agent <name>] [--connector <name>] | " +
+const policyUsage = "nim policy deny|allow|ask <tool> [--agent <name>] [--connector <name>] | " +
+	"nim policy default deny|allow|ask [--agent <name>] [--connector <name>] | " +
 	"nim policy remove <tool>|--default [--agent <name>] [--connector <name>] | " +
 	"nim policy list | nim policy explain <tool> [--agent <name>] [--connector <name>] | " +
 	"nim policy budget <n> --tool <tool>|--all-tools [--agent <name>] [--connector <name>] | " +
@@ -29,6 +29,8 @@ func runPolicy(args []string) error {
 		return runPolicyChange(daemon.KindPolicyDeny, args[1:])
 	case "allow":
 		return runPolicyChange(daemon.KindPolicyAllow, args[1:])
+	case "ask":
+		return runPolicyChange(daemon.KindPolicyAsk, args[1:])
 	case "default":
 		return runPolicyDefault(args[1:])
 	case "remove":
@@ -107,12 +109,12 @@ func runPolicyChange(kind string, args []string) error {
 	return sendPolicyChange(kind, tool, agent, connector, false)
 }
 
-// runPolicyDefault handles `nim policy default deny|allow [--agent]
+// runPolicyDefault handles `nim policy default deny|allow|ask [--agent]
 // [--connector]`. A default has no tool of its own -- RuleDefault carries
 // that to the daemon, which is the one place "*" is ever written -- so this
 // parses the effect word plus scope, not parsePolicyArgs's tool-plus-scope.
 func runPolicyDefault(args []string) error {
-	const usage = "usage: nim policy default deny|allow [--agent <name>] [--connector <name>]"
+	const usage = "usage: nim policy default deny|allow|ask [--agent <name>] [--connector <name>]"
 	if len(args) == 0 {
 		return fmt.Errorf("%s", usage)
 	}
@@ -122,6 +124,8 @@ func runPolicyDefault(args []string) error {
 		kind = daemon.KindPolicyDeny
 	case "allow":
 		kind = daemon.KindPolicyAllow
+	case "ask":
+		kind = daemon.KindPolicyAsk
 	default:
 		return fmt.Errorf("unknown default effect %q; %s", args[0], usage)
 	}
@@ -210,20 +214,26 @@ func sendPolicyChange(kind, tool, agent, connector string, isDefault bool) error
 	return nil
 }
 
-// removeVerb is the past-tense verb the confirmation line prints. deny and
-// allow always print their own name; remove reports what the rule it deleted
-// used to do, since a scope's rule could have been either.
+// removeVerb is the past-tense verb the confirmation line prints. deny,
+// allow and ask always print their own name; remove reports what the rule it
+// deleted used to do, since a scope's rule could have been any of the three.
 func removeVerb(kind string, r daemon.RuleInfo) string {
 	switch kind {
 	case daemon.KindPolicyDeny:
 		return "denied"
 	case daemon.KindPolicyAllow:
 		return "allowed"
+	case daemon.KindPolicyAsk:
+		return "set to ask"
 	default: // daemon.KindPolicyRemove
-		if r.Effect == journal.DecisionAllow {
+		switch r.Effect {
+		case journal.DecisionAllow:
 			return "no longer allowed"
+		case journal.DecisionAsk:
+			return "no longer set to ask"
+		default: // journal.DecisionDeny
+			return "no longer denied"
 		}
-		return "no longer denied"
 	}
 }
 
@@ -271,7 +281,8 @@ func runPolicyList(args []string) error {
 		fmt.Println()
 		fmt.Println("No rule matching a call is allow -- the M4 baseline. Among rules that do match,")
 		fmt.Println("the most specific wins: an exact tool beats a default, and naming the agent or")
-		fmt.Println("the connector beats not naming it; a tie in specificity goes to deny.")
+		fmt.Println("the connector beats not naming it; a tie in specificity goes to deny, then ask,")
+		fmt.Println("then allow.")
 		fmt.Println("nim policy explain <tool> shows which rule decides one particular call, and why.")
 	}
 

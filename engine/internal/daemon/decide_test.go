@@ -160,7 +160,7 @@ func TestAnUnwritableJournalRefuses(t *testing.T) {
 
 	go func() {
 		answer(theirs, Event{Kind: KindCallRequest, SessionID: "s1", Seq: 1,
-			Tool: "echo", Digest: "d", OccurredAt: now()}, j, "", "")
+			Tool: "echo", Digest: "d", OccurredAt: now()}, j, "", "", newPendingRegistry(), testApprovalTimeout)
 	}()
 
 	mine.SetReadDeadline(time.Now().Add(5 * time.Second))
@@ -262,7 +262,8 @@ func TestTwoAgentsAgainstOneConnectorReceiveDifferentVerdicts(t *testing.T) {
 		defer mine.Close()
 		defer theirs.Close()
 		go answer(theirs, Event{Kind: KindCallRequest, SessionID: agent + "-s", Seq: 1,
-			Tool: "delete_repository", Digest: "d", OccurredAt: now()}, j, agent, "github")
+			Tool: "delete_repository", Digest: "d", OccurredAt: now()}, j, agent, "github",
+			newPendingRegistry(), testApprovalTimeout)
 		mine.SetReadDeadline(time.Now().Add(5 * time.Second))
 		raw, err := mcp.NewReader(mine).ReadRaw()
 		if err != nil {
@@ -526,7 +527,8 @@ func TestDefaultDenyDeniesAnUnknownAgentWhileAnAgentScopedAllowAdmitsAnEnrolledO
 		defer mine.Close()
 		defer theirs.Close()
 		go answer(theirs, Event{Kind: KindCallRequest, SessionID: agent + "-s", Seq: 1,
-			Tool: "read_file", Digest: "d", OccurredAt: now()}, j, agent, "github")
+			Tool: "read_file", Digest: "d", OccurredAt: now()}, j, agent, "github",
+			newPendingRegistry(), testApprovalTimeout)
 		mine.SetReadDeadline(time.Now().Add(5 * time.Second))
 		raw, err := mcp.NewReader(mine).ReadRaw()
 		if err != nil {
@@ -559,7 +561,8 @@ func TestDefaultDenyDeniesAnUnknownAgentWhileAnAgentScopedAllowAdmitsAnEnrolledO
 	defer mine.Close()
 	defer theirs.Close()
 	go answer(theirs, Event{Kind: KindCallRequest, SessionID: "claude-code-other", Seq: 1,
-		Tool: "delete_repository", Digest: "d", OccurredAt: now()}, j, "claude-code", "github")
+		Tool: "delete_repository", Digest: "d", OccurredAt: now()}, j, "claude-code", "github",
+		newPendingRegistry(), testApprovalTimeout)
 	mine.SetReadDeadline(time.Now().Add(5 * time.Second))
 	raw, err := mcp.NewReader(mine).ReadRaw()
 	if err != nil {

@@ -48,6 +48,46 @@ func start(t testing.TB) (cfg config.Config, dbPath string) {
 	return cfg, ""
 }
 
+// startWithApprovalTimeout is start with an explicit approval_timeout,
+// short enough that a test can watch the daemon's own timer reject a call
+// without waiting out config.DefaultApprovalTimeout -- start alone leaves it
+// at the Go zero value, which ApprovalTimeoutOrDefault reads as "use the
+// default", too long for a test that wants to see the timer actually fire.
+func startWithApprovalTimeout(t testing.TB, timeout time.Duration) (cfg config.Config, dbPath string) {
+	t.Helper()
+
+	home := t.TempDir()
+	sock := filepath.Join(os.TempDir(), fmt.Sprintf("nim-test-%d.sock", time.Now().UnixNano()%1e9))
+	t.Cleanup(func() { os.Remove(sock) })
+
+	cfg = config.Config{
+		Daemon: config.Daemon{
+			Socket: sock, DataDir: filepath.Join(home, "data"),
+			ApprovalTimeout: config.Duration(timeout),
+		},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("test socket is unusable: %v", err)
+	}
+
+	go func() {
+		if err := Run(cfg); err != nil {
+			t.Logf("daemon stopped: %v", err)
+		}
+	}()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if c, err := net.Dial("unix", sock); err == nil {
+			c.Close()
+			return cfg, cfg.DatabasePath()
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("daemon did not come up")
+	return cfg, ""
+}
+
 // deny adds a rule the way the CLI does: over its own connection, as a
 // policy request. The daemon is the only writer of the rules, so a test that
 // wants one has to ask it -- which is also what makes the rule's journal entry
@@ -65,6 +105,15 @@ func allow(t testing.TB, cfg config.Config, tool, agent, connector string) {
 	t.Helper()
 	policyChange(t, cfg, Request{
 		ID: "rule", Kind: KindPolicyAllow, RuleTool: tool, RuleAgent: agent, RuleConnector: connector,
+	})
+}
+
+// askRule is deny and allow's third counterpart, added for M6: nim policy
+// ask <tool> [--agent] [--connector].
+func askRule(t testing.TB, cfg config.Config, tool, agent, connector string) {
+	t.Helper()
+	policyChange(t, cfg, Request{
+		ID: "rule", Kind: KindPolicyAsk, RuleTool: tool, RuleAgent: agent, RuleConnector: connector,
 	})
 }
 
@@ -145,6 +194,11 @@ func waitFor(t *testing.T, j *journal.Journal, want int64) int64 {
 }
 
 func now() string { return time.Now().UTC().Format(time.RFC3339Nano) }
+
+// testApprovalTimeout is what a test that calls answer() directly, without
+// caring about the approval wait itself, gives it -- long enough that none
+// of those tests can ever race the timer.
+const testApprovalTimeout = time.Minute
 
 // A client that kills the relay leaves it no chance to close its own session.
 // The daemon can still tell, because the connection dies with the process, so a

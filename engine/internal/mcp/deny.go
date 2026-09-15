@@ -28,6 +28,23 @@ const (
 // meet the same refusal.
 const DeniedUnreadable = "Nim refused this call: it could not read the tool name unambiguously. Do not retry automatically."
 
+// DeniedByHuman answers a call an "ask" rule held for a human, once one
+// decided against it. Its own sentence, distinct from DeniedByPolicy: a rule
+// is applied by the daemon and will be applied again, but this call was
+// individually refused by whoever is operating Nim, on the strength of its
+// real arguments -- docs/decisions/0005-human-approval.md is what they saw
+// and why. The reason a human gave, if any, is not in this text: it is kept
+// out of the call this model can read, on the daemon's own log and in the
+// CLI's own output only.
+const DeniedByHuman = "A human reviewing this call's real arguments rejected it. Do not retry automatically."
+
+// DeniedApprovalTimedOut answers a call an "ask" rule held for a human when
+// nobody decided it within approval_timeout. Distinct from DeniedByHuman: no
+// one looked at this one and said no, no one looked at all in time, which is
+// exactly the "no decision reached" shape every other refusal in this file
+// already fails closed on.
+const DeniedApprovalTimedOut = "Nim held this call for a human to approve, and nobody decided within the approval timeout. Do not retry automatically."
+
 // DeniedBatch explains a refused batch.
 const DeniedBatch = "Nim refused this batch: it carries a tools/call, and Nim does not decide batch elements one by one. Send the calls individually."
 

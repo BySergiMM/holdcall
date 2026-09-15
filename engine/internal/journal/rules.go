@@ -17,23 +17,24 @@ import (
 // deliberate and is documented rather than hidden -- see MatchingRules.
 const RuleToolDefault = "*"
 
-// Rule is one line of policy: Effect (deny or allow) for Tool, for every
-// session in its scope -- those of one enrolled Agent or of every session
-// when Agent is nil, on one Connector or on every connector when Connector
-// is nil. Tool is RuleToolDefault for a default and an exact tool name
-// otherwise; there is no other kind of match.
+// Rule is one line of policy: Effect (deny, allow or ask) for Tool, for
+// every session in its scope -- those of one enrolled Agent or of every
+// session when Agent is nil, on one Connector or on every connector when
+// Connector is nil. Tool is RuleToolDefault for a default and an exact tool
+// name otherwise; there is no other kind of match.
 //
 // A fresh install has no rules, and no rule matching a call is an allow --
-// the M4 baseline, restated for a model that also has allow rules: absence
-// is still permissive, only now an explicit allow can be overridden by a
-// more specific deny and vice versa. docs/decisions/0003 has the precedence
-// and docs/decisions/0002's last section has D-002 answered for this model.
+// the M4 baseline, restated for a model that also has allow and ask rules:
+// absence is still permissive, only now an explicit allow can be overridden
+// by a more specific deny or ask and vice versa. docs/decisions/0003 has the
+// precedence (extended for ask in its 2026-09-15 addendum) and
+// docs/decisions/0002's last section has D-002 answered for the allow model.
 type Rule struct {
 	ID        int64
 	Agent     *string
 	Connector *string
 	Tool      string
-	Effect    string // DecisionDeny or DecisionAllow
+	Effect    string // DecisionDeny, DecisionAllow or DecisionAsk
 	CreatedAt time.Time
 }
 
@@ -76,8 +77,9 @@ func (j *Journal) AddRule(r Rule) (Rule, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 
-	if r.Effect != DecisionDeny && r.Effect != DecisionAllow {
-		return Rule{}, fmt.Errorf("a rule's effect must be %q or %q, not %q", DecisionDeny, DecisionAllow, r.Effect)
+	if r.Effect != DecisionDeny && r.Effect != DecisionAllow && r.Effect != DecisionAsk {
+		return Rule{}, fmt.Errorf("a rule's effect must be %q, %q or %q, not %q",
+			DecisionDeny, DecisionAllow, DecisionAsk, r.Effect)
 	}
 	if j.readOnly {
 		return Rule{}, errReadOnly
@@ -270,14 +272,17 @@ func (j *Journal) RuleFor(agent, connector, tool string) (Rule, bool, error) {
 
 // Decide picks the rule that governs a call among candidates whose scope
 // already matches it -- see MatchingRules -- by the precedence
-// docs/decisions/0003-allow-rules-and-precedence.md states:
+// docs/decisions/0003-allow-rules-and-precedence.md states, extended for a
+// third effect in this document's 2026-09-15 addendum:
 //
 //  1. Higher specificity wins. Specificity is 2 for an exact tool match, 0
 //     for a default ('*'), plus 1 if the rule names an agent, plus 1 if it
 //     names a connector -- so an exact-tool rule always beats a default
 //     naming the same agent and connector, and a rule naming both an agent
 //     and a connector always beats one naming only one of them.
-//  2. At equal specificity, deny beats allow.
+//  2. At equal specificity, deny beats ask beats allow -- the safer rule
+//     wins, and holding a call for a human is safer than letting it through
+//     unconditionally but not as safe as refusing it outright.
 //  3. candidates being empty is not decided here: it returns found=false, and
 //     the M4 baseline -- allow -- is the caller's to apply, exactly as "no
 //     rule mentions this tool" always has been.
@@ -309,9 +314,25 @@ func outranks(challenger, winner Rule) bool {
 		return cs > ws
 	}
 	if challenger.Effect != winner.Effect {
-		return challenger.Effect == DecisionDeny
+		return effectRank(challenger.Effect) > effectRank(winner.Effect)
 	}
 	return challenger.ID < winner.ID
+}
+
+// effectRank orders the three effects for the tie-break at equal specificity:
+// deny first, then ask, then allow -- the safer of two matching rules wins,
+// and holding a call for a human is safer than an unconditional allow but
+// not as safe as refusing it outright. This is Decide's one implementation
+// of that ordering; nothing else may recompute it.
+func effectRank(effect string) int {
+	switch effect {
+	case DecisionDeny:
+		return 2
+	case DecisionAsk:
+		return 1
+	default: // DecisionAllow
+		return 0
+	}
 }
 
 // specificity is defined in Decide's doc comment; this is its one
