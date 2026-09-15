@@ -15,7 +15,10 @@ type Rule struct {
 	Agent     *string `json:"agent,omitempty"`
 	Connector *string `json:"connector,omitempty"`
 	Tool      string  `json:"tool"`
-	CreatedAt string  `json:"created_at"`
+	// Effect is deny or allow. Since M4.5 a rule can grant as well as
+	// refuse, and a list that did not say which would be worse than no list.
+	Effect    string `json:"effect"`
+	CreatedAt string `json:"created_at"`
 }
 
 // RuleFrom projects one rule. Copies, like EventFrom: nothing here aliases
@@ -25,6 +28,7 @@ func RuleFrom(r journal.Rule) Rule {
 		Agent:     copyString(r.Agent),
 		Connector: copyString(r.Connector),
 		Tool:      r.Tool,
+		Effect:    r.Effect,
 		CreatedAt: r.CreatedAt.UTC().Format(time.RFC3339Nano),
 	}
 }

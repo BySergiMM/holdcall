@@ -100,12 +100,12 @@ func TestReadModelSurfaceIsFrozen(t *testing.T) {
 		// no exec_dev/exec_ino (the kernel identity a decision matches on,
 		// which a console has no reason to show) and Connector carries no
 		// secret (there is none in the journal to show).
-		{"Rule", Rule{}, []string{"agent", "connector", "created_at", "tool"}},
+		{"Rule", Rule{}, []string{"agent", "connector", "created_at", "effect", "tool"}},
 		{"Agent", Agent{}, []string{"current", "enrolled_at", "exec_path", "name"}},
 		{"Connector", Connector{}, []string{"command", "env_key", "target", "updated_at"}},
 		{"Policy", Policy{}, []string{
 			"agent", "agents", "command", "connector", "connectors", "created_at",
-			"current", "enrolled_at", "env_key", "exec_path", "name", "rules",
+			"current", "effect", "enrolled_at", "env_key", "exec_path", "name", "rules",
 			"target", "tool", "updated_at",
 		}},
 	}

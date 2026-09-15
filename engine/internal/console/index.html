@@ -122,8 +122,9 @@ tbody tr.sel{background:#1d2836}
     <div class="panel"><div class="hd">Policy</div>
       <div class="grid" id="ov-policy"></div>
       <div class="bd">
-        <p class="note">What may happen, not what did: rules only ever deny, an enrolment is
-        as privileged as running Nim, and a connector's command is the argv authorized to
+        <p class="note">What may happen, not what did: a rule allows or denies one tool,
+        the most specific rule wins and deny beats allow at equal specificity, an enrolment
+        is as privileged as running Nim, and a connector's command is the argv authorized to
         receive its credential. See the Policy tab for the full listing.</p>
       </div>
     </div>
@@ -184,7 +185,7 @@ tbody tr.sel{background:#1d2836}
     <div class="panel">
       <div class="hd">Rules — what is denied</div>
       <div class="scroll"><table>
-        <thead><tr><th>agent</th><th>connector</th><th>tool</th><th>created</th></tr></thead>
+        <thead><tr><th>effect</th><th>agent</th><th>connector</th><th>tool</th><th>created</th></tr></thead>
         <tbody id="policy-rules"></tbody>
       </table></div>
       <div class="bd">
@@ -363,7 +364,7 @@ function renderOverview() {
   } else {
     const agents = policy.agents || [];
     const stale = agents.filter((a) => a.current === false).length;
-    pr.appendChild(cell((policy.rules || []).length, "rules", "denials in effect"));
+    pr.appendChild(cell((policy.rules || []).length, "rules", "allow and deny, in effect"));
     pr.appendChild(cell(agents.length, "agents enrolled",
       stale ? stale + " stale" : "", stale ? "warn" : ""));
     pr.appendChild(cell((policy.connectors || []).length, "connectors registered"));
@@ -440,11 +441,12 @@ function renderPolicy() {
   const rr = $("#policy-rules"); rr.replaceChildren();
   if (!p.rules.length) {
     const tr = el("tr"), td = el("td", "empty", "No rules recorded.");
-    td.colSpan = 4; tr.appendChild(td); rr.appendChild(tr);
+    td.colSpan = 5; tr.appendChild(td); rr.appendChild(tr);
   } else {
     for (const r of p.rules) {
       const tr = el("tr");
       const add = (v, c) => { const td = el("td", c); td.textContent = v || ""; tr.appendChild(td); };
+      add(r.effect, r.effect === "allow" ? "ok" : "bad");
       add(r.agent || "every", r.agent ? "" : "dim");
       add(r.connector || "every", r.connector ? "" : "dim");
       add(r.tool);

@@ -40,9 +40,16 @@ type Request struct {
 	// says whose sessions the rule is for, and the daemon checks that such
 	// an enrolment exists rather than taking the name to mean anything on
 	// its own. An empty RuleAgent or RuleConnector means every.
+	//
+	// RuleDefault marks a request as `nim policy default deny|allow` or
+	// `nim policy remove --default`: the rule's tool is
+	// journal.RuleToolDefault ("*") rather than RuleTool, which must be empty
+	// when this is set. A default has no tool of its own to send, and a
+	// caller may not set both -- see ruleTool.
 	RuleTool      string `json:"rule_tool,omitempty"`
 	RuleAgent     string `json:"rule_agent,omitempty"`
 	RuleConnector string `json:"rule_connector,omitempty"`
+	RuleDefault   bool   `json:"rule_default,omitempty"`
 }
 
 const (
@@ -55,9 +62,11 @@ const (
 	KindAgentList   = "agent.list"
 	KindAgentRemove = "agent.remove"
 
-	KindPolicyDeny   = "policy.deny"
-	KindPolicyRemove = "policy.remove"
-	KindPolicyList   = "policy.list"
+	KindPolicyDeny    = "policy.deny"
+	KindPolicyAllow   = "policy.allow"
+	KindPolicyRemove  = "policy.remove"
+	KindPolicyList    = "policy.list"
+	KindPolicyExplain = "policy.explain"
 )
 
 // String redacts Secret so that even a future fmt.Printf/log.Printf("%v", req)
@@ -95,17 +104,42 @@ type Response struct {
 	// agent.list
 	Agents []AgentInfo `json:"agents,omitempty"`
 
-	// policy.list; also the one rule policy.deny and policy.remove acted on.
+	// policy.list; also the one rule policy.deny, policy.allow and
+	// policy.remove acted on.
 	Rules []RuleInfo `json:"rules,omitempty"`
+
+	// policy.explain
+	Explain *ExplainInfo `json:"explain,omitempty"`
 }
 
 // RuleInfo is one rule as reported to the CLI. Agent and Connector are empty
-// when the rule applies to every one.
+// when the rule applies to every one; Tool is journal.RuleToolDefault ("*")
+// for a default.
 type RuleInfo struct {
 	Agent     string `json:"agent,omitempty"`
 	Connector string `json:"connector,omitempty"`
 	Tool      string `json:"tool"`
+	Effect    string `json:"effect"`
 	CreatedAt string `json:"created_at"`
+}
+
+// ExplainInfo answers policy.explain: which rule governs a call from Agent,
+// on Connector, for Tool ("" for Agent or Connector means as an unenrolled
+// agent or with no connector, the same convention journal.Rule uses
+// throughout), and why. Rule is nil when no rule's scope matched at all, in
+// which case Decision is the M4 baseline -- allow -- and Reason says so.
+//
+// Computed by calling journal.Decide on the same candidates the decision
+// path would gather, never by a second copy of the precedence, so what this
+// reports can never drift from what a real call gets.
+type ExplainInfo struct {
+	Agent      string    `json:"agent"`
+	Connector  string    `json:"connector"`
+	Tool       string    `json:"tool"`
+	Decision   string    `json:"decision"`
+	Rule       *RuleInfo `json:"rule,omitempty"`
+	Reason     string    `json:"reason"`
+	Candidates int       `json:"candidates"`
 }
 
 // ConnectorInfo is non-secret connector metadata: which env var name a

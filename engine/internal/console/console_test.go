@@ -491,7 +491,7 @@ func TestTheDerivedAgentReachesTheBrowser(t *testing.T) {
 // an agent nor a connector.
 func TestPolicyReturnsRulesAgentsAndConnectors(t *testing.T) {
 	srv, _ := serve(t, func(j *journal.Journal) {
-		if _, err := j.AddRule(journal.Rule{Tool: "rm"}); err != nil {
+		if _, err := j.AddRule(journal.Rule{Tool: "rm", Effect: journal.DecisionDeny}); err != nil {
 			t.Fatal(err)
 		}
 		if err := j.SetConnector("github", "GITHUB_TOKEN",

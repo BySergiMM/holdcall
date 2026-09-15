@@ -363,21 +363,88 @@ Cedar is deferred, not rejected. It becomes a real question once there is a
 subject, a resource and an action to express, and the spike should happen then
 with those in hand.
 
-## M4.5 — Grants (Cedar), if it is still the answer
+## M4.5 — Allow rules, and the precedence between them and deny
 
-Allow / deny per (agent, connector, tool), expressed in something richer than
-a list of denials. Preceded by the one-day spike on `cedar-go`, now with a real
-policy model to evaluate it against: a subject, a resource and an action exist,
-and the deny-only rules of M4 are the baseline any language has to reproduce
-before it adds anything.
+**Status: done, 2026-09-15.** Not Cedar. The one-day spike on `cedar-go` that
+preceded this milestone, and the real policy model available to evaluate it
+against once M4 landed, together said the same thing docs/decisions/0003
+argues in full: two rules and a precedence between them said everything this
+milestone needed to say, and a grammar for conditions nothing here asks for
+would have been syntax chosen before there was a semantics to serve.
 
-Three things it has to settle that M4 deliberately did not:
+What landed:
 
-- an allow rule, and the precedence between allow and deny;
-- D-002 again, for that model -- wherever enrolment is what grants, an
-  unknown agent must be denied;
-- journaling enrolment changes (F-018), because a rule scoped to a name is
-  only as trustworthy as the record of what that name pointed at.
+- **`effect` is `deny` or `allow`.** The column's CHECK constraint widened
+  from `('deny')` to `('deny','allow')` the way `nim_journal`'s widened for
+  `rule.add` in M4: SQLite cannot alter a CHECK in place, so an existing
+  `nim_rules` is rebuilt once, on open, row for row --
+  `rebuildRulesTable`, tested against a database seeded with the exact DDL
+  M4 shipped
+  (`TestANimRulesTableFromTheCurrentDDLIsWidenedForAllowRules`).
+  `nim_rules` is not part of the hash chain, unlike `nim_journal`, so its
+  rebuild needed no view to drop and nothing to re-verify beyond the rows
+  themselves.
+- **`tool` may be `*`, meaning every tool, only through `nim policy default
+  deny|allow`.** Everywhere else -- `nim policy deny`, `allow`, the match at
+  decision time -- it is refused as an ordinary tool name, so there remains
+  exactly one way to write a rule that matches more than one tool. It is not
+  a wildcard or a prefix. A client that genuinely calls a tool named `*` is
+  not specially guarded against; docs/decisions/0003 says why that is
+  honest rather than an oversight.
+- **A stated precedence, in one function.** `journal.Decide`: higher
+  specificity wins (exact tool over default, naming the agent or the
+  connector over not naming it), deny beats allow at equal specificity, and
+  no matching rule at all is left to the caller as the M4 baseline -- allow.
+  Pure, with no database in it, and table-driven tested exhaustively
+  (`TestDecideAppliesSpecificityThenDenyOverAllow`,
+  `internal/journal/decide_test.go`) rather than only through the daemon.
+- **D-002 answered again, for this model**, in docs/decisions/0003 and in
+  0002's last section: `nim policy default deny` plus `nim policy allow
+  <tool> --agent <name>` is the allow-list M4 could not express, and an
+  unenrolled program is denied by the default because no rule naming no
+  agent grants it anything. Proven at the answer level
+  (`TestDefaultDenyDeniesAnUnknownAgentWhileAnAgentScopedAllowAdmitsAnEnrolledOne`)
+  and end to end with real processes
+  (`TestADefaultDenyClosesEverythingAndAnAgentScopedAllowReopensOneToolForOneAgent`),
+  the second following the shape
+  `TestTwoRealAgentsAgainstOneConnectorReceiveDifferentVerdicts` set for M4.
+- **`nim policy explain <tool> [--agent] [--connector]`**, through a new
+  `policy.explain` daemon request, names the rule that would decide a call
+  shaped like that and why -- computed by calling the same `journal.Decide`
+  the decision path uses, so it can never say something a real call would
+  not do. The CLI still never reads `nim_rules` itself.
+- **Every allow and default entry verifies like a deny always did.**
+  `rule.add`/`rule.remove` carry the effect in `decision` and `*` in `tool`
+  exactly as stored, and the chain checks out across them
+  (`TestAllowAndDefaultRuleEntriesCarryTheEffectAndVerify`).
+- **The decision cost the one query it already cost in M4.** `MatchingRules`
+  replaces the single-row lookup with a small `select` -- at most eight
+  candidate rows for any one call, bounded by the same unique index -- and
+  `docs/benchmarks.md`'s method reproduces p50 at essentially the same
+  0.09 ms M4 measured.
+
+What it does not do, stated rather than implied:
+
+- **No conditions on arguments.** A rule is still keyed on `(agent,
+  connector, tool)` alone; nothing here reads `params.arguments`.
+- **No time bounds and no budgets.** Both need a clock or a counter to name,
+  which a precedence between two rules has no reason to grow on its own.
+- **No human approval.** Still M6.
+- **Enrolment changes are still not journaled (F-018).** This milestone did
+  not touch it: a rule scoped to a name is only as trustworthy as the record
+  of what that name pointed at, and that record still does not exist. It
+  matters more now than it did in M4, because a name can grant as well as
+  restrict -- re-enrolling `claude-code` against a different executable
+  moves an allow rule's meaning with it, silently. Still open, still worth
+  closing before this model is trusted for anything that matters.
+
+**What would still need a language, if one of these is ever asked for:**
+conditions on a call's arguments (a real policy grammar, not a
+precedence between two effects), time-of-day or session-age bounds, and
+budgets that decrement across calls rather than deciding each in isolation.
+None of the three needed anything this milestone built; each would need its
+own subject to talk about, the same argument M4's reordering made about
+agent identity before a policy language had anything to say.
 
 ## M5 — Budgets
 

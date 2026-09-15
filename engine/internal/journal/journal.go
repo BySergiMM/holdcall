@@ -131,6 +131,33 @@ create index if not exists nim_journal_kind_idx        on nim_journal (kind);
 create unique index if not exists nim_journal_entry_idx on nim_journal (session_id, seq, kind);
 `
 
+// rulesTableBody is everything after the table name in nim_rules's
+// definition, held apart from the schema for the same reason
+// journalTableBody is: SQLite stores a table's CREATE statement verbatim, so
+// the text is also how an existing database says whether it was created by
+// this build -- see rebuildRulesTable. Changing a byte here makes every
+// existing nim_rules rebuild once, on the next open, copying every row
+// across unchanged.
+const rulesTableBody = `(
+    id          integer primary key autoincrement,
+    agent       text,
+    connector   text,
+    tool        text    not null,
+    effect      text    not null check (effect in ('deny','allow')),
+    created_at  text    not null
+)`
+
+// rulesTableStored is what sqlite_master holds for a table this build made.
+const rulesTableStored = "CREATE TABLE nim_rules " + rulesTableBody
+
+// rulesIndexes are recreated after a rebuild; the schema below creates them
+// too, so they are one list, the same pattern journalIndexes uses.
+const rulesIndexes = `
+create unique index if not exists nim_rules_scope_idx
+    on nim_rules (ifnull(agent, ''), ifnull(connector, ''), tool);
+create index if not exists nim_rules_tool_idx on nim_rules (tool);
+`
+
 const schema = `
 create table if not exists nim_journal ` + journalTableBody + `;
 ` + journalIndexes + `
@@ -177,33 +204,36 @@ create table if not exists nim_agents (
     enrolled_at text    not null
 );
 
--- Policy. A rule refuses one tool, for every session or for those of one
--- enrolled agent, on every connector or on one. Rules only ever deny: a call
--- no rule names is allowed, exactly as it was when the list lived in
--- config.toml. What changed is where it lives and what a change leaves
--- behind. This is the one table an authorization decision reads, which is the
--- standing decision config.toml broke; and every insert or delete here is
--- paired, in the same transaction, with a rule.add or rule.remove entry in
--- the chain, so the rules have a history that verifies like the calls do.
+-- Policy. A rule holds one effect -- deny or allow -- for one tool, for
+-- every session or for those of one enrolled agent, on every connector or on
+-- one. tool is either an exact name or RuleToolDefault ("*"), which
+-- expresses a default rather than a pattern: there is no other way for a
+-- rule to match more than one tool. This is the one table an authorization
+-- decision reads, which is the standing decision config.toml broke; and
+-- every insert or delete here is paired, in the same transaction, with a
+-- rule.add or rule.remove entry in the chain, so the rules have a history
+-- that verifies like the calls do.
 --
--- Deny-only is deliberate and temporary in the same sense the deny list was:
--- an allow rule needs a precedence between allow and deny, which is a policy
--- language, and that is a later milestone with a spike in front of it.
+-- No matching rule is still an allow -- the M4 baseline, which a fresh
+-- install with no rules reproduces exactly. What an allow rule adds is a way
+-- to override a less specific deny; docs/decisions/0003 has the precedence
+-- between them, and internal/journal/rules.go's Decide is its one
+-- implementation.
 --
 -- A null agent or connector means "every"; '' is never stored, which is what
 -- lets a session with no derived agent match only the rules that name none.
-create table if not exists nim_rules (
-    id          integer primary key autoincrement,
-    agent       text,
-    connector   text,
-    tool        text    not null,
-    effect      text    not null check (effect in ('deny')),
-    created_at  text    not null
-);
-
-create unique index if not exists nim_rules_scope_idx
-    on nim_rules (ifnull(agent, ''), ifnull(connector, ''), tool);
-create index if not exists nim_rules_tool_idx on nim_rules (tool);
+--
+-- rulesTableBody is held apart from this string, the same way
+-- journalTableBody is, because the effect CHECK constraint below is exactly
+-- the kind of thing SQLite cannot widen with ALTER TABLE: it had to grow
+-- from ('deny') to ('deny','allow') for this milestone, and
+-- rebuildRulesTable is what lets an existing install's nim_rules catch up to
+-- it. nim_rules is not part of the hash chain -- rule.add and rule.remove
+-- entries in nim_journal are -- so its rebuild is the simpler one: no views
+-- reference it, and nothing needs to verify across the rebuild besides the
+-- rows themselves.
+create table if not exists nim_rules ` + rulesTableBody + `;
+` + rulesIndexes + `
 `
 
 // migrations are additive statements applied after schema, each of which must
@@ -231,7 +261,10 @@ func migrate(db *sql.DB) error {
 			return fmt.Errorf("migration %q: %w", stmt, err)
 		}
 	}
-	_, err := rebuildJournalTable(db)
+	if _, err := rebuildJournalTable(db); err != nil {
+		return err
+	}
+	_, err := rebuildRulesTable(db)
 	return err
 }
 
@@ -299,6 +332,68 @@ func rebuildJournalTable(db *sql.DB) (rebuilt bool, err error) {
 	}
 	if err := tx.Commit(); err != nil {
 		return false, fmt.Errorf("rebuilding the journal table: %w", err)
+	}
+	return true, nil
+}
+
+// rebuildRulesTable brings an existing nim_rules up to this build's
+// definition when the two differ, and reports whether it did. Same technique
+// as rebuildJournalTable, and simpler: nim_rules is not part of the hash
+// chain (the rule.add and rule.remove entries describing it, in nim_journal,
+// are), so there is no chain order to preserve and no view to drop first --
+// nothing else in the schema references nim_rules by name.
+//
+// The trigger is the same one rebuildJournalTable uses: the stored CREATE
+// statement not matching rulesTableStored byte for byte, which for this
+// milestone means every nim_rules built under the ('deny') CHECK constraint.
+// Rows are copied by id, which SQLite's own AUTOINCREMENT bookkeeping then
+// picks back up from correctly -- a row inserted with an explicit id updates
+// sqlite_sequence exactly as an automatically assigned one would, so an id
+// freed by a deleted rule is never reused across the rebuild any more than it
+// would be without one.
+func rebuildRulesTable(db *sql.DB) (rebuilt bool, err error) {
+	var stored sql.NullString
+	err = db.QueryRow(
+		`select sql from sqlite_master where type = 'table' and name = 'nim_rules'`).Scan(&stored)
+	if err != nil {
+		return false, fmt.Errorf("reading the rules table definition: %w", err)
+	}
+	if stored.Valid && stored.String == rulesTableStored {
+		return false, nil
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return false, fmt.Errorf("rebuilding the rules table: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Re-read under the write lock: another handle may have rebuilt it while
+	// this one waited, and rebuilding a table that is already right is how two
+	// opens would collide.
+	if err := tx.QueryRow(
+		`select sql from sqlite_master where type = 'table' and name = 'nim_rules'`).Scan(&stored); err != nil {
+		return false, fmt.Errorf("reading the rules table definition: %w", err)
+	}
+	if stored.String == rulesTableStored {
+		return false, nil
+	}
+
+	const columns = `id, agent, connector, tool, effect, created_at`
+	for _, stmt := range []string{
+		`alter table nim_rules rename to nim_rules_rebuild`,
+		`create table nim_rules ` + rulesTableBody,
+		`insert into nim_rules (` + columns + `)
+		   select ` + columns + ` from nim_rules_rebuild order by id`,
+		`drop table nim_rules_rebuild`,
+		rulesIndexes,
+	} {
+		if _, err := tx.Exec(stmt); err != nil {
+			return false, fmt.Errorf("rebuilding the rules table: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("rebuilding the rules table: %w", err)
 	}
 	return true, nil
 }

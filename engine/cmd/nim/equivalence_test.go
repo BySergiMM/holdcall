@@ -277,10 +277,10 @@ func TestCLIAndConsoleAgreeOnPolicyCounts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := w.AddRule(journal.Rule{Tool: "rm"}); err != nil {
+	if _, err := w.AddRule(journal.Rule{Tool: "rm", Effect: journal.DecisionDeny}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := w.AddRule(journal.Rule{Tool: "write_file", Connector: sp("github")}); err != nil {
+	if _, err := w.AddRule(journal.Rule{Tool: "write_file", Connector: sp("github"), Effect: journal.DecisionDeny}); err != nil {
 		t.Fatal(err)
 	}
 	// The file this enrolment names will never exist, which is what makes the

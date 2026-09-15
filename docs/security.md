@@ -159,13 +159,21 @@ never supplies one.
 credential lookup cannot pivot to a second connector mid-connection, and a
 policy connection cannot ask for a credential.
 
-**The rules** are the authorization model, as far as one exists: a deny per
-`(agent, connector, tool)`, in SQLite, changed only through the daemon over the
-same verified socket as everything else, and every change one transaction with
-its entry in the chain. Rules only deny. What a rule is worth is bounded by
-what an enrolment is worth -- anything that can run this binary as this user
-can make either -- and the entry is what makes that visible afterwards, not
-what prevents it.
+**The rules** are the authorization model, as far as one exists: allow or
+deny per `(agent, connector, tool)`, in SQLite, changed only through the
+daemon over the same verified socket as everything else, and every change
+one transaction with its entry in the chain. `tool` is an exact name or `*`
+for a default; there is no matching shorter than that. Among the rules that
+match a call, the most specific wins -- an exact tool over a default, naming
+the agent or the connector over not naming it -- and a tie in specificity
+goes to deny; no matching rule at all is allow, the M4 baseline. One
+function, `journal.Decide`, is the whole of that precedence, table-driven
+tested and used by both the decision path and `nim policy explain`, so what
+the CLI says a call would get can never drift from what it actually gets.
+docs/decisions/0003-allow-rules-and-precedence.md is the argument. What a
+rule is worth is bounded by what an enrolment is worth -- anything that can
+run this binary as this user can make either -- and the entry is what makes
+that visible afterwards, not what prevents it.
 
 **Strict reading** of the one message Nim acts on. Objects are read by exact
 key and a repeated key is refused, because that is the one shape on which
@@ -190,10 +198,15 @@ altering it after the fact breaks the entry's hash.
 
 **Rules decide on it.** A rule can be scoped to an enrolled agent and applies
 to the sessions derived as that agent, and to no other. A session no enrolment
-matched -- the ordinary state -- meets only the rules that name no agent, and
-because rules only deny, that is the same ceiling every session had before
-agents existed. `docs/decisions/0002-what-an-unknown-agent-may-do.md` is the
-argument, and why it has to be made again for allow rules.
+matched -- the ordinary state -- meets only the rules that name no agent.
+Under M4's deny-only rules that was necessarily a ceiling, because nothing
+could grant. Since M4.5 a rule can also allow, so the same sentence now cuts
+both ways: an agent-scoped allow can admit an enrolled agent to something an
+unenrolled one is denied, which is the point of enrolling it.
+`docs/decisions/0002-what-an-unknown-agent-may-do.md` is the argument for the
+deny-only case; `docs/decisions/0003-allow-rules-and-precedence.md` is the
+argument for this one, including why an unknown agent still cannot gain
+anything an operator did not explicitly grant to a name.
 
 **An enrolment change is a journal entry** (F-018, closed). `agent.add` and
 `agent.remove` are written by `AddAgent` and `RemoveAgent` in the same
@@ -218,8 +231,15 @@ it can register a connector.
 | **PATH resolution on the registered command** | medium | The registered argv is spawned through normal PATH lookup, so a caller that already controls PATH can front-run the binary name. Closing it needs process inversion. |
 | **The credential is handed to the connector** | medium | Injected into the downstream's environment, so a compromised connector has its own secret and, on Linux, any same-user process can read `/proc/<pid>/environ`. Nim cannot revoke what it has given away. |
 | **The journal is unkeyed** | medium | See the threat model. Only `--expect-head` covers rewriting. |
-| **Rules only deny** | — | An unenrolled program has what the global rules allow. Not a vulnerability; the reason an allow model is M4.5, with D-002 to answer again. |
 | **A relay killed with SIGKILL cannot stop its connector** | low | Only a connector that reads its stdin notices. SIGTERM and SIGINT are handled; nothing can handle SIGKILL. |
+
+**"Rules only deny" is fixed and no longer listed here.** M4.5 added allow
+rules and a stated precedence between them and deny
+(docs/decisions/0003-allow-rules-and-precedence.md); D-002 is answered again
+there and in docs/decisions/0002's last section. An allow-list per agent is
+now `nim policy default deny` plus `nim policy allow <tool> --agent <name>`,
+and an unenrolled program is denied by the default rule rather than merely
+unprivileged by an absent one.
 
 ## Re-running the attacks
 

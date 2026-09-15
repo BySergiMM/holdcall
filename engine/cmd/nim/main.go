@@ -124,11 +124,16 @@ func usage() {
   nim agent list | remove <name>
         Enrol a client program, identified by the file it executes.
 
-  nim policy deny <tool> [--agent <name>] [--connector <name>]
-  nim policy remove <tool> [--agent <name>] [--connector <name>]
+  nim policy deny|allow <tool> [--agent <name>] [--connector <name>]
+  nim policy default deny|allow [--agent <name>] [--connector <name>]
+  nim policy remove <tool>|--default [--agent <name>] [--connector <name>]
   nim policy list
-        Refuse a tool, for every session or for one agent or connector. Every
-        change is an entry in the journal.
+  nim policy explain <tool> [--agent <name>] [--connector <name>]
+        Deny or allow a tool, for every session or for one agent or
+        connector. No matching rule is allow; among rules that match, the
+        most specific wins and a tie goes to deny -- see nim policy explain.
+        "default" sets one across every tool. Every change is an entry in
+        the journal.
 
   nim init [--client <name>] [--config <path>] [--write] [--repoint]
         Rewrite MCP client configs so every stdio server goes through Nim.
