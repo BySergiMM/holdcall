@@ -202,6 +202,7 @@ nim policy explain <tool-name> --agent cursor
 ```bash
 nim log                              # calls, newest first
 nim console                          # journal, sessions and policy, at http://127.0.0.1:7717 (loopback, read-only)
+                                     # /#journal, /#sessions and /#policy open a tab directly
 nim verify                           # walk the chain and report whether it's self-consistent
 nim verify --expect-head <hash>      # also check nothing before that head was rewritten
 ```

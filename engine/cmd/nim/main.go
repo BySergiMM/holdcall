@@ -11,10 +11,10 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"os"
 	"runtime"
@@ -203,15 +203,26 @@ func runStatus() error {
 	}
 
 	// Whether the daemon answers is the question that matters: a relay with no
-	// daemon behind it records nothing while looking perfectly healthy.
-	if conn, err := net.DialTimeout("unix", cfg.Daemon.Socket, 500*time.Millisecond); err == nil {
+	// daemon behind it records nothing while looking perfectly healthy. And
+	// whether what answers is Nim matters as much: this line is what an
+	// operator trusts, and "running" for whatever happens to be bound on the
+	// socket would report an impostor as the daemon (impostor_test.go is the
+	// attack). So the same verification every relay performs, not a bare
+	// connect -- which also left a connection the daemon logged as an
+	// unverified peer, because it was closed before the daemon could look.
+	conn, err := shim.DialRunningDaemon(cfg, 500*time.Millisecond)
+	switch {
+	case err == nil:
 		conn.Close()
 		fmt.Println("daemon   running")
-	} else {
+	case errors.Is(err, shim.ErrDaemonNotReachable):
 		fmt.Println("daemon   not running")
 		if _, statErr := os.Stat(config.LogPath()); statErr == nil {
 			fmt.Println("         see", config.LogPath())
 		}
+	default:
+		fmt.Println("daemon   NOT NIM --", err)
+		fmt.Println("         something else is bound on the socket; every relay will refuse its answers")
 	}
 
 	if _, err := os.Stat(cfg.DatabasePath()); os.IsNotExist(err) {

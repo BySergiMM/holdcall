@@ -183,7 +183,7 @@ tbody tr.sel{background:#1d2836}
   <!-- POLICY -->
   <section class="view" id="v-policy">
     <div class="panel">
-      <div class="hd">Rules — what is denied</div>
+      <div class="hd">Rules — what is allowed and denied</div>
       <div class="scroll"><table>
         <thead><tr><th>effect</th><th>agent</th><th>connector</th><th>tool</th><th>created</th></tr></thead>
         <tbody id="policy-rules"></tbody>
@@ -603,11 +603,17 @@ async function pullPolicy() {
   } catch (_) { /* the console keeps trying; Nim is unaffected either way */ }
 }
 
-document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
+// The tab is the URL fragment, so a view can be linked to and reloaded
+// into: /#journal opens the journal. An unknown fragment means the first tab.
+function showView(v) {
+  const b = document.querySelector('nav button[data-v="' + v + '"]') || document.querySelector("nav button");
   document.querySelectorAll("nav button").forEach(x => x.classList.remove("sel"));
   document.querySelectorAll(".view").forEach(x => x.classList.remove("sel"));
   b.classList.add("sel"); $("#v-" + b.dataset.v).classList.add("sel"); render();
-});
+}
+document.querySelectorAll("nav button").forEach(b => b.onclick = () => { location.hash = b.dataset.v; });
+window.addEventListener("hashchange", () => showView(location.hash.slice(1)));
+if (location.hash.length > 1) showView(location.hash.slice(1));
 
 pullSnapshot(); pullEvents(); pullPolicy();
 setInterval(pullSnapshot, SNAPSHOT_MS);

@@ -738,11 +738,12 @@
       "category": "identity",
       "status": "pass",
       "wasLive": true,
-      "evidence": "As the daemon, a python script had the relay spawn a command of its choosing, allowed a denied call, and harvested tool names. Introduced by the merge; fixed by verifying both ends. The 2026-09-14 audit found the management commands still trusted the socket: nim connector set would have written the plaintext secret to an impostor. Every command now dials through one verified path.",
+      "evidence": "As the daemon, a python script had the relay spawn a command of its choosing, allowed a denied call, and harvested tool names. Introduced by the merge; fixed by verifying both ends. The 2026-09-14 audit found the management commands still trusted the socket: nim connector set would have written the plaintext secret to an impostor. Every command now dials through one verified path. nim status used to report such a listener as running; it now performs the same verification and says NOT NIM (2026-09-15).",
       "tests": [
         "TestAnImpostorOnTheSocketCannotChooseWhatIsSpawned",
         "TestAnImpostorCannotDecideCalls",
-        "TestDialDaemonRefusesAnImpostor"
+        "TestDialDaemonRefusesAnImpostor",
+        "TestStatusDoesNotCallAnImpostorTheDaemon"
       ]
     },
     {

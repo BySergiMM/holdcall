@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -783,4 +784,56 @@ func TestAConnectorIgnoringStdinIsStoppedWithTheRelay(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 	}
 	t.Fatal("the connector outlived the relay it was spawned by")
+}
+
+// `nim status` is the line an operator trusts. It used to report "running"
+// for whatever was bound on the socket, so the impostor of impostor_test.go
+// -- any process that binds the path first -- would have been reported as
+// the daemon. Status now performs the same verification every relay does.
+//
+// The impostor here is this test binary, which is not nim. Skipped on
+// Windows, where peer identity is unsupported and the check cannot tell.
+func TestStatusDoesNotCallAnImpostorTheDaemon(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("peer identity is unsupported on Windows; status cannot tell an impostor apart there")
+	}
+	s := build(t)
+
+	// The socket path is the daemon's to choose; read it off status itself.
+	out, _ := s.run(t, "status")
+	var socket string
+	for _, line := range strings.Split(out, "\n") {
+		if rest, ok := strings.CutPrefix(line, "socket   "); ok {
+			socket = strings.TrimSpace(rest)
+		}
+	}
+	if socket == "" {
+		t.Fatalf("status did not print the socket path:\n%s", out)
+	}
+	if !strings.Contains(out, "daemon   not running") {
+		t.Fatalf("with nothing bound, status should say not running:\n%s", out)
+	}
+
+	ln, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			conn.Close()
+		}
+	}()
+
+	out, _ = s.run(t, "status")
+	if strings.Contains(out, "daemon   running") {
+		t.Fatalf("status called an impostor the daemon:\n%s", out)
+	}
+	if !strings.Contains(out, "NOT NIM") {
+		t.Errorf("status did not say what is bound is not Nim:\n%s", out)
+	}
 }

@@ -120,6 +120,11 @@ nim log        # shows the call: deny, no result
 nim console    # the same journal, plus sessions and policy, at 127.0.0.1:7717
 ```
 
+![The console's Journal tab over a journal holding an enrolment, four rules and two sessions: every entry in chain order, with the session, the call number, the tool and the decision](docs/images/console.png)
+
+The console is read-only and serves loopback only; `/#journal`, `/#sessions`
+and `/#policy` open a tab directly.
+
 ## Policy
 
 A rule is `deny` or `allow`, scoped to a tool and, optionally, one enrolled

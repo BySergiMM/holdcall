@@ -24,6 +24,13 @@ the test names behind each claim live.
   for those sessions too, and writes a refusal with `resultType: "complete"`
   when the version requires it; older clients get the older shape unchanged.
   The relay rig runs its denial case under both handshakes.
+- **`nim status` verifies that what answers on the socket is Nim.** It used
+  to report `running` for whatever was bound there, so the impostor of
+  `impostor_test.go` -- any process that binds the path first -- read as the
+  daemon on the one line an operator trusts. It now performs the verification
+  every relay does and says `NOT NIM` when it fails. The bare connect-and-close
+  it used before also left a connection the daemon logged as an unverified
+  peer on every `nim status`; that line is gone with it.
 - **Four findings from the 2026-09-15 review of the merged M4.5 work, closed
   before it shipped.** Two names could be enrolled against one executable and
   the lookup between them had no order, so a same-user process that enrolled a
@@ -36,6 +43,10 @@ the test names behind each claim live.
   wait on its connector from two goroutines at once; it stops it once.
 
 ### Added
+
+- **Console tabs have URLs.** `/#journal`, `/#sessions` and `/#policy` open a
+  tab directly and survive a reload; the rules header now says what rules
+  are, allowed and denied, rather than what they were on M4.
 
 - **M1 -- pass-through relay.** `nim serve` spawns one downstream MCP server
   and relays stdio both ways, forwarding every byte unmodified except for

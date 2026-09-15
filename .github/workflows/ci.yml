@@ -301,8 +301,9 @@ jobs:
       # fastmcp requires Python >=3.10 on every release back to 0.1.0, which
       # is why this pins 3.12 above rather than whatever `python3` the image
       # happens to default to. Pinned to the exact version this rig was
-      # proven against locally -- see tools/relay-rig/README.md for why
-      # Client(..., mode="legacy") matters with this SDK.
+      # proven against locally. The rig drives the denial case under both
+      # handshakes this SDK speaks -- initialize and server/discover -- see
+      # tools/relay-rig/README.md.
       - name: Install fastmcp
         run: pip install fastmcp==4.0.3
 
