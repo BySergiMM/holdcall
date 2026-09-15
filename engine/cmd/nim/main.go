@@ -63,6 +63,10 @@ func main() {
 		err = runAgent(os.Args[2:])
 	case "policy":
 		err = runPolicy(os.Args[2:])
+	case "approve":
+		err = runApprove(os.Args[2:])
+	case "reject":
+		err = runReject(os.Args[2:])
 	case "verify":
 		err = runVerify(os.Args[2:])
 	case "init":
@@ -124,16 +128,26 @@ func usage() {
   nim agent list | remove <name>
         Enrol a client program, identified by the file it executes.
 
-  nim policy deny|allow <tool> [--agent <name>] [--connector <name>]
-  nim policy default deny|allow [--agent <name>] [--connector <name>]
+  nim policy deny|allow|ask <tool> [--agent <name>] [--connector <name>]
+  nim policy default deny|allow|ask [--agent <name>] [--connector <name>]
   nim policy remove <tool>|--default [--agent <name>] [--connector <name>]
   nim policy list
   nim policy explain <tool> [--agent <name>] [--connector <name>]
-        Deny or allow a tool, for every session or for one agent or
-        connector. No matching rule is allow; among rules that match, the
-        most specific wins and a tie goes to deny -- see nim policy explain.
-        "default" sets one across every tool. Every change is an entry in
-        the journal.
+        Deny, allow or ask about a tool, for every session or for one agent
+        or connector. No matching rule is allow; among rules that match, the
+        most specific wins and a tie goes to deny, then ask, then allow --
+        see nim policy explain. "default" sets one across every tool. Every
+        change is an entry in the journal.
+
+  nim approve
+        List every call currently held by an ask rule, with its real
+        arguments.
+
+  nim approve <id>
+  nim reject <id> [--reason <text>]
+        Approve or refuse one held call. Recorded in the journal before the
+        client that made the call is told; --reason is logged and printed
+        here, never sent to the client or the journal.
 
   nim init [--client <name>] [--config <path>] [--write] [--repoint]
         Rewrite MCP client configs so every stdio server goes through Nim.
