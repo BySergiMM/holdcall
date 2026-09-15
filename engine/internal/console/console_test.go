@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/BySergiMM/nim/engine/internal/journal"
+	"github.com/BySergiMM/nim/engine/internal/peer"
 	"github.com/BySergiMM/nim/engine/internal/readmodel"
 )
 
@@ -85,7 +86,7 @@ func decode[T any](t *testing.T, body []byte) T {
 func TestNoEndpointAcceptsAWrite(t *testing.T) {
 	srv, _ := serve(t, func(j *journal.Journal) { j.Append(session("s1", "github")) })
 
-	paths := []string{"/", "/api/snapshot", "/api/events", "/api/sessions/s1"}
+	paths := []string{"/", "/api/snapshot", "/api/events", "/api/sessions/s1", "/api/policy"}
 	methods := []string{http.MethodPost, http.MethodPut, http.MethodPatch,
 		http.MethodDelete, "TRACE"}
 
@@ -124,6 +125,7 @@ func TestReadingDoesNotChangeTheJournal(t *testing.T) {
 	get(t, srv, "/api/snapshot")
 	get(t, srv, "/api/events?since=0")
 	get(t, srv, "/api/sessions/s1")
+	get(t, srv, "/api/policy")
 	get(t, srv, "/")
 
 	after, err := journal.OpenReadOnly(path, "test-machine")
@@ -432,7 +434,7 @@ func TestTheConsoleAnswersOnlyToALoopbackName(t *testing.T) {
 	}
 
 	for _, host := range []string{"attacker.example:7717", "nim.internal", "127.0.0.1.attacker.example:7717", "10.0.0.5:7717"} {
-		for _, path := range []string{"/", "/api/snapshot", "/api/events", "/api/sessions/s1"} {
+		for _, path := range []string{"/", "/api/snapshot", "/api/events", "/api/sessions/s1", "/api/policy"} {
 			req, _ := http.NewRequest(http.MethodGet, srv.URL+path, nil)
 			req.Host = host
 			resp, err := http.DefaultClient.Do(req)
@@ -480,5 +482,95 @@ func TestTheDerivedAgentReachesTheBrowser(t *testing.T) {
 	}
 	if len(detail.Events) == 0 || detail.Events[0].Agent == nil || *detail.Events[0].Agent != "claude-code" {
 		t.Errorf("the session.start event does not carry the agent: %+v", detail.Events)
+	}
+}
+
+// The rules, agents and connectors journal.go and rules.go already hold
+// reach the browser through this endpoint, with the shape the console's
+// Policy tab reads: rules only ever deny, and a scopeless one names neither
+// an agent nor a connector.
+func TestPolicyReturnsRulesAgentsAndConnectors(t *testing.T) {
+	srv, _ := serve(t, func(j *journal.Journal) {
+		if _, err := j.AddRule(journal.Rule{Tool: "rm"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := j.SetConnector("github", "GITHUB_TOKEN",
+			[]string{"npx", "-y", "@modelcontextprotocol/server-github"}, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	_, body := get(t, srv, "/api/policy")
+	var pol readmodel.Policy
+	if err := json.Unmarshal(body, &pol); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(pol.Rules) != 1 || pol.Rules[0].Tool != "rm" {
+		t.Fatalf("rules = %+v, want one rule denying rm", pol.Rules)
+	}
+	if pol.Rules[0].Agent != nil || pol.Rules[0].Connector != nil {
+		t.Errorf("a scopeless rule gained a scope: %+v", pol.Rules[0])
+	}
+	if len(pol.Connectors) != 1 || pol.Connectors[0].Target != "github" || pol.Connectors[0].EnvKey != "GITHUB_TOKEN" {
+		t.Fatalf("connectors = %+v", pol.Connectors)
+	}
+	if len(pol.Agents) != 0 {
+		t.Fatalf("agents = %+v, want none enrolled", pol.Agents)
+	}
+}
+
+// The journal never holds a connector's secret -- only the env var name it
+// is injected under and the argv authorized to receive it -- and this
+// endpoint must never become the place one reaches a browser.
+func TestPolicyNeverExposesASecret(t *testing.T) {
+	srv, _ := serve(t, func(j *journal.Journal) {
+		if err := j.SetConnector("github", "GITHUB_TOKEN",
+			[]string{"npx", "-y", "@modelcontextprotocol/server-github"}, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	_, body := get(t, srv, "/api/policy")
+	text := strings.ToLower(string(body))
+	for _, forbidden := range []string{"secret", "credential"} {
+		if strings.Contains(text, forbidden) {
+			t.Errorf("/api/policy exposed %q: %s", forbidden, text)
+		}
+	}
+}
+
+// STALE reaches the browser exactly as readmodel computes it: an enrolment
+// whose file no longer exists reads as not current over HTTP, the same as it
+// does in the projection this endpoint serves -- or as unknown, on a
+// platform with no way to check at all, never as a guess dressed up as one.
+func TestPolicyReportsAStaleEnrolment(t *testing.T) {
+	srv, _ := serve(t, func(j *journal.Journal) {
+		if err := j.SetAgent(journal.Agent{
+			Name: "gone", ExecDev: 1, ExecIno: 2,
+			ExecPath:   filepath.Join(t.TempDir(), "does-not-exist"),
+			EnrolledAt: time.Now(),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	_, body := get(t, srv, "/api/policy")
+	var pol readmodel.Policy
+	if err := json.Unmarshal(body, &pol); err != nil {
+		t.Fatal(err)
+	}
+	if len(pol.Agents) != 1 {
+		t.Fatalf("got %d agents, want 1", len(pol.Agents))
+	}
+
+	if !peer.FileIdentitySupported {
+		if pol.Agents[0].Current != nil {
+			t.Fatalf("current = %v on a platform that cannot answer, want unknown", *pol.Agents[0].Current)
+		}
+		return
+	}
+	if pol.Agents[0].Current == nil || *pol.Agents[0].Current {
+		t.Fatal("an enrolment pointing at a missing file was not reported STALE")
 	}
 }

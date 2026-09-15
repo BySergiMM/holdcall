@@ -88,6 +88,20 @@ func TestReadModelSurfaceIsFrozen(t *testing.T) {
 			"agent", "anomalies", "calls_recorded", "chain_seq", "client", "connector",
 			"denied", "ended_at", "id", "machine_id", "outcomes", "started_at", "state",
 		}},
+		// Rule, Agent and Connector are new with the Policy view: what may
+		// happen, read from nim_rules, nim_agents and nim_connectors rather
+		// than the chain. Added deliberately, and narrowly -- Agent carries
+		// no exec_dev/exec_ino (the kernel identity a decision matches on,
+		// which a console has no reason to show) and Connector carries no
+		// secret (there is none in the journal to show).
+		{"Rule", Rule{}, []string{"agent", "connector", "created_at", "tool"}},
+		{"Agent", Agent{}, []string{"current", "enrolled_at", "exec_path", "name"}},
+		{"Connector", Connector{}, []string{"command", "env_key", "target", "updated_at"}},
+		{"Policy", Policy{}, []string{
+			"agent", "agents", "command", "connector", "connectors", "created_at",
+			"current", "enrolled_at", "env_key", "exec_path", "name", "rules",
+			"target", "tool", "updated_at",
+		}},
 	}
 
 	for _, c := range cases {
@@ -110,9 +124,14 @@ func TestReadModelSurfaceIsFrozen(t *testing.T) {
 // from the kernel and hashing it into session.start -- until then a field by
 // that name would have been a claim with nothing behind it, and once the
 // journal carried the value, a read model that could not show it was hiding
-// something the chain commits to. Everything else here is still a claim
-// nothing in the record can back, and "allowed" is deliberately still here --
-// the journal holds a decision, not a fact about what then happened, and a
+// something the chain commits to. "policy" and "rule" left when nim_rules
+// gained a reader: they are expressible now, but only through the dedicated
+// Policy view below (Rule, Agent, Connector), never as a field grafted onto
+// Event or Session -- a rule is configuration, not something that happened,
+// and folding it into the record of what happened is the confusion this
+// list exists to catch. Everything else here is still a claim nothing in
+// the record can back, and "allowed" is deliberately still here -- the
+// journal holds a decision, not a fact about what then happened, and a
 // field called allowed would invite exactly that reading.
 //
 // This is checked structurally: the question is whether the model has somewhere
@@ -123,20 +142,22 @@ func TestReadModelCannotExpressEnforcement(t *testing.T) {
 		"active":            "a session with no end may be running or dead; the journal cannot tell",
 		"allowed":           "an allow is a decision, not evidence the call was made",
 		"blocked":           "Nim refused to forward a call; it did not stop anything else",
-		"policy":            "the rules live in nim_rules and are read by the daemon, not projected here",
-		"rule":              "the rules live in nim_rules and are read by the daemon, not projected here",
 		"agent_id":          "an agent is named by its enrolment, never numbered",
 		"identity":          "the journal records which enrolment matched, not an identity",
 		"connector_reached": "the journal does not record whether the connector received anything",
 		"reached":           "the journal does not record whether the connector received anything",
 		"credential":        "credentials are never recorded",
 		"credentials":       "credentials are never recorded",
+		"secret":            "no secret is ever in the journal, and this view must never become the place one is added",
 		"loss_free":         "losses that leave no evidence cannot be ruled out",
 		"complete":          "the record cannot claim to be complete",
 		"verified":          "the chain is self-consistent; that is a weaker claim",
 	}
 
-	for _, dto := range []any{Event{}, Page{}, Snapshot{}, JournalState{}, Gaps{}, Session{}, SessionDetail{}} {
+	// Policy carries Rule, Agent and Connector through its own fields, so
+	// walking it also checks them: a connector row must never grow a field
+	// this list would catch, any more than an Event may.
+	for _, dto := range []any{Event{}, Page{}, Snapshot{}, JournalState{}, Gaps{}, Session{}, SessionDetail{}, Policy{}} {
 		name := reflect.TypeOf(dto).Name()
 		for _, field := range jsonFields(t, dto) {
 			if why, bad := forbidden[field]; bad {
@@ -177,13 +198,16 @@ func TestProjectionsTakeNarrowInterfaces(t *testing.T) {
 		_ func(SnapshotSource, string) (JournalState, error)            = Check
 		_ func(SessionSource, int) ([]Session, error)                   = Sessions
 		_ func(SessionSource, string, int) (SessionDetail, bool, error) = Detail
+		_ func(PolicySource) (Policy, error)                            = TakePolicy
 	)
 
-	// And the composite is only for wiring: it must be all three and nothing
+	// And the composite is only for wiring: it must be all four and nothing
 	// more, so it cannot become a mirror of the journal's read surface.
 	src := reflect.TypeOf((*Source)(nil)).Elem()
 	sum := 0
-	for _, part := range []any{(*EventSource)(nil), (*SnapshotSource)(nil), (*SessionSource)(nil)} {
+	for _, part := range []any{
+		(*EventSource)(nil), (*SnapshotSource)(nil), (*SessionSource)(nil), (*PolicySource)(nil),
+	} {
 		sum += reflect.TypeOf(part).Elem().NumMethod()
 	}
 	if src.NumMethod() != sum {

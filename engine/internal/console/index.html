@@ -63,6 +63,7 @@ tbody tr.sel{background:#1d2836}
 .k-session\.start{color:var(--accent)} .k-session\.end{color:var(--dim)}
 .k-call\.request{color:#c9a7e8} .k-call\.outcome{color:var(--ok)}
 .k-anomaly{color:var(--warn);border-color:#4a3d24}
+.k-rule\.add{color:#5bc2c7;border-color:#20393b} .k-rule\.remove{color:#e0937a;border-color:#40291f}
 .ok{color:var(--ok)} .bad{color:var(--bad)} .warn{color:var(--warn)} .dim{color:var(--dim)}
 .note{color:var(--faint);font-size:12px;line-height:1.55;margin:0}
 .note+.note{margin-top:8px}
@@ -91,6 +92,7 @@ tbody tr.sel{background:#1d2836}
   <button data-v="live">Live activity</button>
   <button data-v="journal">Journal</button>
   <button data-v="sessions">Sessions</button>
+  <button data-v="policy">Policy</button>
 </nav>
 
 <main id="main">
@@ -115,6 +117,15 @@ tbody tr.sel{background:#1d2836}
 
     <div class="panel"><div class="hd">Anomalies by type</div>
       <div class="bd" id="ov-anomalies"></div>
+    </div>
+
+    <div class="panel"><div class="hd">Policy</div>
+      <div class="grid" id="ov-policy"></div>
+      <div class="bd">
+        <p class="note">What may happen, not what did: rules only ever deny, an enrolment is
+        as privileged as running Nim, and a connector's command is the argv authorized to
+        receive its credential. See the Policy tab for the full listing.</p>
+      </div>
     </div>
   </section>
 
@@ -167,6 +178,52 @@ tbody tr.sel{background:#1d2836}
       </div>
     </div>
   </section>
+
+  <!-- POLICY -->
+  <section class="view" id="v-policy">
+    <div class="panel">
+      <div class="hd">Rules — what is denied</div>
+      <div class="scroll"><table>
+        <thead><tr><th>agent</th><th>connector</th><th>tool</th><th>created</th></tr></thead>
+        <tbody id="policy-rules"></tbody>
+      </table></div>
+      <div class="bd">
+        <p class="note">Rules only ever deny. A call no rule names is allowed, exactly as
+        when the list lived in config.toml — there is no allow rule and no precedence to
+        reason about yet. An empty <b>agent</b> or <b>connector</b> means every one.</p>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="hd">Agents — enrolled programs</div>
+      <div class="scroll"><table>
+        <thead><tr><th>name</th><th>state</th><th>enrolled</th><th>exec path</th></tr></thead>
+        <tbody id="policy-agents"></tbody>
+      </table></div>
+      <div class="bd">
+        <p class="note">An enrolment is as privileged as running Nim: anything that can
+        execute this binary as this user can enrol an agent or replace an existing one.</p>
+        <p class="note"><b>STALE</b> means the file at that path is no longer the one that
+        was enrolled — not a sign of tampering, just that it needs to be repeated: a device
+        number can change across a reboot, and a self-updating program becomes a different
+        file. Where this platform has no way to check a file's identity at all, state reads
+        <b>unknown</b> rather than guessing.</p>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="hd">Connectors — the argv a credential may be injected into</div>
+      <div class="scroll"><table>
+        <thead><tr><th>target</th><th>env key</th><th>command</th><th>updated</th></tr></thead>
+        <tbody id="policy-connectors"></tbody>
+      </table></div>
+      <div class="bd">
+        <p class="note">The credential value itself is never here and never was: this holds
+        only the env var name it is injected under and the one command authorized to receive
+        it.</p>
+      </div>
+    </div>
+  </section>
 </div>
 
 <aside id="detail" style="display:none">
@@ -191,6 +248,7 @@ const el = (t, c, txt) => { const e = document.createElement(t);
 let cursor = 0;            // highest chain_seq seen; the only client-side state
 let events = [];           // newest first, for rendering only
 let snapshot = null;
+let policy = null;
 let selected = null;
 
 /* ---------- rendering helpers ---------- */
@@ -204,6 +262,17 @@ function kindCell(kind) {
   const s = el("span", "k k-" + kind.replace(".", "\\."), kind);
   s.className = "k k-" + kind; return s;
 }
+// ruleScope renders a rule.add / rule.remove entry's scope and effect --
+// agent, connector, tool -- in the order formatEvent uses on the CLI, so a
+// rule reads the same in `nim log --follow` and here.
+function ruleScope(e) {
+  const parts = [];
+  if (e.agent) parts.push("agent=" + e.agent);
+  if (e.connector) parts.push("connector=" + e.connector);
+  if (e.tool) parts.push("tool=" + e.tool);
+  return parts.join(" ");
+}
+const isRuleKind = (kind) => kind === "rule.add" || kind === "rule.remove";
 function cell(n, label, sub, cls) {
   const c = el("div", "cell");
   c.appendChild(el("div", "n " + (cls || ""), n));
@@ -287,6 +356,18 @@ function renderOverview() {
     a.appendChild(el("div", "note", "The journal has no entries, so there was nothing to check."));
     alerts.appendChild(a);
   }
+
+  const pr = $("#ov-policy"); pr.replaceChildren();
+  if (!policy) {
+    pr.appendChild(cell("—", "loading policy…"));
+  } else {
+    const agents = policy.agents || [];
+    const stale = agents.filter((a) => a.current === false).length;
+    pr.appendChild(cell((policy.rules || []).length, "rules", "denials in effect"));
+    pr.appendChild(cell(agents.length, "agents enrolled",
+      stale ? stale + " stale" : "", stale ? "warn" : ""));
+    pr.appendChild(cell((policy.connectors || []).length, "connectors registered"));
+  }
 }
 
 /* ---------- tables ---------- */
@@ -299,10 +380,13 @@ function eventRow(e, mode) {
   add(shortId(e.session_id));
   add(e.seq);
   if (mode === "live") {
-    add(e.tool);
+    add(isRuleKind(e.kind) ? ruleScope(e) : e.tool);
     add(e.decision, "dim");
     add(e.ok === undefined ? "" : (e.ok ? "ok" : "failed"), e.ok === false ? "bad" : "ok");
     add(e.duration_ms);
+  } else if (isRuleKind(e.kind)) {
+    const detail = ruleScope(e) + (e.decision ? " decision=" + e.decision : "");
+    add(detail);
   } else {
     add(e.tool || e.connector || e.anomaly || "", e.anomaly ? "warn" : "");
   }
@@ -347,6 +431,63 @@ function renderSessions() {
     add(when(s.started_at), "dim");
     tr.onclick = () => selectSession(s);
     rows.appendChild(tr);
+  }
+}
+
+function renderPolicy() {
+  const p = policy || {rules: [], agents: [], connectors: []};
+
+  const rr = $("#policy-rules"); rr.replaceChildren();
+  if (!p.rules.length) {
+    const tr = el("tr"), td = el("td", "empty", "No rules recorded.");
+    td.colSpan = 4; tr.appendChild(td); rr.appendChild(tr);
+  } else {
+    for (const r of p.rules) {
+      const tr = el("tr");
+      const add = (v, c) => { const td = el("td", c); td.textContent = v || ""; tr.appendChild(td); };
+      add(r.agent || "every", r.agent ? "" : "dim");
+      add(r.connector || "every", r.connector ? "" : "dim");
+      add(r.tool);
+      add(when(r.created_at), "dim");
+      rr.appendChild(tr);
+    }
+  }
+
+  const ar = $("#policy-agents"); ar.replaceChildren();
+  if (!p.agents.length) {
+    const tr = el("tr"), td = el("td", "empty", "No agents enrolled.");
+    td.colSpan = 4; tr.appendChild(td); ar.appendChild(tr);
+  } else {
+    for (const a of p.agents) {
+      const tr = el("tr");
+      const add = (v, c) => { const td = el("td", c);
+        td.textContent = v === undefined || v === null ? "" : v; tr.appendChild(td); };
+      add(a.name);
+      // current is a tri-state: true, false, or null where this platform has
+      // no way to check a file's identity at all -- see peer.FileIdentitySupported.
+      const [label, cls] = a.current === null ? ["unknown", "dim"] : a.current ? ["ok", "ok"] : ["STALE", "warn"];
+      add(label, cls);
+      add(when(a.enrolled_at), "dim");
+      add(a.exec_path, "dim");
+      ar.appendChild(tr);
+    }
+  }
+
+  const cr = $("#policy-connectors"); cr.replaceChildren();
+  if (!p.connectors.length) {
+    const tr = el("tr"), td = el("td", "empty", "No connectors registered.");
+    td.colSpan = 4; tr.appendChild(td); cr.appendChild(tr);
+  } else {
+    for (const c of p.connectors) {
+      const tr = el("tr");
+      const add = (v, cls) => { const td = el("td", cls);
+        td.textContent = v === undefined || v === null ? "" : v; tr.appendChild(td); };
+      add(c.target);
+      add(c.env_key, "dim");
+      add((c.command || []).join(" "), "dim");
+      add(when(c.updated_at), "dim");
+      cr.appendChild(tr);
+    }
   }
 }
 
@@ -415,6 +556,7 @@ function render() {
   if (v === "live") renderLive();
   if (v === "journal") renderJournal();
   if (v === "sessions") renderSessions();
+  if (v === "policy") renderPolicy();
 }
 
 async function pullSnapshot() {
@@ -447,15 +589,27 @@ async function pullEvents() {
   } catch (_) { /* ignored */ }
 }
 
+// Policy changes about as often as the journal's own state, so it polls on
+// the same cadence as the snapshot rather than the faster one events use.
+async function pullPolicy() {
+  try {
+    const r = await fetch("/api/policy");
+    if (!r.ok) return;
+    policy = await r.json();
+    render();
+  } catch (_) { /* the console keeps trying; Nim is unaffected either way */ }
+}
+
 document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
   document.querySelectorAll("nav button").forEach(x => x.classList.remove("sel"));
   document.querySelectorAll(".view").forEach(x => x.classList.remove("sel"));
   b.classList.add("sel"); $("#v-" + b.dataset.v).classList.add("sel"); render();
 });
 
-pullSnapshot(); pullEvents();
+pullSnapshot(); pullEvents(); pullPolicy();
 setInterval(pullSnapshot, SNAPSHOT_MS);
 setInterval(pullEvents, EVENTS_MS);
+setInterval(pullPolicy, SNAPSHOT_MS);
 </script>
 </body>
 </html>

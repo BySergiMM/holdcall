@@ -48,12 +48,24 @@ type SessionSource interface {
 	SessionEntries(id string, limit int) ([]journal.Entry, error)
 }
 
-// Source is all three, for wiring: a caller holding a journal passes it once
+// PolicySource backs the rules, agents and connectors listings: what may
+// happen, as opposed to the journal's record of what did. nim_rules,
+// nim_agents and nim_connectors sit outside the chain (see journal.go), so
+// this reads them the same way ListRules, ListAgents and ListConnectors
+// already do, and adds nothing new to what the journal handle can answer.
+type PolicySource interface {
+	ListRules() ([]journal.Rule, error)
+	ListAgents() ([]journal.Agent, error)
+	ListConnectors() ([]journal.Connector, error)
+}
+
+// Source is all four, for wiring: a caller holding a journal passes it once
 // and each projection takes only the part it needs.
 type Source interface {
 	EventSource
 	SnapshotSource
 	SessionSource
+	PolicySource
 }
 
 // Event is one journal entry as a reader sees it.

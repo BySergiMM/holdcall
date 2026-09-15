@@ -30,7 +30,15 @@ type fake struct {
 		since int64
 		limit int
 	}
+
+	rules      []journal.Rule
+	agents     []journal.Agent
+	connectors []journal.Connector
 }
+
+func (f *fake) ListRules() ([]journal.Rule, error)           { return f.rules, f.err }
+func (f *fake) ListAgents() ([]journal.Agent, error)         { return f.agents, f.err }
+func (f *fake) ListConnectors() ([]journal.Connector, error) { return f.connectors, f.err }
 
 func (f *fake) Sessions(limit int) ([]journal.SessionRow, error) {
 	if f.err != nil {

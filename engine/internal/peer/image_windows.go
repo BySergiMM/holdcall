@@ -24,6 +24,16 @@ import (
 
 var errUnsupported = fmt.Errorf("executable identity is not implemented on windows")
 
+// FileIdentitySupported reports whether ImageOfFile can answer at all on
+// this platform. False here: ImageOfFile always fails below, and that
+// failure is a statement about the platform, not about any particular file.
+// A caller that persists an Image and later asks whether a file still
+// matches it (the console's STALE check among them) must read that as
+// "unknown" rather than as "no" -- reporting a platform limitation as a
+// finding about the file would tell an operator their enrolment had gone
+// stale when nothing was actually checked.
+const FileIdentitySupported = false
+
 // ImageOf reports the identity of the file a process is running.
 func ImageOf(pid int) (Image, error) { return Image{}, errUnsupported }
 
