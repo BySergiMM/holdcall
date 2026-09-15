@@ -24,6 +24,19 @@ the test names behind each claim live.
   for those sessions too, and writes a refusal with `resultType: "complete"`
   when the version requires it; older clients get the older shape unchanged.
   The relay rig runs its denial case under both handshakes.
+- **An in-place upgrade is diagnosed instead of read as an impostor (F-001).**
+  Replacing the `nim` binary while its daemon kept running made the old
+  daemon and every new client compare as different images, correctly, by
+  the same check that catches a real impostor, but with no way to tell the
+  two apart: the daemon logged an unverified peer and the client saw "not
+  Nim". `peer.Diagnose` now tells a peer running a different file at exactly
+  our own launch path apart from a program at another path. `nim status`
+  prints `daemon   OLDER BUILD -- run nim daemon restart`, `nim doctor` fails
+  a `daemon build` check the same way, and `nim daemon restart` is the
+  remedy: it signals the old daemon, which now shuts down cleanly, closing
+  its journal and removing its socket file, then starts a new one and
+  confirms it answers. Not supported on Windows. The trust boundary does not
+  move.
 - **A held call cannot be approved before its arguments have arrived.** The
   M6 review found that `nim approve <id>` could be recorded and the call
   forwarded in the moment between the daemon holding a call and the relay's

@@ -20,7 +20,7 @@
     "name": "Nim",
     "tagline": "A local process between an MCP client and the MCP servers it uses.",
     "currentMilestone": "M4.5",
-    "currentPhase": "M1 to M7 done; D-004 decided on 2026-09-16 and M8 planned as an opt-in mirror of what the machine reported; CI on GitHub blocked by account billing, so linux and windows remain unexecuted",
+    "currentPhase": "M1 to M7 done and F-001 closed (an in-place upgrade is diagnosed, nim daemon restart is the remedy); M8 planned as an opt-in mirror of what the machine reported; CI on GitHub blocked by account billing, so linux and windows remain unexecuted",
     "overallStatus": "in_progress",
     "statusNote": "Nim decides per (agent, connector, tool) against allow and deny rules in SQLite -- most specific wins, deny beats allow at equal specificity, no rule means allow -- records every call, every rule change and every enrolment change in one hash chain, and configures Claude Code, Cursor and Claude Desktop to go through it with nim init. Nothing has ever been executed on Windows.",
     "provenance": "declared"
@@ -742,6 +742,34 @@
         "windows": "unverified"
       },
       "lastVerified": "2026-09-15",
+      "provenance": "declared"
+    },
+    {
+      "id": "upgrade-is-diagnosed",
+      "title": "An in-place upgrade is diagnosed, not read as an impostor",
+      "status": "verified",
+      "statement": "When a daemon and a client differ because the binary was replaced at its own path while the daemon kept running, the peer check still refuses -- the boundary does not move -- but peer.Diagnose tells that shape apart from an unrelated program at a different path, and every refusal surface (the daemon's log, the relay's stderr, nim status, nim doctor) names it with the remedy: nim daemon restart, which signals the old daemon, starts a new one and confirms it answers.",
+      "notGuaranteed": "Best effort: the diagnosis reads the peer's launch path, the weaker signal that identity itself never trusts for authorization, and a peer that closes at the wrong instant falls back to the generic 'not Nim' wording rather than guessing. Nothing here makes the daemon accept a peer it refused before. Unsupported on Windows, where peer identity is unsupported and nim daemon restart says so.",
+      "implementation": [
+        "engine/internal/peer/peer.go",
+        "engine/internal/shim/shim.go",
+        "engine/cmd/nim/daemon_restart_unix.go",
+        "engine/cmd/nim/doctor.go"
+      ],
+      "tests": [
+        "TestDiagnoseTellsASamePathRebuildApartFromADifferentProgram",
+        "TestDiagnoseIsUnavailableForAPidThatHasExited",
+        "TestExecPathOfResolvesALivePeer",
+        "TestWindowsDiagnoseIsAlwaysUnavailable",
+        "TestAnInPlaceUpgradeIsDiagnosedAndDaemonRestartFixesIt",
+        "TestStatusDoesNotCallAnImpostorTheDaemon"
+      ],
+      "platforms": {
+        "darwin": "verified",
+        "linux": "unverified",
+        "windows": "unsupported"
+      },
+      "lastVerified": "2026-09-16",
       "provenance": "declared"
     }
   ],
@@ -1565,10 +1593,14 @@
       "title": "In-place upgrade breaks a running daemon, opaquely",
       "problem": "Replacing the binary while a daemon runs makes the old daemon and the new client different images, so every operation is refused.",
       "impact": "All Nim operations fail until the daemon is restarted. The client sees 'nim: reading response: EOF' with no hint.",
-      "evidence": "Reproduced live: daemon logs 'refusing a connection from an unverified peer'; the client sees EOF.",
-      "status": "open",
-      "nextAction": "A version/identity handshake so the daemon can say 'I am an older build, restart me' instead of hanging up.",
-      "provenance": "declared"
+      "evidence": "Reproduced live: daemon logs 'refusing a connection from an unverified peer'; the client sees EOF. Fixed on 2026-09-16 and proven by TestAnInPlaceUpgradeIsDiagnosedAndDaemonRestartFixesIt (engine/cmd/nim/e2e_test.go): a real binary rebuilt in place at the same path while its own daemon kept running. nim status reports 'daemon   OLDER BUILD -- run nim daemon restart' instead of NOT NIM, nim doctor fails a daemon-build check with the same remedy, the daemon's own log names the reason, and nim daemon restart signals the old daemon (which now shuts down cleanly), starts a new one and confirms it answers; the rebuilt binary then forwards a real call through it.",
+      "status": "fixed",
+      "nextAction": "None: nim daemon restart is the documented remedy (README, docs/getting-started.md, docs/security.md). Best effort by design: a peer that closes at the wrong instant, or Windows, falls back to the generic wording rather than guessing.",
+      "provenance": "declared",
+      "tests": [
+        "TestAnInPlaceUpgradeIsDiagnosedAndDaemonRestartFixesIt",
+        "TestDiagnoseTellsASamePathRebuildApartFromADifferentProgram"
+      ]
     },
     {
       "id": "F-002",

@@ -36,4 +36,5 @@ TestAPathSwapDoesNotDefeatPeerIdentity	peer identity is unsupported on windows b
 TestAReplacedFileIsReportedStaleRatherThanFailing	agent enrolment resolves identity via peer.ImageOfFile, which always errors on windows (image_windows.go); enrolling the file this test needs already fails before it can go stale
 TestTheDaemonsCommandIsSpawnedNotTheCallersEndToEnd	fixture hardcodes /bin/echo and /bin/sh -c, neither of which exists at that path on windows; not a peer-identity gap, a fixture one
 TestWithNoConnectorTheCallersCommandRuns	fixture hardcodes /bin/echo, which does not exist at that path on windows; not a peer-identity gap, a fixture one
-TestStatusDoesNotCallAnImpostorTheDaemon
+TestStatusDoesNotCallAnImpostorTheDaemon	peer identity is unsupported on windows, so status cannot tell an impostor apart there; the same gap the Known gaps table records
+TestAnInPlaceUpgradeIsDiagnosedAndDaemonRestartFixesIt	peer identity is unsupported on windows, so an older build cannot be told apart from anything; and nim daemon restart is not supported there
