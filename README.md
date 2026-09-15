@@ -1,40 +1,47 @@
 # Nim
 
-A local process that sits between an MCP client (Claude Code, Cursor) and the
-MCP servers it uses. It holds the credentials, decides whether each
-`tools/call` is allowed, and records every decision in a hash-chained journal.
+Nim is a local process that sits between an MCP client — Claude Code, Cursor,
+Claude Desktop — and the MCP servers it spawns. It holds each server's
+credentials, decides whether every `tools/call` is allowed before it reaches
+a server, and records the decision in an append-only, hash-chained journal.
+Nothing else in the protocol is touched: everything that is not a
+`tools/call` is forwarded byte for byte.
 
-Nothing else in the protocol is touched: everything that is not a `tools/call`
-is forwarded byte for byte.
+It is for a developer who already runs one of those clients with MCP servers
+configured and wants three things none of them give you on their own: a
+record of what a tool was asked to do, a way to refuse one by name before it
+runs, and each server's credential kept out of a client's plaintext config
+and away from the servers it isn't registered for. It is pre-alpha — see
+Status below for exactly what that means before you point it at something
+you cannot afford to have go wrong.
 
 ## Status
 
 Pre-alpha, and honest about it. What works:
 
 - **A relay a real client cannot distinguish from a direct connection.** Tool
-  list, JSON schemas, unicode, a 512 KiB payload, error propagation and ping
-  all pass through unchanged. The harness is `tools/relay-rig`, and it was
-  last run before enforcement and credentials existed (F-007 on the dashboard);
-  byte-exactness since then rests on the unit tests.
+  list, schemas, unicode, a 512 KiB payload, error propagation and ping all
+  pass through unchanged (`tools/relay-rig`, last run before enforcement and
+  credentials existed — F-007 on the dashboard; byte-exactness since then
+  rests on the unit tests).
 - **Refusal.** A `tools/call` is decided before it is forwarded, and the
   decision is written to the journal before the relay acts on it. A refused
   call never leaves Nim.
-- **An append-only, hash-chained record.** `nim log` shows what happened,
-  `nim verify` walks the chain, `nim console` serves a read-only local view.
-- **Credentials out of the client's config file**, into the OS credential
-  store, injected only into the one server each is registered for.
+- **An append-only, hash-chained record** (`nim log`, `nim verify`, `nim
+  console`), and **credentials out of the client's config file**, into the
+  OS credential store, injected only into the one server each is registered
+  for.
+- **Agent identity, derived rather than declared**, from the executable the
+  kernel reports for the process that spawned the relay; nothing on the wire
+  names an agent.
+- **Policy in SQLite**, per agent and per connector, with a stated precedence
+  between `allow` and `deny`. Every change is an entry in the journal;
+  `config.toml` carries no policy at all — a file that still does is refused.
+- **`nim init` and `nim doctor`** — pointing a client at Nim, and checking
+  the result, without hand-editing JSON.
 
-- **Agent identity, derived rather than declared.** An enrolled client program
-  is identified by the executable it runs, as the kernel reports it for the
-  process that spawned the relay; nothing on the wire names an agent.
-- **Policy in SQLite, per agent and per connector.** `nim policy deny` refuses
-  a tool for every session, or for one enrolled agent, or on one connector.
-  Rules only deny. Every change is an entry in the journal, and `config.toml`
-  carries no policy at all — a file that still does is refused.
-
-What does not exist yet: allow rules and any precedence between allow and deny
-(a policy language, M4.5), budgets, human approval, and the hosted journal
-viewer (M8). `docs/milestones.md` is the order those come in.
+`docs/milestones.md` is the order the rest comes in; see *What does not
+exist yet* below.
 
 ## Failing closed
 
@@ -48,33 +55,115 @@ configuration. A connector nobody set up is not a failure, and those servers
 keep working untouched. `docs/decisions/0001-failure-behaviour.md` sets out
 why those are different questions.
 
-## Policy
+## Install
 
-A rule refuses one tool. It applies to every session, or to the sessions of
-one enrolled agent, or to the sessions started for one connector:
+**From a release**, once one exists — no version has been tagged yet (see
+`CHANGELOG.md`):
 
 ```bash
-nim policy deny delete_repository                       # for everyone
-nim policy deny delete_repository --agent cursor        # for one client program
-nim policy deny force_push --connector github           # on one server
-nim policy list
+curl -fsSL https://raw.githubusercontent.com/BySergiMM/nim/m1-bootstrap/install.sh | sh
 ```
 
-An agent is a client program, enrolled by the executable it runs:
+POSIX `sh`, never `sudo`, writes only inside `NIM_INSTALL_DIR` (default
+`$HOME/.local/bin`). Resolves the latest GitHub release, or
+`NIM_VERSION=vX.Y.Z` to pin one, checks the archive's SHA-256 against that
+release's `SHA256SUMS`, and refuses — nothing written — on any mismatch.
+Windows has no `sh`: take the `.zip` from the release page.
+
+**From source** — see *Building* for the requirements:
+
+```bash
+cd engine && go build -o bin/nim ./cmd/nim
+```
+
+A release binary adds the ldflags that make `nim version` report something
+other than `0.0.0-dev`, the same ones `.github/workflows/release.yml` uses
+per target:
+
+```bash
+go build -trimpath -ldflags "-s -w -X main.version=$TAG \
+    -X main.commit=$(git rev-parse HEAD) -X main.builtAt=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    -o bin/nim ./cmd/nim
+```
+
+## Five minutes to a first decision
+
+The full walkthrough, with before/after config examples per client, is
+`docs/getting-started.md`. Short version:
+
+```bash
+nim init                # dry run: shows what it would rewrite, touches nothing
+nim init --write        # applies it, after backing up every file it changes
+nim init --undo <backup path nim init --write printed>
+```
+Finds Claude Code's, Cursor's and Claude Desktop's config files and rewrites
+each stdio server to route through Nim; `--undo` restores one file from its
+backup.
+
+```bash
+nim doctor
+```
+One line per check — PATH, `config.toml`, the daemon, the journal, the
+credential store, enrolments, rules, connectors, client configs — `OK`,
+`WARN` or `FAIL`, with a remedy. Exits 1 only on a `FAIL`.
+
+```bash
+nim policy deny <tool-name>    # recorded as a rule.add entry
+```
+Ask your client to call that tool: it comes back as a tool error, because
+the call never reached the server that would have run it.
+
+```bash
+nim log        # shows the call: deny, no result
+nim console    # the same journal, plus sessions and policy, at 127.0.0.1:7717
+```
+
+## Policy
+
+A rule is `deny` or `allow`, scoped to a tool and, optionally, one enrolled
+agent and one connector:
+
+```bash
+nim policy deny delete_repository                        # for everyone
+nim policy deny delete_repository --agent cursor         # for one client program
+nim policy allow force_push --agent claude-code --connector github
+nim policy default deny                                  # every tool, unless something more specific says otherwise
+nim policy remove delete_repository                       # or --default
+nim policy list
+nim policy explain force_push --agent claude-code --connector github
+```
+
+**Precedence, in one sentence:** the most specific matching rule wins — an
+exact tool beats a default, naming the agent or the connector beats not
+naming it — a tie at equal specificity goes to deny, and no matching rule at
+all is allow.
+
+**What an unenrolled program may do, in one sentence:** a session no
+enrolment matched is bound only by the rules that name no agent, so a plain
+`deny` is a ceiling nothing escapes by staying unenrolled, and `nim policy
+default deny` plus an agent-scoped `allow` is the allow-list that ceiling
+alone could not express — `docs/decisions/0002-what-an-unknown-agent-may-do.md`
+and `docs/decisions/0003-allow-rules-and-precedence.md` argue both halves.
+
+Every rule added or removed is a `rule.add` or `rule.remove` entry in the
+chain, in the same transaction as the rule.
+
+## Agents
 
 ```bash
 nim agent add cursor /Applications/Cursor.app/Contents/MacOS/Cursor
+nim agent list
+nim agent remove cursor
 ```
 
-The daemon derives which agent a session belongs to from the process that
-spawned the relay; the relay never says. A session no enrolment matched meets
-only the rules that name no agent, which — because rules only deny — is the
-same ceiling every session had before agents existed.
-`docs/decisions/0002-what-an-unknown-agent-may-do.md` is the argument.
-
-Every rule added or removed is a `rule.add` or `rule.remove` entry in the
-chain, written in the same transaction as the rule, so the rules have a history
-that verifies like the calls do.
+An agent is a client program, enrolled by the executable it runs — the file
+the kernel reports for the process that spawned the relay, matched against
+enrolments made this way; nothing on the wire names an agent. Two windows of
+the same program are the same agent, because they run the same file:
+enrolment identifies an executable, not a running instance. Re-enrolling a
+name against a different path moves what that name means, including every
+rule scoped to it. Enrolling one is as privileged as running Nim itself —
+the journal, not the enrolment, is what makes that visible afterwards.
 
 ## Credentials
 
@@ -108,6 +197,30 @@ secret and the whole chain can be recomputed. Only a head recorded elsewhere
 (`nim verify --expect-head`) covers that.
 
 Do not describe it as tamper-proof, tamper-evident, or an immutable audit log.
+
+Policy and enrolment changes are entries in the chain too, not a separate
+record with weaker guarantees: `rule.add`, `rule.remove`, `agent.add` and
+`agent.remove` are each written in the same SQLite transaction as the change
+they describe, so the rules and the enrolments they are scoped to have a
+history that verifies exactly like the calls do.
+
+## What does not exist yet
+
+- **Budgets.** A cap on how much or how often a tool may be called, per
+  session, decremented at authorization time — M5.
+- **Human approval.** An out-of-band prompt showing a call's real
+  parameters before it runs, never a model-generated summary — M6.
+- **A hosted journal viewer.** M8: syncing a record whose authenticity
+  rests on an unkeyed chain would export a liability rather than evidence,
+  and that has to be decided first (D-004 on the dashboard).
+- **Conditions on a call's arguments, or on time.** A rule matches `(agent,
+  connector, tool)` and nothing else.
+- **Anything run on Windows.** DPAPI credential storage and all five
+  cross-compiled targets exist, but no code here has ever executed on a
+  real Windows machine — see *Building* and `docs/security.md`'s *Known
+  gaps* table.
+
+`docs/milestones.md` has the test names behind every claim above.
 
 ## Shape
 
