@@ -19,10 +19,10 @@
   "project": {
     "name": "Nim",
     "tagline": "A local process between an MCP client and the MCP servers it uses.",
-    "currentMilestone": "M4",
-    "currentPhase": "Agent identity and policy in SQLite landed; allow rules are M4.5",
+    "currentMilestone": "M4.5",
+    "currentPhase": "Allow rules with a stated precedence landed; enrolment changes are in the chain; budgets (M5) are next",
     "overallStatus": "in_progress",
-    "statusNote": "Nim decides per (agent, connector, tool), blocks and records. The rules live in SQLite, are changed through the daemon, and every change is an entry in the chain. Rules only deny: a tool no rule names is allowed, and there is no allow rule until M4.5.",
+    "statusNote": "Nim decides per (agent, connector, tool) against allow and deny rules in SQLite -- most specific wins, deny beats allow at equal specificity, no rule means allow -- records every call, every rule change and every enrolment change in one hash chain, and configures Claude Code, Cursor and Claude Desktop to go through it with nim init. Nothing has ever been executed on Windows.",
     "provenance": "declared"
   },
   "ciSnapshot": {
@@ -112,20 +112,22 @@
       {
         "name": "Agent identity",
         "state": "implemented",
-        "detail": "Enrolled and derived from the kernel, recorded on session.start, and a rule can be scoped to it. Two windows of one program are the same agent.",
+        "detail": "Enrolled and derived from the kernel, recorded on session.start, and every enrolment change is an agent.add or agent.remove entry in the chain. Two windows of one program are the same agent.",
         "guarantees": [
           "agent-not-claimable",
-          "policy-per-agent"
+          "policy-per-agent",
+          "enrolment-changes-in-chain"
         ]
       },
       {
         "name": "Policy",
         "state": "implemented",
-        "detail": "Deny rules in SQLite, per agent and per connector, changed only through the daemon and recorded in the chain. Deny-only: no allow rules, no precedence, until M4.5.",
+        "detail": "Allow and deny rules in SQLite, per agent and per connector, with defaults; one precedence function decides and nim policy explain shows it. Changed only through the daemon and recorded in the chain.",
         "guarantees": [
           "enforcement-fail-closed",
           "policy-in-sqlite",
-          "policy-per-agent"
+          "policy-per-agent",
+          "policy-precedence"
         ]
       },
       {
@@ -188,7 +190,7 @@
         "linux": "verified",
         "windows": "unsupported"
       },
-      "lastVerified": "2026-09-14",
+      "lastVerified": "2026-09-15",
       "provenance": "declared"
     },
     {
@@ -292,21 +294,21 @@
       "id": "journal-append-only",
       "title": "The journal is append-only in fact, not by convention",
       "status": "verified",
-      "statement": "A call produces two immutable entries rather than one row that is updated. Nothing in the write path updates an entry.",
+      "statement": "A call produces two immutable entries rather than one row that is updated. Nothing in the write path updates an entry. Configuration that decides what may happen -- rules and enrolments -- is changed in one transaction with the entry that records the change.",
       "notGuaranteed": "Append-only as far as this code is concerned. Nothing stops another process opening the file and writing to it.",
       "implementation": [
         "engine/internal/journal/journal.go"
       ],
       "tests": [
         "TestReportsBecomeAppendOnlyEntries",
-        "TestEnrolmentAppendsNothingToTheChain"
+        "TestEnrolmentEntersTheChain"
       ],
       "platforms": {
         "darwin": "verified",
         "linux": "verified",
         "windows": "unverified"
       },
-      "lastVerified": "2026-08-11",
+      "lastVerified": "2026-09-15",
       "provenance": "declared"
     },
     {
@@ -358,7 +360,7 @@
       "id": "journal-schema-versioning",
       "title": "A journal spanning schema versions still verifies",
       "status": "verified",
-      "statement": "Verification dispatches on the version each entry stored, so entries written before agent existed keep verifying and a mixed chain checks out end to end. A table an earlier build created is rebuilt to the current definition on open, every row copied verbatim, so the chain that comes out is the chain that went in.",
+      "statement": "Verification dispatches on the version each entry stored: v1 before agent existed, v2 with it, v3 with the enrolment fields. A mixed chain checks out end to end, and a table an earlier build created is rebuilt to the current definition on open with every row copied verbatim, so the chain that comes out is the chain that went in.",
       "notGuaranteed": "An entry claiming a version this build does not know is refused rather than checked. That is intended, but it means a downgrade cannot read a newer journal.",
       "implementation": [
         "engine/internal/journal/canonical.go",
@@ -370,14 +372,20 @@
         "TestAnUnknownSchemaVersionIsRefused",
         "TestTheTwoEncodingsAreDistinct",
         "TestAJournalTableFromAnEarlierBuildIsRebuiltWithoutChangingTheChain",
-        "TestOpeningACurrentJournalRecreatesNothing"
+        "TestOpeningACurrentJournalRecreatesNothing",
+        "TestAV3EntryVerifies",
+        "TestAChainSpanningV1V2AndV3Verifies",
+        "TestTheV2AndV3EncodingsAreDistinct",
+        "TestADatabaseFromTheM4BuildGainsTheEnrolmentColumnsAndStillVerifies",
+        "TestANimRulesTableFromTheCurrentDDLIsWidenedForAllowRules",
+        "TestOpeningACurrentRulesTableRecreatesNothing"
       ],
       "platforms": {
         "darwin": "verified",
         "linux": "verified",
         "windows": "unverified"
       },
-      "lastVerified": "2026-09-14",
+      "lastVerified": "2026-09-15",
       "provenance": "declared"
     },
     {
@@ -385,7 +393,7 @@
       "title": "An agent identity cannot be claimed by the agent",
       "status": "verified",
       "statement": "The daemon derives the agent from the kernel: socket peer, its parent, the file that parent executes. There is no agent field on the wire.",
-      "notGuaranteed": "Two windows of one program are the same agent. Enrolment is as privileged as running Nim, and an enrolment change leaves no journal entry (F-018) although the rules scoped to it do.",
+      "notGuaranteed": "Two windows of one program are the same agent. Enrolment is as privileged as running Nim; since 2026-09-15 every enrolment change is an entry in the chain, so it is visible afterwards, not prevented.",
       "implementation": [
         "engine/internal/daemon/derive.go",
         "engine/internal/daemon/agent.go"
@@ -401,7 +409,7 @@
         "linux": "verified",
         "windows": "unsupported"
       },
-      "lastVerified": "2026-09-14",
+      "lastVerified": "2026-09-15",
       "provenance": "declared"
     },
     {
@@ -454,7 +462,7 @@
       "title": "Policy lives in SQLite and every change is in the chain",
       "status": "verified",
       "statement": "A rule is added or removed through the daemon, over the peer-verified socket, in one transaction with the rule.add or rule.remove entry recording it. The chain never says a rule exists that does not, and no rule exists the chain does not know about. config.toml carries no policy, and a file that still does is refused rather than read past.",
-      "notGuaranteed": "Anything able to run the binary as this user can add or remove a rule, exactly as it can enrol an agent; the entry is what makes that visible, not what prevents it. Rules only deny.",
+      "notGuaranteed": "Anything able to run the binary as this user can add or remove a rule, exactly as it can enrol an agent; the entry is what makes that visible, not what prevents it.",
       "implementation": [
         "engine/internal/journal/rules.go",
         "engine/internal/daemon/policy.go",
@@ -473,7 +481,7 @@
         "linux": "verified",
         "windows": "unverified"
       },
-      "lastVerified": "2026-09-14",
+      "lastVerified": "2026-09-15",
       "provenance": "declared"
     },
     {
@@ -481,7 +489,7 @@
       "title": "Two agents against one connector receive different verdicts",
       "status": "verified",
       "statement": "A decision is (agent, connector, tool). A rule scoped to an enrolled agent applies to sessions the daemon derived as that agent and to no other; a rule scoped to a connector applies to sessions started for it. The record distinguishes the agents on their session.start entries. Proven with two real client programs spawning real relays, not only in-process.",
-      "notGuaranteed": "A session no enrolment matched meets only the rules that name no agent (D-002). Rules only deny, so that is the same ceiling every session had before agents existed -- and it means an allow-list per agent cannot be expressed yet.",
+      "notGuaranteed": "A session no enrolment matched meets only the rules that name no agent (D-002). With deny rules alone that is the ceiling every session had before agents existed; with a default deny and an agent-scoped allow it is a denial -- enrolment is then what grants, and docs/decisions/0003 says so.",
       "implementation": [
         "engine/internal/daemon/daemon.go",
         "engine/internal/journal/rules.go",
@@ -499,7 +507,7 @@
         "linux": "verified",
         "windows": "unsupported"
       },
-      "lastVerified": "2026-09-14",
+      "lastVerified": "2026-09-15",
       "provenance": "declared"
     },
     {
@@ -527,6 +535,136 @@
         "windows": "unverified"
       },
       "lastVerified": "2026-09-14",
+      "provenance": "declared"
+    },
+    {
+      "id": "enrolment-changes-in-chain",
+      "title": "Enrolment changes are entries in the chain",
+      "status": "verified",
+      "statement": "nim agent add and nim agent remove write the enrolment and an agent.add or agent.remove entry in one SQLite transaction. The entry carries the name, the enrolled path and the resolved identity (schema_version 3), so re-enrolling a name against another executable -- which moves every rule scoped to that name -- is visible in the record beside the rules it moved.",
+      "notGuaranteed": "Visible, not prevented: anything that can run the binary as this user can still re-enrol a name. The identity recorded is device and inode, which a reboot or a reinstall can change; nim agent list reports the enrolment STALE when it no longer matches.",
+      "implementation": [
+        "engine/internal/journal/journal.go",
+        "engine/internal/journal/canonical.go",
+        "engine/internal/daemon/agent.go"
+      ],
+      "tests": [
+        "TestAnEnrolmentAndItsEntryAreOneChange",
+        "TestAnEnrolmentChangeThatCannotBeRecordedIsNotMade",
+        "TestReEnrollingWritesAnAgentAddWithTheNewIdentity",
+        "TestRemovingWritesAnAgentRemoveWithTheOldIdentity",
+        "TestAlteringAnAgentAddEntryBreaksTheChain",
+        "TestAReadOnlyJournalCannotChangeEnrolments",
+        "TestEnrolmentEntersTheChain"
+      ],
+      "platforms": {
+        "darwin": "verified",
+        "linux": "verified",
+        "windows": "unverified"
+      },
+      "lastVerified": "2026-09-15",
+      "provenance": "declared"
+    },
+    {
+      "id": "policy-precedence",
+      "title": "One function decides, and explain shows its work",
+      "status": "verified",
+      "statement": "Among the rules matching a call, the most specific wins (an exact tool over a default, a named agent or connector over an unnamed one); at equal specificity deny beats allow; with no matching rule the call is allowed, which is the M4 baseline. journal.Decide is that function, table-tested with no database, reused verbatim by nim policy explain, so the CLI cannot say something a real call would not do.",
+      "notGuaranteed": "No conditions on arguments, no time bounds, no budgets: a rule is keyed on (agent, connector, tool) and nothing else. A client that genuinely names a tool `*` matches a default rule like any other exact name would.",
+      "implementation": [
+        "engine/internal/journal/rules.go",
+        "engine/internal/daemon/policy.go",
+        "engine/internal/daemon/daemon.go"
+      ],
+      "tests": [
+        "TestDecideAppliesSpecificityThenDenyOverAllow",
+        "TestDecideIsOrderIndependent",
+        "TestDefaultDenyDeniesAnUnknownAgentWhileAnAgentScopedAllowAdmitsAnEnrolledOne",
+        "TestADefaultDenyClosesEverythingAndAnAgentScopedAllowReopensOneToolForOneAgent",
+        "TestPolicyExplainNamesTheDecidingRuleAndWhy",
+        "TestAllowAndDefaultRuleEntriesCarryTheEffectAndVerify"
+      ],
+      "platforms": {
+        "darwin": "verified",
+        "linux": "verified",
+        "windows": "unverified"
+      },
+      "lastVerified": "2026-09-15",
+      "provenance": "declared"
+    },
+    {
+      "id": "init-preserves-unrelated-config",
+      "title": "nim init rewrites only the servers it wraps",
+      "status": "verified",
+      "statement": "Unrelated top-level keys, an entry's other fields, env values and the file's own key order survive nim init untouched; only a wrapped or repointed entry's command and args change. Nothing is written without --write, --write copies the file to a 0600 backup first and writes atomically, and --undo restores the backup the same way.",
+      "notGuaranteed": "Untouched values are re-indented to match the rest of the file, so byte-for-byte whitespace is not preserved -- only content, position and key order are. Only stdio servers are wrapped; entries with a url are left alone and said so.",
+      "implementation": [
+        "engine/internal/clientconfig/rewrite.go",
+        "engine/internal/clientconfig/orderedobject.go",
+        "engine/internal/clientconfig/apply.go",
+        "engine/cmd/nim/init.go"
+      ],
+      "tests": [
+        "TestInitPreservesUnrelatedKeys",
+        "TestInitPreservesKeyOrder",
+        "TestInitPreservesEnvVerbatim",
+        "TestInitWriteCreatesABackupAndWritesAtomically",
+        "TestInitDryRunWritesNothing",
+        "TestInitUndoRestoresABackup",
+        "TestInitLeavesAnEntryAlreadyThroughNimAlone",
+        "TestInitLeavesHTTPServersAlone",
+        "TestInitThenDoctorSeeTheSameWrappedServer"
+      ],
+      "platforms": {
+        "darwin": "verified",
+        "linux": "verified",
+        "windows": "unverified"
+      },
+      "lastVerified": "2026-09-15",
+      "provenance": "declared"
+    },
+    {
+      "id": "doctor-does-not-start-what-it-checks",
+      "title": "nim doctor never starts the daemon it reports on",
+      "status": "verified",
+      "statement": "nim doctor dials the daemon socket without the auto-start every other command uses, so an unreachable daemon is reported as a warning rather than being brought up as a side effect of asking, and nothing doctor does writes anywhere.",
+      "notGuaranteed": "The warning does not distinguish a daemon that has never run from one that crashed a moment ago; both read the same way. Which checks are FAIL and which are WARN is a judgement, stated in doctor.go.",
+      "implementation": [
+        "engine/internal/shim/shim.go",
+        "engine/cmd/nim/doctor.go"
+      ],
+      "tests": [
+        "TestDoctorWarnsWithoutStartingADaemon",
+        "TestDoctorReportsHealthyWithARunningDaemon",
+        "TestDoctorFailsVerbatimOnAStalePolicySection"
+      ],
+      "platforms": {
+        "darwin": "verified",
+        "linux": "verified",
+        "windows": "unverified"
+      },
+      "lastVerified": "2026-09-15",
+      "provenance": "declared"
+    },
+    {
+      "id": "version-string-shape",
+      "title": "nim version reports what build it is",
+      "status": "verified",
+      "statement": "nim version prints version, commit, build time, platform and Go version in one documented shape, stamped by the release workflow's -ldflags at build time.",
+      "notGuaranteed": "A binary built any other way (go build, go run) reports unknown for commit and build time; the shape holds, the values are only meaningful for a release archive. No release has been published yet.",
+      "implementation": [
+        "engine/cmd/nim/main.go",
+        ".github/workflows/release.yml"
+      ],
+      "tests": [
+        "TestVersionStringHasTheDocumentedShape"
+      ],
+      "platforms": {
+        "darwin": "verified",
+        "linux": "verified",
+        "windows": "unverified"
+      },
+      "lastVerified": "2026-09-15",
       "provenance": "declared"
     }
   ],
@@ -746,10 +884,13 @@
       "id": "enrolment-overwrite",
       "name": "Overwrite another agent's enrolment",
       "category": "identity",
-      "status": "fail",
+      "status": "pass",
       "wasLive": false,
-      "evidence": "Anything that can run the nim binary as this user can re-enrol any name against any executable, and now that rules are scoped to enrolments, that moves the name's rules to the new program. A rule change is journaled; an enrolment change is not (F-018). Not a bypass of the same-user threat model, which already grants this, but the one place a policy input changes without a chain entry.",
-      "tests": []
+      "evidence": "Anything that can run the nim binary as this user can re-enrol any name against any executable, and now that rules are scoped to enrolments that moves the name's rules to the new program. Since 2026-09-15 the re-enrolment is an agent.add entry in the chain carrying the new identity, beside the rules it moved: not prevented -- the same-user threat model grants it -- but recorded where nim verify covers it.",
+      "tests": [
+        "TestReEnrollingWritesAnAgentAddWithTheNewIdentity",
+        "TestAlteringAnAgentAddEntryBreaksTheChain"
+      ]
     },
     {
       "id": "connector-overwrite",
@@ -891,11 +1032,13 @@
       "category": "policy",
       "status": "pass",
       "wasLive": false,
-      "evidence": "Bound by the rules that name no agent, and nothing else: D-002, resolved 2026-09-14 in docs/decisions/0002. Rules only deny, so an unenrolled program has exactly the ceiling every session had before agents existed; nobody gains by avoiding enrolment. The answer has to be given again for allow rules, which is M4.5's question.",
+      "evidence": "Bound by the rules that name no agent, and nothing else: D-002, resolved in docs/decisions/0002 for deny rules and again in docs/decisions/0003 for the allow model. With deny rules alone an unenrolled program has the ceiling every session had before agents existed; with nim policy default deny plus an agent-scoped allow it is denied by the default -- enrolment is then what grants.",
       "tests": [
         "TestAnUndeterminedAgentIsRecordedAsAbsentNotRefused",
         "TestTwoAgentsAgainstOneConnectorReceiveDifferentVerdicts",
-        "TestRuleScopes"
+        "TestRuleScopes",
+        "TestDefaultDenyDeniesAnUnknownAgentWhileAnAgentScopedAllowAdmitsAnEnrolledOne",
+        "TestADefaultDenyClosesEverythingAndAnAgentScopedAllowReopensOneToolForOneAgent"
       ]
     },
     {
@@ -916,8 +1059,11 @@
       "category": "policy",
       "status": "partial",
       "wasLive": false,
-      "evidence": "Allowed. Rules only deny, so anything no rule names passes -- deliberate, and the reason an allow model (M4.5) is still ahead. What changed in M4 is that a rule can now be scoped to an agent and a connector, and lives where a change is recorded.",
-      "tests": []
+      "evidence": "Allowed, unless a default deny is set. Since M4.5 rules can grant as well as refuse: nim policy default deny closes everything and nim policy allow reopens one tool for one agent or connector. With no default rule, anything no rule names still passes, which is the M4 baseline a fresh install keeps. Partial because the closed posture is something the operator opts into, not the default.",
+      "tests": [
+        "TestDecideAppliesSpecificityThenDenyOverAllow",
+        "TestADefaultDenyClosesEverythingAndAnAgentScopedAllowReopensOneToolForOneAgent"
+      ]
     },
     {
       "id": "compromised-same-user",
@@ -1011,11 +1157,13 @@
       "category": "policy",
       "status": "pass",
       "wasLive": false,
-      "evidence": "A rule and its rule.add or rule.remove entry are one SQLite transaction: a trigger that refuses the entry leaves no rule, and one that refuses the rule leaves no entry. The entry is hashed into the chain like a call, so editing it afterwards breaks verification. What remains outside the chain is the enrolment a rule is scoped to (F-018).",
+      "evidence": "A rule and its rule.add or rule.remove entry are one SQLite transaction: a trigger that refuses the entry leaves no rule, and one that refuses the rule leaves no entry. The entry is hashed into the chain like a call, so editing it afterwards breaks verification. Since 2026-09-15 the same holds for enrolments (agent.add, agent.remove).",
       "tests": [
         "TestARuleAndItsEntryAreOneChange",
         "TestAPolicyChangeThatCannotBeRecordedIsNotMade",
-        "TestAlteringAPolicyEntryBreaksTheChain"
+        "TestAlteringAPolicyEntryBreaksTheChain",
+        "TestAnEnrolmentAndItsEntryAreOneChange",
+        "TestAnEnrolmentChangeThatCannotBeRecordedIsNotMade"
       ]
     },
     {
@@ -1038,6 +1186,35 @@
       "evidence": "nim console binds loopback, but a bind address is not a name: a page on any site can have its own hostname resolve to 127.0.0.1 and then read /api/snapshot, /api/events and every session as if they were its own origin. The console now answers only to a loopback Host -- localhost, 127.0.0.1, ::1 -- and refuses any other name with 421 before a route runs.",
       "tests": [
         "TestTheConsoleAnswersOnlyToALoopbackName"
+      ]
+    },
+    {
+      "id": "console-secret",
+      "name": "Read a connector's secret through the console",
+      "category": "console",
+      "status": "pass",
+      "wasLive": false,
+      "evidence": "The console's /api/policy lists rules, enrolments and connectors from the read-only journal handle. There is no secret to leak: the credential lives in the OS store and the journal holds only the env key name and the authorized command. A test asserts the endpoint's JSON never carries a key named secret or a credential value, and the route keeps the console's GET-only and loopback-Host rules.",
+      "tests": [
+        "TestPolicyNeverExposesASecret",
+        "TestPolicyReturnsRulesAgentsAndConnectors",
+        "TestTheConsoleAnswersOnlyToALoopbackName"
+      ]
+    },
+    {
+      "id": "init-config-damage",
+      "name": "Make nim init damage a client's configuration",
+      "category": "lifecycle",
+      "status": "pass",
+      "wasLive": false,
+      "evidence": "nim init writes nothing without --write; with it, the original is copied to a 0600 backup first and the new file is written to a temporary name and renamed, so a crash leaves either the old file or the new one. A file that does not parse, or is not a JSON object, is refused. Unrelated keys, env values and key order are preserved; an entry already through Nim is left alone rather than wrapped twice; --undo restores the backup atomically.",
+      "tests": [
+        "TestInitWriteCreatesABackupAndWritesAtomically",
+        "TestInitRefusesAFileThatIsNotValidJSON",
+        "TestInitRefusesAFileThatIsNotAJSONObject",
+        "TestInitRunTwiceIsIdempotent",
+        "TestInitUndoRestoresABackup",
+        "TestInitUndoRefusesAPathThatIsNotABackup"
       ]
     }
   ],
@@ -1103,9 +1280,9 @@
       "title": "Enrolment changes leave no journal entry",
       "problem": "A rule is journaled when it is added or removed; the enrolment it is scoped to is not. nim agent add can move a name -- and every rule scoped to it -- to a different executable with nothing in the chain saying so.",
       "impact": "An audit of the rules is possible; an audit of who the rules applied to, over time, is not. Same-user threat model, so not a bypass, but the one policy input that changes silently.",
-      "evidence": "engine/internal/daemon/agent.go writes nim_agents outside the chain, deliberately, from before rules existed. Noted while closing F-004.",
-      "status": "open",
-      "nextAction": "Record agent.add and agent.remove as chain entries, the way rule.add and rule.remove are, carrying the enrolled path and the resolved identity.",
+      "evidence": "Fixed 2026-09-15: agent.add and agent.remove are chain entries at schema_version 3, carrying the enrolled path and the resolved identity, written in one transaction with the enrolment (AddAgent, RemoveAgent). A journal from the M4 build is rebuilt on open with its rows unchanged.",
+      "status": "fixed",
+      "nextAction": "None. The enrolment a rule is scoped to now has the same history the rule has; F-006 remains what it is, a property of one OS user.",
       "provenance": "declared"
     },
     {
@@ -1212,10 +1389,10 @@
       "severity": "medium",
       "title": "Enrolment is as privileged as running Nim",
       "problem": "Anything that can execute the binary as this user can enrol an agent or replace an existing enrolment.",
-      "impact": "Now that rules are scoped to enrolments, re-enrolling a name against another executable moves that name's rules to the new program. The rules are journaled; the enrolment change is not (F-018).",
+      "impact": "Now that rules are scoped to enrolments and can grant, re-enrolling a name against another executable moves that name's rules, allow rules included, to the new program. Both the rule and the enrolment change are in the chain, so it is visible afterwards; it is not prevented.",
       "evidence": "engine/internal/daemon/agent.go says so in its own comment; docs/decisions/0002 states what an enrolment is worth.",
       "status": "open",
-      "nextAction": "Journal enrolment changes (F-018). Beyond that it is a property of running everything as one OS user, and needs a second principal to close.",
+      "nextAction": "Needs a second OS principal to close: the daemon owning the enrolments as a user the agent is not. Not a journaling problem any more.",
       "provenance": "declared"
     },
     {
@@ -1278,7 +1455,7 @@
       "title": "What may an unknown agent do?",
       "question": "Once grants exist, is an unenrolled spawner denied, or does it fall back to the global policy?",
       "status": "resolved",
-      "resolution": "A session no enrolment matched is bound by the rules that name no agent, and by nothing else. Rules only deny, so enrolment can only take capabilities away: an unenrolled program has exactly the ceiling every session had before agents existed, and nobody gains by avoiding enrolment. docs/decisions/0002 is the argument. It has to be answered again for allow rules, which are M4.5.",
+      "resolution": "A session no enrolment matched is bound by the rules that name no agent, and by nothing else. Rules only deny, so enrolment can only take capabilities away: an unenrolled program has exactly the ceiling every session had before agents existed, and nobody gains by avoiding enrolment. docs/decisions/0002 is the argument. It has to be answered again for allow rules, which are M4.5. Answered again for the allow model on 2026-09-15 in docs/decisions/0003: with nim policy default deny plus an agent-scoped allow, enrolment is what grants and an unenrolled program is denied by the default.",
       "provenance": "declared",
       "decidedOn": "2026-09-14"
     },
@@ -1431,25 +1608,35 @@
         "policy-per-agent"
       ],
       "limitations": [
-        "Rules only deny; allow rules and precedence are M4.5.",
+        "Rules only denied until M4.5.",
         "Two windows of one program are the same agent.",
-        "Enrolment changes are not journaled (F-018)."
+        "Enrolment changes were not journaled until 2026-09-15 (F-018, closed)."
       ],
       "pending": []
     },
     {
       "id": "M4.5",
-      "name": "Grants (Cedar), if it is still the answer",
-      "status": "planned",
-      "objective": "Express allow/deny in something richer than a list, once there is a subject to talk about.",
-      "deliverables": [],
-      "guarantees": [],
-      "limitations": [],
-      "pending": [
-        "Allow rules and a precedence between allow and deny -- a policy language, with the Cedar spike in front of it.",
-        "Answer D-002 again for the allow model: an unknown agent must be denied wherever enrolment is what grants.",
-        "Journal enrolment changes (F-018) before rules can be trusted across re-enrolments."
-      ]
+      "name": "Allow rules and precedence",
+      "status": "done",
+      "objective": "Allow as well as deny, with a precedence stated in one function and shown by nim policy explain, without a policy language.",
+      "deliverables": [
+        "effect deny|allow on every rule",
+        "defaults with nim policy default deny|allow, scoped like any rule",
+        "journal.Decide: most specific wins, deny beats allow, no rule means allow",
+        "nim policy allow / default / explain, and remove --default",
+        "policy.explain daemon request behind the CLI",
+        "nim_rules CHECK widened by a rebuild existing databases survive",
+        "D-002 answered again for the allow model (docs/decisions/0003)"
+      ],
+      "guarantees": [
+        "policy-precedence",
+        "policy-per-agent"
+      ],
+      "limitations": [
+        "No conditions on arguments, no time bounds, no budgets: those need a language or a counter, and are M5 and later.",
+        "Cedar was not needed for this; the spike stays deferred until something a precedence cannot express is wanted."
+      ],
+      "pending": []
     },
     {
       "id": "M5",
@@ -1460,7 +1647,7 @@
       "guarantees": [],
       "limitations": [],
       "pending": [
-        "Needs agent identity."
+        "Per-session call budgets per (agent, connector), decremented at decision time and recorded in the chain."
       ]
     },
     {
@@ -1472,7 +1659,7 @@
       "guarantees": [],
       "limitations": [],
       "pending": [
-        "Needs agent identity."
+        "Out-of-band approval showing real parameters, never a model-generated summary."
       ]
     },
     {

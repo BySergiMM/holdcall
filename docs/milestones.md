@@ -323,9 +323,12 @@ What it does not do, stated rather than implied:
   D-002. That is a policy language, and it is M4.5 with the spike in front.
 - **Two windows of one program are the same agent.** The identity is the
   executable, not the instance.
-- **Enrolment changes are not journaled** (F-018). Re-enrolling a name moves
-  every rule scoped to it, and the chain does not say so. The rules are in the
-  chain; the thing they are scoped to is not yet.
+- **Enrolment changes were not journaled** (F-018) when this milestone closed.
+  Re-enrolling a name moved every rule scoped to it with nothing in the chain
+  saying so. Closed on 2026-09-15: `agent.add` and `agent.remove` are entries
+  at schema_version 3, carrying the enrolled path and the resolved identity,
+  written in one transaction with the enrolment -- `docs/journal-format.md`
+  has the encoding.
 - **The decision costs one more read.** `docs/benchmarks.md` has the figures:
   p50 moved from 0.075 ms to 0.091 ms and p99 stayed where it was.
 
@@ -430,13 +433,12 @@ What it does not do, stated rather than implied:
 - **No time bounds and no budgets.** Both need a clock or a counter to name,
   which a precedence between two rules has no reason to grow on its own.
 - **No human approval.** Still M6.
-- **Enrolment changes are still not journaled (F-018).** This milestone did
-  not touch it: a rule scoped to a name is only as trustworthy as the record
-  of what that name pointed at, and that record still does not exist. It
-  matters more now than it did in M4, because a name can grant as well as
-  restrict -- re-enrolling `claude-code` against a different executable
-  moves an allow rule's meaning with it, silently. Still open, still worth
-  closing before this model is trusted for anything that matters.
+- **Enrolment changes are journaled since 2026-09-15** (F-018, closed the
+  same day as this milestone). A rule scoped to a name is only as trustworthy
+  as the record of what that name pointed at, and that record now exists:
+  `agent.add` and `agent.remove` entries carry the enrolled path and the
+  resolved identity, so re-enrolling `claude-code` against another executable
+  is visible in the chain beside the allow rules it moves.
 
 **What would still need a language, if one of these is ever asked for:**
 conditions on a call's arguments (a real policy grammar, not a

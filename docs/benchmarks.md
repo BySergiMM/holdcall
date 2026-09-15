@@ -60,6 +60,14 @@ was; the commit still dominates. The contended `max` roughly doubled on this
 run, which is one sample at the tail of sixteen relays fighting for one write
 lock and is not a figure to build on.
 
+**What M4.5 cost.** Allow rules and a precedence between allow and deny
+(`docs/decisions/0003`) changed the lookup from "is there a deny for this
+tool" to "collect every matching rule and pick one": at most eight candidate
+rows through the same unique index. Re-run on 2026-09-15 with the same
+command: `DecisionRoundTrip` p50 0.092 ms, p99 0.272 ms; contended p50
+1.17 ms, p99 1.78 ms; `DecisionDenied` p50 0.091 ms, p99 0.151 ms. Within the
+noise of the M4 figures above, so the table is not restated.
+
 **Deny is not slower than allow.** It does the same journal write and the same
 rule lookup. If those diverged it would mean the rules had become the expensive
 part; for an indexed exact-name lookup they must not, and they do not.
