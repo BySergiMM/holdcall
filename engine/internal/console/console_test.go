@@ -489,13 +489,16 @@ func TestTheDerivedAgentReachesTheBrowser(t *testing.T) {
 // reach the browser through this endpoint, with the shape the console's
 // Policy tab reads: rules only ever deny, and a scopeless one names neither
 // an agent nor a connector.
-func TestPolicyReturnsRulesAgentsAndConnectors(t *testing.T) {
+func TestPolicyReturnsRulesBudgetsAgentsAndConnectors(t *testing.T) {
 	srv, _ := serve(t, func(j *journal.Journal) {
 		if _, err := j.AddRule(journal.Rule{Tool: "rm", Effect: journal.DecisionDeny}); err != nil {
 			t.Fatal(err)
 		}
 		if err := j.SetConnector("github", "GITHUB_TOKEN",
 			[]string{"npx", "-y", "@modelcontextprotocol/server-github"}, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := j.AddBudget(journal.Budget{Tool: "list_repos", Calls: 20}); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -508,6 +511,11 @@ func TestPolicyReturnsRulesAgentsAndConnectors(t *testing.T) {
 
 	if len(pol.Rules) != 1 || pol.Rules[0].Tool != "rm" {
 		t.Fatalf("rules = %+v, want one rule denying rm", pol.Rules)
+	}
+	// Budgets too, since M5: a Policy tab without them would show a session
+	// as unbounded that is not.
+	if len(pol.Budgets) != 1 || pol.Budgets[0].Tool != "list_repos" || pol.Budgets[0].Calls != 20 {
+		t.Fatalf("budgets = %+v, want one budget of 20 on list_repos", pol.Budgets)
 	}
 	if pol.Rules[0].Agent != nil || pol.Rules[0].Connector != nil {
 		t.Errorf("a scopeless rule gained a scope: %+v", pol.Rules[0])

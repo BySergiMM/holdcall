@@ -107,12 +107,16 @@ func TestReadModelSurfaceIsFrozen(t *testing.T) {
 		// which a console has no reason to show) and Connector carries no
 		// secret (there is none in the journal to show).
 		{"Rule", Rule{}, []string{"agent", "connector", "created_at", "effect", "tool"}},
+		// Budget joined with M5: a cap, scoped like a rule, on the allowed
+		// calls one session may make. Its calls are the one number here
+		// that is a limit rather than a count of something recorded.
+		{"Budget", Budget{}, []string{"agent", "calls", "connector", "created_at", "tool"}},
 		{"Agent", Agent{}, []string{"current", "enrolled_at", "exec_path", "name"}},
 		{"Connector", Connector{}, []string{"command", "env_key", "target", "updated_at"}},
 		{"Policy", Policy{}, []string{
-			"agent", "agents", "command", "connector", "connectors", "created_at",
-			"current", "effect", "enrolled_at", "env_key", "exec_path", "name", "rules",
-			"target", "tool", "updated_at",
+			"agent", "agents", "budgets", "calls", "command", "connector", "connectors",
+			"created_at", "current", "effect", "enrolled_at", "env_key", "exec_path", "name",
+			"rules", "target", "tool", "updated_at",
 		}},
 	}
 
@@ -169,7 +173,7 @@ func TestReadModelCannotExpressEnforcement(t *testing.T) {
 	// Policy carries Rule, Agent and Connector through its own fields, so
 	// walking it also checks them: a connector row must never grow a field
 	// this list would catch, any more than an Event may.
-	for _, dto := range []any{Event{}, Page{}, Snapshot{}, JournalState{}, Gaps{}, Session{}, SessionDetail{}, Policy{}} {
+	for _, dto := range []any{Event{}, Page{}, Snapshot{}, JournalState{}, Gaps{}, Session{}, SessionDetail{}, Policy{}, Budget{}} {
 		name := reflect.TypeOf(dto).Name()
 		for _, field := range jsonFields(t, dto) {
 			if why, bad := forbidden[field]; bad {

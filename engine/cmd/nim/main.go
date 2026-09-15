@@ -356,6 +356,7 @@ func renderGaps(w io.Writer, gaps readmodel.Gaps) {
 func renderPolicy(w io.Writer, pol readmodel.Policy) {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "policy   rules        ", len(pol.Rules))
+	fmt.Fprintln(w, "         budgets      ", len(pol.Budgets))
 
 	stale, unknown := 0, 0
 	for _, a := range pol.Agents {

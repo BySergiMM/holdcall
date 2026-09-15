@@ -197,6 +197,20 @@ tbody tr.sel{background:#1d2836}
     </div>
 
     <div class="panel">
+      <div class="hd">Budgets — how many allowed calls one session may make</div>
+      <div class="scroll"><table>
+        <thead><tr><th>calls</th><th>agent</th><th>connector</th><th>tool</th><th>created</th></tr></thead>
+        <tbody id="policy-budgets"></tbody>
+      </table></div>
+      <div class="bd">
+        <p class="note">A cap, scoped like a rule, on the calls a session may make once the rules
+        have allowed them; <code>*</code> means every tool. A budget never grants, and it counts
+        decisions, not outcomes: a call the relay gave up on still spent its share, a refusal never
+        does. A session is one relay run, so a restarted client starts with a fresh count.</p>
+      </div>
+    </div>
+
+    <div class="panel">
       <div class="hd">Agents — enrolled programs</div>
       <div class="scroll"><table>
         <thead><tr><th>name</th><th>state</th><th>enrolled</th><th>exec path</th></tr></thead>
@@ -366,6 +380,7 @@ function renderOverview() {
     const agents = policy.agents || [];
     const stale = agents.filter((a) => a.current === false).length;
     pr.appendChild(cell((policy.rules || []).length, "rules", "allow and deny, in effect"));
+    pr.appendChild(cell((policy.budgets || []).length, "budgets", "caps on allowed calls, per session"));
     pr.appendChild(cell(agents.length, "agents enrolled",
       stale ? stale + " stale" : "", stale ? "warn" : ""));
     pr.appendChild(cell((policy.connectors || []).length, "connectors registered"));
@@ -437,7 +452,7 @@ function renderSessions() {
 }
 
 function renderPolicy() {
-  const p = policy || {rules: [], agents: [], connectors: []};
+  const p = policy || {rules: [], budgets: [], agents: [], connectors: []};
 
   const rr = $("#policy-rules"); rr.replaceChildren();
   if (!p.rules.length) {
@@ -453,6 +468,23 @@ function renderPolicy() {
       add(r.tool);
       add(when(r.created_at), "dim");
       rr.appendChild(tr);
+    }
+  }
+
+  const br = $("#policy-budgets"); br.replaceChildren();
+  if (!(p.budgets || []).length) {
+    const tr = el("tr"), td = el("td", "empty", "No budgets set.");
+    td.colSpan = 5; tr.appendChild(td); br.appendChild(tr);
+  } else {
+    for (const b of p.budgets) {
+      const tr = el("tr");
+      const add = (v, c) => { const td = el("td", c); td.textContent = v === undefined || v === null ? "" : v; tr.appendChild(td); };
+      add(b.calls);
+      add(b.agent || "every", b.agent ? "" : "dim");
+      add(b.connector || "every", b.connector ? "" : "dim");
+      add(b.tool);
+      add(when(b.created_at), "dim");
+      br.appendChild(tr);
     }
   }
 

@@ -680,7 +680,7 @@
       "id": "budgets-cap-allowed-calls",
       "title": "A budget caps the allowed calls one session may make",
       "status": "verified",
-      "statement": "Once the rules allow a call, every budget whose scope matches is weighed against that session's call.request entries with decision allow or approved; a call that would exceed a matching budget's cap is denied, with a reason naming the budget, and the decision is written before the relay is told.",
+      "statement": "Once the rules allow a call, every budget whose scope matches is weighed against that session's call.request entries with decision allow or approved; a call that would exceed a matching budget's cap is denied, with a reason naming the budget, and the decision is written before the relay is told. A budget that exists is shown wherever the policy is shown: nim policy list, nim status and the console.",
       "notGuaranteed": "A budget never grants: it cannot turn a rule's deny into anything else. It counts decisions, not outcomes, so a call the relay gave up waiting on still counts. It does not survive a restarted relay: a new session starts with a fresh count.",
       "implementation": [
         "engine/internal/journal/budgets.go",
@@ -694,7 +694,10 @@
         "TestABudgetScopedToAllToolsCountsAcrossTools",
         "TestABudgetAndItsEntryAreOneChange",
         "TestABudgetChangeThatCannotBeRecordedIsNotMade",
-        "TestABudgetOfTwoRefusesTheThirdCallAndANewRelayStartsFresh"
+        "TestABudgetOfTwoRefusesTheThirdCallAndANewRelayStartsFresh",
+        "TestTakePolicyProjectsBudgets",
+        "TestPolicyReturnsRulesBudgetsAgentsAndConnectors",
+        "TestPolicyListShowsBudgets"
       ],
       "platforms": {
         "darwin": "verified",
@@ -1235,7 +1238,7 @@
       "evidence": "The console's /api/policy lists rules, enrolments and connectors from the read-only journal handle. There is no secret to leak: the credential lives in the OS store and the journal holds only the env key name and the authorized command. A test asserts the endpoint's JSON never carries a key named secret or a credential value, and the route keeps the console's GET-only and loopback-Host rules.",
       "tests": [
         "TestPolicyNeverExposesASecret",
-        "TestPolicyReturnsRulesAgentsAndConnectors",
+        "TestPolicyReturnsRulesBudgetsAgentsAndConnectors",
         "TestTheConsoleAnswersOnlyToALoopbackName"
       ]
     },
@@ -1809,7 +1812,7 @@
       "limitations": [
         "Per session means one relay run: a client that restarts its relay starts with a fresh count, on purpose; a cap meant to survive restarts needs a different subject than a session.",
         "No time bounds and no conditions on arguments: every allowed call costs one unit.",
-        "What the client is told is the same policy refusal as for a rule; the reason naming the budget is on the daemon's answer and in nim log, not in the tool error."
+        "What the client is told is the same policy refusal as for a rule, and the journal records the decision, not its reason: the sentence naming the budget exists only on the daemon's answer to the relay. A refusal by a budget and a refusal by a rule read alike in nim log."
       ],
       "pending": []
     },

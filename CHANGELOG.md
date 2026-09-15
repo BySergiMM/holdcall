@@ -24,6 +24,12 @@ the test names behind each claim live.
   for those sessions too, and writes a refusal with `resultType: "complete"`
   when the version requires it; older clients get the older shape unchanged.
   The relay rig runs its denial case under both handshakes.
+- **Budgets are shown wherever the policy is shown.** The M5 review found
+  that `nim policy list` showed budgets while `nim status` and the console's
+  Policy tab, which read the same projection, did not, so an operator reading
+  either would have believed a session unbounded that was not. The read model
+  carries budgets now, and a scope-less budget request is refused in a
+  budget's words rather than a rule's.
 - **`nim status` verifies that what answers on the socket is Nim.** It used
   to report `running` for whatever was bound there, so the impostor of
   `impostor_test.go` -- any process that binds the path first -- read as the

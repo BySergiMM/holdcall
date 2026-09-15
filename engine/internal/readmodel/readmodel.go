@@ -48,13 +48,15 @@ type SessionSource interface {
 	SessionEntries(id string, limit int) ([]journal.Entry, error)
 }
 
-// PolicySource backs the rules, agents and connectors listings: what may
-// happen, as opposed to the journal's record of what did. nim_rules,
-// nim_agents and nim_connectors sit outside the chain (see journal.go), so
-// this reads them the same way ListRules, ListAgents and ListConnectors
-// already do, and adds nothing new to what the journal handle can answer.
+// PolicySource backs the rules, budgets, agents and connectors listings:
+// what may happen, as opposed to the journal's record of what did.
+// nim_rules, nim_budgets, nim_agents and nim_connectors sit outside the
+// chain (see journal.go), so this reads them the same way ListRules,
+// ListBudgets, ListAgents and ListConnectors already do, and adds nothing
+// new to what the journal handle can answer.
 type PolicySource interface {
 	ListRules() ([]journal.Rule, error)
+	ListBudgets() ([]journal.Budget, error)
 	ListAgents() ([]journal.Agent, error)
 	ListConnectors() ([]journal.Connector, error)
 }

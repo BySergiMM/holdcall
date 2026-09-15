@@ -109,6 +109,16 @@ func TestPolicyListShowsBudgets(t *testing.T) {
 	if !strings.Contains(out, "7") || !strings.Contains(out, "gitlab") {
 		t.Errorf("nim policy list does not show the all-tools budget:\n%s", out)
 	}
+
+	// nim status reads the same projection the console does, without the
+	// daemon; a budget missing there would show a session as unbounded.
+	out, err = s.run(t, "status")
+	if err != nil {
+		t.Fatalf("nim status: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "budgets       2") {
+		t.Errorf("nim status does not count the two budgets:\n%s", out)
+	}
 }
 
 // nim policy explain reports the budgets that would apply to a call and

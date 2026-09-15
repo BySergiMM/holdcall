@@ -25,6 +25,7 @@ type fake struct {
 	anomalies map[string]int
 	verify    journal.VerifyReport
 	seedKnown bool
+	budgets   []journal.Budget
 	err       error
 	calls     []struct {
 		since int64
@@ -37,6 +38,7 @@ type fake struct {
 }
 
 func (f *fake) ListRules() ([]journal.Rule, error)           { return f.rules, f.err }
+func (f *fake) ListBudgets() ([]journal.Budget, error)       { return f.budgets, f.err }
 func (f *fake) ListAgents() ([]journal.Agent, error)         { return f.agents, f.err }
 func (f *fake) ListConnectors() ([]journal.Connector, error) { return f.connectors, f.err }
 

@@ -43,6 +43,40 @@ func RulesFrom(rows []journal.Rule) []Rule {
 	return out
 }
 
+// Budget is one cap as a reader sees it: the scope a rule would have, and
+// the number of allowed calls one session may make within it. Found missing
+// by the M5 review: `nim policy list` showed budgets and `nim status` and
+// the console did not, so an operator reading either would have believed a
+// session unbounded that was not.
+type Budget struct {
+	Agent     *string `json:"agent,omitempty"`
+	Connector *string `json:"connector,omitempty"`
+	Tool      string  `json:"tool"`
+	Calls     int64   `json:"calls"`
+	CreatedAt string  `json:"created_at"`
+}
+
+// BudgetFrom projects one budget. Copies, like RuleFrom.
+func BudgetFrom(b journal.Budget) Budget {
+	return Budget{
+		Agent:     copyString(b.Agent),
+		Connector: copyString(b.Connector),
+		Tool:      b.Tool,
+		Calls:     b.Calls,
+		CreatedAt: b.CreatedAt.UTC().Format(time.RFC3339Nano),
+	}
+}
+
+// BudgetsFrom projects every budget, in the order ListBudgets already reads
+// them in (oldest first, by id).
+func BudgetsFrom(rows []journal.Budget) []Budget {
+	out := make([]Budget, 0, len(rows))
+	for _, b := range rows {
+		out = append(out, BudgetFrom(b))
+	}
+	return out
+}
+
 // Agent is one enrolment as a reader sees it. ExecDev and ExecIno stay out:
 // they are the kernel identity a decision matches on, and a console has no
 // more reason to show them than to show a params_digest's preimage.
@@ -139,19 +173,21 @@ func ConnectorsFrom(rows []journal.Connector) []Connector {
 }
 
 // Policy is the configuration view: what an agent is, what a connector may
-// receive, and what is denied. Distinct from Snapshot, which is the record
-// of what happened -- rules only ever deny, an enrolment is as privileged as
-// running Nim, and a connector's command is the argv authorized to receive
-// its credential, none of which is a fact about a call that was made.
+// receive, what is allowed or denied, and how much of it a session may do.
+// Distinct from Snapshot, which is the record of what happened -- a rule or
+// a budget is what may happen, an enrolment is as privileged as running
+// Nim, and a connector's command is the argv authorized to receive its
+// credential, none of which is a fact about a call that was made.
 type Policy struct {
 	Rules      []Rule      `json:"rules"`
+	Budgets    []Budget    `json:"budgets"`
 	Agents     []Agent     `json:"agents"`
 	Connectors []Connector `json:"connectors"`
 }
 
-// TakePolicy reads rules, agents and connectors and projects them together,
-// so a page that shows all three -- the console's Policy tab, `nim status`
-// -- makes one call instead of three scattered across its caller.
+// TakePolicy reads rules, budgets, agents and connectors and projects them
+// together, so a page that shows all four -- the console's Policy tab, `nim
+// status` -- makes one call instead of four scattered across its caller.
 func TakePolicy(src PolicySource) (Policy, error) {
 	var p Policy
 
@@ -160,6 +196,12 @@ func TakePolicy(src PolicySource) (Policy, error) {
 		return p, err
 	}
 	p.Rules = RulesFrom(rules)
+
+	budgets, err := src.ListBudgets()
+	if err != nil {
+		return p, err
+	}
+	p.Budgets = BudgetsFrom(budgets)
 
 	agents, err := src.ListAgents()
 	if err != nil {

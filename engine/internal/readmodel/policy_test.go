@@ -188,12 +188,14 @@ func hasField(t *testing.T, doc []byte, field string) bool {
 // fake's other methods: a projection is a function of its input.
 type fakePolicy struct {
 	rules      []journal.Rule
+	budgets    []journal.Budget
 	agents     []journal.Agent
 	connectors []journal.Connector
 	err        error
 }
 
 func (f *fakePolicy) ListRules() ([]journal.Rule, error)           { return f.rules, f.err }
+func (f *fakePolicy) ListBudgets() ([]journal.Budget, error)       { return f.budgets, f.err }
 func (f *fakePolicy) ListAgents() ([]journal.Agent, error)         { return f.agents, f.err }
 func (f *fakePolicy) ListConnectors() ([]journal.Connector, error) { return f.connectors, f.err }
 
@@ -205,14 +207,14 @@ func TestTakePolicyAssemblesAllThreeAndNeverReturnsNilSlices(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pol.Rules == nil || pol.Agents == nil || pol.Connectors == nil {
+	if pol.Rules == nil || pol.Budgets == nil || pol.Agents == nil || pol.Connectors == nil {
 		t.Fatalf("an empty policy has nil slices: %+v", pol)
 	}
 	out, err := json.Marshal(pol)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`"rules":[]`, `"agents":[]`, `"connectors":[]`} {
+	for _, want := range []string{`"rules":[]`, `"budgets":[]`, `"agents":[]`, `"connectors":[]`} {
 		if !strings.Contains(string(out), want) {
 			t.Errorf("empty policy JSON = %s, want %s", out, want)
 		}
@@ -224,5 +226,36 @@ func TestTakePolicyAssemblesAllThreeAndNeverReturnsNilSlices(t *testing.T) {
 func TestTakePolicyReportsAReadFailure(t *testing.T) {
 	if _, err := TakePolicy(&fakePolicy{err: errors.New("journal unavailable")}); err == nil {
 		t.Fatal("TakePolicy hid a read failure")
+	}
+}
+
+// A budget reaches the reader with its scope and its cap, copied, in the
+// order the journal lists them. Found missing by the M5 review: nim policy
+// list showed budgets while nim status and the console, which read this
+// projection, showed a session as unbounded that was not.
+func TestTakePolicyProjectsBudgets(t *testing.T) {
+	agent := "claude-code"
+	when := time.Date(2026, 9, 15, 10, 0, 0, 0, time.UTC)
+	pol, err := TakePolicy(&fakePolicy{budgets: []journal.Budget{
+		{ID: 1, Tool: journal.BudgetToolAll, Calls: 100, CreatedAt: when},
+		{ID: 2, Agent: &agent, Tool: "rm", Calls: 3, CreatedAt: when.Add(time.Second)},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pol.Budgets) != 2 {
+		t.Fatalf("budgets = %+v, want two", pol.Budgets)
+	}
+	if pol.Budgets[0].Tool != "*" || pol.Budgets[0].Calls != 100 || pol.Budgets[0].Agent != nil {
+		t.Errorf("the all-tools budget was projected as %+v", pol.Budgets[0])
+	}
+	if pol.Budgets[1].Agent == nil || *pol.Budgets[1].Agent != agent || pol.Budgets[1].Calls != 3 {
+		t.Errorf("the agent-scoped budget was projected as %+v", pol.Budgets[1])
+	}
+	if pol.Budgets[1].Agent == &agent {
+		t.Error("the projection aliases the journal's memory")
+	}
+	if pol.Budgets[0].CreatedAt != "2026-09-15T10:00:00Z" {
+		t.Errorf("created_at = %q", pol.Budgets[0].CreatedAt)
 	}
 }

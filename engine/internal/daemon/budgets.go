@@ -124,6 +124,11 @@ func budgetTool(req Request) (string, error) {
 		}
 		return journal.BudgetToolAll, nil
 	}
+	// validateTool's own empty-tool message tells the caller to write a
+	// rule; a budget request that named no tool deserves its own sentence.
+	if req.BudgetTool == "" {
+		return "", fmt.Errorf("a budget needs the tool it caps: nim policy budget <n> --tool <tool>, or --all-tools")
+	}
 	if err := validateTool(req.BudgetTool); err != nil {
 		return "", err
 	}

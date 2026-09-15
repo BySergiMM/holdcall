@@ -216,6 +216,12 @@ func TestBudgetRequestsAreValidated(t *testing.T) {
 		if resp.Error == "" {
 			t.Errorf("%+v was accepted", bad)
 		}
+		// The refusal is about a budget. Found by review: the scope-less
+		// case used to borrow a rule's message and told the caller to
+		// write nim policy deny.
+		if strings.Contains(resp.Error, "rule") || strings.Contains(resp.Error, "policy deny") {
+			t.Errorf("%+v was refused in a rule's words: %s", bad, resp.Error)
+		}
 	}
 
 	j := openJournal(t, dbPath)
