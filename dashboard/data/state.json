@@ -442,7 +442,7 @@
       "title": "A client cannot tell it is going through Nim",
       "status": "verified",
       "statement": "Everything that is not a tools/call is forwarded as the exact bytes that arrived, and a real MCP client run direct and through Nim observes the same tool list, schemas, unicode, a 512 KiB payload, error propagation and ping. Unit tests cover the framing; tools/relay-rig proves it with a real client, re-run on 2026-09-15 against the current binary, including the two cases that must differ through Nim.",
-      "notGuaranteed": "The rig pins fastmcp to its legacy client mode: in its default mode Nim's own refusals do not parse (F-021). The rig has run locally and on darwin only; the relay-rig CI job exists but has not yet run on GitHub's runners, so linux stays partial and windows unverified.",
+      "notGuaranteed": "The rig has run under both the initialize and the server/discover handshake. The rig has run locally and on darwin only; the relay-rig CI job exists but has not yet run on GitHub's runners, so linux stays partial and windows unverified.",
       "implementation": [
         "engine/internal/mcp/mcp.go",
         "engine/internal/shim/shim.go"
@@ -1246,6 +1246,20 @@
         "TestInitNeverShowsAnEnvValue",
         "TestInitPreservesEnvVerbatim"
       ]
+    },
+    {
+      "id": "discover-handshake-unreadable-refusal",
+      "name": "Speak the newer server/discover handshake so the client cannot parse Nim's refusals",
+      "category": "protocol",
+      "status": "pass",
+      "wasLive": true,
+      "evidence": "Reproduced on 2026-09-15 with fastmcp 4.0.3 against the unmodified relay: a connector that answers server/discover moves the client onto the 2026-07-28 revision, where every result must name its resultType, and Nim's hand-written refusal did not -- the client raised a local ValidationError instead of reading 'Nim denied this call', which is not a refusal from where the model sits. Nim now watches server/discover as it watches initialize and writes each refusal in the dialect the session negotiated. Re-run after the fix: ToolError with Nim's text under both handshakes; the rig's denial case runs under both.",
+      "tests": [
+        "TestARefusalUnderTheDiscoverHandshakeCarriesResultType",
+        "TestARefusalUnderTheInitializeHandshakeDoesNotCarryResultType",
+        "TestARefusalCarriesResultTypeOnlyWhenTheProtocolRequiresIt",
+        "TestTheDiscoverHandshakeIsRelayedByteForByte"
+      ]
     }
   ],
   "findings": [
@@ -1299,10 +1313,17 @@
       "title": "Nim's own refusals predate the result shape a newer client negotiates",
       "problem": "fastmcp 4's default client mode negotiates a server/discover handshake under which every result carries a resultType field. Nim relays that traffic byte for byte, but the responses Nim writes itself -- the tool error that refuses a call (engine/internal/mcp/deny.go) -- do not carry the field, so a client in that mode fails to parse Nim's refusal instead of reading it as a tool error.",
       "impact": "A refused call reaches such a client as a local validation error rather than the clear 'Nim denied this call' text, which defeats the point of answering in the shape MCP uses for tool failures. Clients on the standard MCP handshake, including the Go end-to-end tests and the rig pinned to legacy mode, are unaffected.",
-      "evidence": "Found on 2026-09-15 while bringing the relay rig back: fastmcp 4.0.3 in its default mode raised a ValidationError on Nim's denial; pinned to mode=legacy the rig passes. Not fixed: the wire format Nim answers in is a protocol decision, and Nim would have to observe the negotiated dialect to answer in it.",
-      "status": "open",
-      "nextAction": "Decide whether Nim mirrors the negotiated handshake in its own responses (it already watches initialize for the protocol version) or documents the standard handshake as the one it speaks. tools/relay-rig/README.md records the pin.",
-      "provenance": "declared"
+      "evidence": "Found on 2026-09-15 while bringing the relay rig back: fastmcp 4.0.3 in its default mode raised a ValidationError on Nim's denial; pinned to mode=legacy the rig passed. Fixed the same day: the relay watches server/discover as it watches initialize, learns the negotiated version from the proposal and the server's supportedVersions, and writes a refusal with resultType \"complete\" when that version is 2026-07-28 or later. Reproduced before and after with the real client: the same call now raises ToolError with Nim's text in both modes, and the rig's denial case runs under both handshakes (RESULT: IDENTICAL, darwin, 2026-09-15).",
+      "status": "fixed",
+      "nextAction": "None. Older clients are sent the older shape unchanged; a future revision that changes the result shape again will need the same treatment, and the rig's default-mode case is where it would show.",
+      "provenance": "declared",
+      "fixedIn": "2026-09-15",
+      "tests": [
+        "TestARefusalCarriesResultTypeOnlyWhenTheProtocolRequiresIt",
+        "TestARefusalUnderTheDiscoverHandshakeCarriesResultType",
+        "TestAFailedDiscoverFallsBackToWhatInitializeSettles",
+        "TestTheNegotiatedVersionIsReadFromTheDiscoverAnswer"
+      ]
     },
     {
       "id": "F-013",

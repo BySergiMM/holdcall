@@ -91,9 +91,10 @@ Fields absent for a kind are NULL, and NULL is encoded distinctly from an empty
 string.
 
 Two placements are worth explaining. `protocol_version` sits on `session.end`
-because the negotiated version is only known once `initialize` has been
-answered, which is after `session.start` has already been written; a session
-that is interrupted therefore does not record one. And an `anomaly` entry
+because the negotiated version is only known once the handshake -- `initialize`,
+or `server/discover` on the 2026-07-28 revision -- has been answered, which is
+after `session.start` has already been written; a session that is interrupted
+therefore does not record one. And an `anomaly` entry
 carries no `seq`, because the per-session sequence counts calls, and lending an
 anomaly one of those numbers would read as a missing call later.
 

@@ -23,8 +23,9 @@ Pre-alpha, and honest about it. What works:
   list, schemas, unicode, a 512 KiB payload, error propagation and ping all
   pass through unchanged, and the two things that must differ — a refused
   call, a frame Nim will not read — differ exactly as documented
-  (`tools/relay-rig`, re-run against the current binary on 2026-09-15 and
-  now a CI job).
+  (`tools/relay-rig`, re-run against the current binary on 2026-09-15 under
+  both the `initialize` and the `server/discover` handshake, and now a CI
+  job).
 - **Refusal.** A `tools/call` is decided before it is forwarded, and the
   decision is written to the journal before the relay acts on it. A refused
   call never leaves Nim.

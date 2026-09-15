@@ -112,6 +112,7 @@ needed: the vnode check answers the question actually being asked.
 | 28 | Enrol a second name against the operator's client binary, then wait for a re-enrolment | **blocked** (one executable is one agent) | `agents_test.go`, `agent_test.go` |
 | 29 | Read a secret from `nim init`'s own output | **blocked** (env values never shown) | `rewrite_test.go` |
 | 30 | Read a connector's secret through the console | **blocked** (none is there to read) | `console_test.go` |
+| 31 | Speak the newer `server/discover` handshake so the client cannot parse Nim's refusals | **blocked** (refusals follow the negotiated dialect) | `dialect_test.go`, `deny_test.go`, `tools/relay-rig` |
 
 Live vulnerabilities found by audit rather than hypotheticals: **1** (any local
 process could read every credential), **3** (the journal was writable by

@@ -90,6 +90,8 @@ type Shim struct {
 	seq      int
 
 	initializeKey   string // id of the initialize request, while it is in flight
+	discoverKey     string // id of the server/discover request, while it is in flight
+	proposedVersion string // the version that server/discover proposed
 	protocolVersion string // what the client and server actually agreed on
 
 	finished sync.Once
@@ -354,6 +356,16 @@ func (s *Shim) pumpRequests(in io.Reader, out io.WriteCloser) {
 			s.mu.Lock()
 			s.initializeKey = env.Key()
 			s.mu.Unlock()
+
+		case env.IsDiscover():
+			// The other handshake. A client on the 2026-07-28 revision
+			// never sends initialize, so this is the only place the
+			// version can be learned -- and the version decides the shape
+			// a refusal has to take for that client to read it.
+			s.mu.Lock()
+			s.discoverKey = env.Key()
+			s.proposedVersion = env.ProposedProtocolVersion()
+			s.mu.Unlock()
 		}
 
 		// Byte for byte, whatever it was.
@@ -384,7 +396,7 @@ func (s *Shim) decide(env mcp.Envelope) bool {
 		s.noteAnomaly(anomaly)
 		s.refuse("a tools/call it could not read as one tool name")
 		if !env.IsNotification() {
-			s.toClient(mcp.DenyResponse(env.ID, mcp.DeniedUnreadable))
+			s.toClient(mcp.DenyResponse(env.ID, mcp.DeniedUnreadable, s.negotiated()))
 		}
 		return false
 	}
@@ -433,9 +445,18 @@ func (s *Shim) decide(env mcp.Envelope) bool {
 		if v == verdictDeniedByPolicy {
 			text = mcp.DeniedByPolicy
 		}
-		s.toClient(mcp.DenyResponse(env.ID, text))
+		s.toClient(mcp.DenyResponse(env.ID, text, s.negotiated()))
 	}
 	return false
+}
+
+// negotiated is the protocol version the session has agreed on so far, or ""
+// before either handshake has been answered. A refusal is written in the
+// dialect of that version, so a client reads it as the tool error it is.
+func (s *Shim) negotiated() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.protocolVersion
 }
 
 // batchMayPass reports whether a JSON-RPC batch may be relayed.
@@ -515,6 +536,14 @@ func (s *Shim) noteResponse(env mcp.Envelope) {
 	if key != "" && key == s.initializeKey {
 		s.protocolVersion = env.ProtocolVersion()
 		s.initializeKey = ""
+	}
+	if key != "" && key == s.discoverKey {
+		// An error here means the client will fall back to initialize,
+		// which is watched above; the version stays unknown until then.
+		if v := env.NegotiatedVersion(s.proposedVersion); v != "" {
+			s.protocolVersion = v
+		}
+		s.discoverKey, s.proposedVersion = "", ""
 	}
 	p, found := s.inFlight[key]
 	delete(s.inFlight, key)

@@ -13,6 +13,17 @@ the test names behind each claim live.
 
 ### Fixed
 
+- **Nim's refusals now follow the handshake the session negotiated (F-021).**
+  A connector that speaks the 2026-07-28 revision is negotiated through
+  `server/discover` rather than `initialize`, and every result on that
+  revision must name its `resultType`. Nim relayed such sessions byte for byte
+  but wrote its own refusals in the older shape, so a client on that revision
+  (fastmcp 4 in its default mode) raised a local validation error instead of
+  reading "Nim denied this call". The relay now watches `server/discover` as
+  it watches `initialize`, records the negotiated version on `session.end`
+  for those sessions too, and writes a refusal with `resultType: "complete"`
+  when the version requires it; older clients get the older shape unchanged.
+  The relay rig runs its denial case under both handshakes.
 - **Four findings from the 2026-09-15 review of the merged M4.5 work, closed
   before it shipped.** Two names could be enrolled against one executable and
   the lookup between them had no order, so a same-user process that enrolled a

@@ -29,6 +29,13 @@ The rig starts its own `nim daemon` (over its own `NIM_HOME`, at
 through it with `nim policy deny`, and stops that daemon again once done —
 whether or not the comparison passed.
 
+Every fastmcp transport is closed before the daemon is stopped. fastmcp keeps
+the relay subprocess alive after the client context exits (`keep_alive`
+defaults to true) and only ends it when the transport is closed or the event
+loop is torn down; a relay that outlives the daemon reports, correctly, that
+its `session.end` went unrecorded. That report is Nim working as designed,
+and the rig's job is not to provoke it.
+
 ## Python version
 
 fastmcp (every release, checked back to 0.1.0) requires Python >=3.10. This
@@ -41,25 +48,26 @@ whatever `python3.10+` you have.
 ## The must-match cases
 
 Tool list, JSON schemas, a unicode round-trip, a 512 KiB payload, a tool that
-raises, and `ping`. `Client(..., mode="legacy")` pins the classic `initialize`
-handshake for both runs: the installed SDK also speaks a newer
-`server/discover` negotiation by default (`mode="auto"`), under which every
-result carries a `resultType` discriminator that Nim's own hand-written
-denial responses (`engine/internal/mcp/deny.go`) predate and do not carry —
-under that mode a client cannot even parse Nim's refusal, and raises a local
-`ValidationError` instead of the `ToolError` the refusal is supposed to read
-as. That gap is real; widening the wire format is a protocol decision the CI
-task that added this comparison is not the place to make unilaterally, so the
-rig pins the handshake version Nim was actually built and tested against —
-`2025-06-18`, the same one `engine/cmd/nim/e2e_test.go` uses — and this is
-recorded as an open issue rather than silently worked around.
+raises, and `ping`, all under `Client(..., mode="legacy")`, the classic
+`initialize` handshake. The client's default mode is exercised by the
+must-differ case below rather than here: the MATCH cases compare what the
+client observed on each side, and what they observe does not depend on the
+handshake, while the refusal does.
 
 ## The must-differ cases
 
-**A tool a rule denies.** `dangerous_tool` succeeds when called directly, so a
-refusal through Nim proves Nim stopped it, not that the server had nothing to
-say. The rig runs `nim policy deny dangerous_tool` against its own daemon
-before comparing. Through Nim the call must come back as a tool error whose
+**A tool a rule denies, under both handshakes.** `dangerous_tool` succeeds
+when called directly, so a refusal through Nim proves Nim stopped it, not
+that the server had nothing to say. The rig runs `nim policy deny
+dangerous_tool` against its own daemon before comparing, and runs this case
+twice: under `mode="legacy"` (`initialize`) and under the client's default
+`mode="auto"`, which since fastmcp 4 negotiates `server/discover` and the
+2026-07-28 revision, where every result carries a `resultType` the client
+validates strictly. A refusal is the one message Nim writes itself, so it is
+the one place a dialect mismatch can hide: before Nim answered in the
+negotiated dialect, a client in the default mode raised a local
+`ValidationError` on the refusal instead of the `ToolError` it is meant to
+read as (F-021, fixed 2026-09-15). Through Nim the call must come back as a tool error whose
 text is exactly `mcp.DeniedByPolicy`: `"Nim denied this call by policy. Do not
 retry automatically."` — it names Nim, and it says not to retry.
 

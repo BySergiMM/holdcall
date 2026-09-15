@@ -43,9 +43,16 @@ type toolText struct {
 	Text string `json:"text"`
 }
 
+// ResultTypeComplete is the resultType of an ordinary, finished tool result
+// under the revisions that require the field. The specification's own words:
+// when the field is absent, "the client MUST treat the absent field as
+// "complete"" -- so this is the value the older shape already meant.
+const ResultTypeComplete = "complete"
+
 type toolResult struct {
-	Content []toolText `json:"content"`
-	IsError bool       `json:"isError"`
+	Content    []toolText `json:"content"`
+	IsError    bool       `json:"isError"`
+	ResultType string     `json:"resultType,omitempty"`
 }
 
 // id is json.RawMessage everywhere below. Decoding and re-encoding it would
@@ -77,15 +84,28 @@ type errorResponse struct {
 // model reads the text and can react to it, which is the whole reason MCP
 // reports tool failures this way.
 //
+// protocolVersion is what the session negotiated, and decides the dialect the
+// refusal is written in. Under 2026-07-28 and later every result must name
+// its resultType, and a client on that revision refuses to parse one that
+// does not: reproduced with fastmcp 4.0.3, whose default handshake is that
+// revision, the refusal surfaced as a local validation error rather than the
+// tool error it is meant to read as (F-021). An older client is sent the
+// older shape, unchanged, because nothing says how it would treat a field it
+// does not know.
+//
 // The returned bytes include the trailing newline the transport needs.
-func DenyResponse(id json.RawMessage, text string) []byte {
+func DenyResponse(id json.RawMessage, text, protocolVersion string) []byte {
+	result := toolResult{
+		Content: []toolText{{Type: "text", Text: text}},
+		IsError: true,
+	}
+	if ResultsCarryType(protocolVersion) {
+		result.ResultType = ResultTypeComplete
+	}
 	body, err := json.Marshal(toolResponse{
 		JSONRPC: "2.0",
 		ID:      id,
-		Result: toolResult{
-			Content: []toolText{{Type: "text", Text: text}},
-			IsError: true,
-		},
+		Result:  result,
 	})
 	if err != nil {
 		return nil

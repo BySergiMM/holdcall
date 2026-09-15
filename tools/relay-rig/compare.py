@@ -5,19 +5,20 @@ byte-for-byte indistinguishable (the MATCH cases), and the handful of things
 Nim is supposed to change come back changed in exactly the documented way
 (the DIFFERS cases, asserted precisely rather than merely noticed).
 
-Client(..., mode="legacy") pins the classic `initialize` handshake. The
-installed fastmcp/mcp SDK defaults to a newer `server/discover` negotiation
-(mode="auto") under which every result -- including a tools/call result -- is
-wrapped with a `resultType` discriminator the client validates strictly. Nim's
-own denial responses (internal/mcp/deny.go) are hand-written against the
-classic result shape and predate that field, so under "auto" mode a client
-cannot even parse Nim's refusal: it raises a local pydantic ValidationError
-instead of the ToolError the refusal is supposed to read as. That gap is real
-and is not this rig's to close -- deny.go is production wire format, and
-widening it is a protocol decision, not a CI fix -- so the rig pins the
-handshake version Nim was actually built and tested against (the same
-"2025-06-18" the Go end-to-end tests use) and leaves the newer negotiation as
-an open issue. See the README.
+The MATCH cases run under Client(..., mode="legacy"), the classic
+`initialize` handshake. The must-differ policy case runs twice: once under
+that handshake and once under the client's default, which since fastmcp 4
+negotiates `server/discover` and the 2026-07-28 revision, where every result
+carries a `resultType` the client validates strictly. Nim answers a refusal
+in whichever dialect the session negotiated (internal/mcp/deny.go); before it
+did, a client in the default mode could not parse the refusal at all and
+raised a local ValidationError instead of the ToolError it is meant to read
+as (F-021). Both runs must come back as the same refusal.
+
+Every transport is closed before the daemon is stopped. fastmcp keeps the
+relay alive after the client context exits (keep_alive defaults to true), and
+a relay that outlives the daemon reports, correctly, that its session.end
+went unrecorded.
 """
 
 import asyncio
@@ -47,6 +48,15 @@ DENIED_TOOL = "dangerous_tool"
 
 async def drive(transport, label):
     """Exercise the server and return a comparable snapshot of everything seen."""
+    out = {}
+    try:
+        out.update(await _drive(transport))
+    finally:
+        await transport.close()
+    return out
+
+
+async def _drive(transport):
     out = {}
     async with Client(transport, mode="legacy") as c:
         tools = await c.list_tools()
@@ -166,16 +176,24 @@ class RawSession:
             self.proc.wait()
 
 
-async def check_policy_denial(env) -> tuple[bool, str]:
+async def check_policy_denial(env, mode) -> tuple[bool, str]:
     """MUST DIFFER: a tool a rule denies. Direct, the server just runs it.
     Through Nim, with the rule in place, it must come back as a tool error
     whose text names Nim and says not to retry -- mcp.DeniedByPolicy,
-    verbatim, per engine/internal/mcp/deny.go.
+    verbatim, per engine/internal/mcp/deny.go -- and it must come back as
+    exactly that under both handshakes: the refusal is the one message Nim
+    writes itself, so it is the one place a dialect mismatch can hide.
+
+    mode is a fastmcp Client mode: "legacy" for the initialize handshake,
+    "auto" (the client's default) for server/discover.
     """
     direct = StdioTransport(command=sys.executable, args=[SERVER], env=env)
-    async with Client(direct, mode="legacy") as c:
-        r = await c.call_tool(DENIED_TOOL, {})
-        direct_text, direct_error = r.data, r.is_error
+    try:
+        async with Client(direct, mode=mode) as c:
+            r = await c.call_tool(DENIED_TOOL, {})
+            direct_text, direct_error = r.data, r.is_error
+    finally:
+        await direct.close()
 
     through = StdioTransport(
         command=NIM,
@@ -183,20 +201,27 @@ async def check_policy_denial(env) -> tuple[bool, str]:
         env=env,
     )
     denial_text = None
-    raised = False
-    async with Client(through, mode="legacy") as c:
-        try:
-            await c.call_tool(DENIED_TOOL, {})
-        except Exception as exc:
-            raised = True
-            denial_text = str(exc)
+    raised = None
+    try:
+        async with Client(through, mode=mode) as c:
+            try:
+                await c.call_tool(DENIED_TOOL, {})
+            except Exception as exc:
+                raised = type(exc).__name__
+                denial_text = str(exc)
+    finally:
+        await through.close()
 
     problems = []
     if direct_error or direct_text != "the server ran it":
         problems.append(f"direct call to {DENIED_TOOL} did not succeed as it should have with no rule: "
                          f"is_error={direct_error} data={direct_text!r}")
-    if not raised:
+    if raised is None:
         problems.append(f"through nim, {DENIED_TOOL} was not refused -- the rule did not bite")
+    elif raised != "ToolError":
+        # A ValidationError here is F-021: the client could not read the
+        # refusal at all, which is not a refusal from where the model sits.
+        problems.append(f"through nim, the refusal did not read as a tool error but raised {raised}: {denial_text!r}")
     else:
         if "Nim" not in denial_text:
             problems.append(f"the refusal does not name Nim: {denial_text!r}")
@@ -205,7 +230,7 @@ async def check_policy_denial(env) -> tuple[bool, str]:
 
     if problems:
         return False, "; ".join(problems)
-    return True, f"denied as expected: {denial_text!r}"
+    return True, f"denied as expected under mode={mode}: {denial_text!r}"
 
 
 def check_duplicate_method_is_refused(env) -> tuple[bool, str]:
@@ -308,7 +333,8 @@ async def main() -> int:
         print("-" * 84)
         differ_failures = 0
         for name, ok, detail in (
-            ("policy-denied tool call", *await check_policy_denial(env)),
+            ("policy-denied tool call (initialize)", *await check_policy_denial(env, "legacy")),
+            ("policy-denied tool call (server/discover)", *await check_policy_denial(env, "auto")),
             ("repeated `method` key", *check_duplicate_method_is_refused(env)),
         ):
             if not ok:
