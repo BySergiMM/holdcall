@@ -910,6 +910,35 @@ func DialDaemon(cfg config.Config) (net.Conn, error) {
 	return conn, nil
 }
 
+// ErrDaemonNotReachable means nothing answered the daemon's socket within the
+// timeout -- as opposed to something answering that is not Nim, which
+// DialRunningDaemon reports as a different error entirely. The distinction
+// matters to a caller like nim doctor: the first is the ordinary state of an
+// install nobody has started yet, worth a WARN; the second means something is
+// impersonating the daemon, worth a FAIL.
+var ErrDaemonNotReachable = errors.New("no daemon reachable")
+
+// DialRunningDaemon connects to the daemon's socket without starting one, and
+// verifies the peer is genuinely this binary.
+//
+// Unlike DialDaemon, which brings the daemon up when nothing answers because
+// that is the right thing for a command that needs a decision, this is for a
+// caller whose whole job is reporting what is true right now: starting the
+// thing being checked would make "is it running" unanswerable. nim doctor is
+// the one caller today, and it opens one of these per check, exactly as
+// DialDaemon's callers open one connection per request kind.
+func DialRunningDaemon(cfg config.Config, timeout time.Duration) (net.Conn, error) {
+	conn, err := net.DialTimeout("unix", cfg.Daemon.Socket, timeout)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrDaemonNotReachable, err)
+	}
+	if !daemonIsGenuine(conn) {
+		conn.Close()
+		return nil, fmt.Errorf("the process listening on %s is not Nim; refusing to talk to it", cfg.Daemon.Socket)
+	}
+	return conn, nil
+}
+
 // dialOrStart reaches the daemon socket, starting a daemon when nothing
 // answers. Peer identity is the caller's business: the two callers treat an
 // unreachable daemon differently, and both must verify what they reached.

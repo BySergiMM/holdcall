@@ -65,6 +65,18 @@ func validateTarget(target string) error {
 	return nil
 }
 
+// ValidConnectorTarget reports whether name would be accepted as a connector
+// target, by the rule validateTarget enforces.
+//
+// Exported so `nim init` can reject an MCP server key before ever writing it
+// into a client config as a --connector name: a key that would fail here
+// should not be offered as something nim init "will fix later" at
+// connector-registration time. The regex itself stays unexported and defined
+// once, here, so the two checks can never drift apart.
+func ValidConnectorTarget(name string) bool {
+	return len(name) <= MaxTargetLen && targetPattern.MatchString(name)
+}
+
 func validateEnvKey(key string) error {
 	if key == "" {
 		return fmt.Errorf("env key must not be empty")
