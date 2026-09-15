@@ -48,10 +48,11 @@ setting matches the directory of your package.json file.
 
 The git connection was removed the same day, and it has not been restored:
 `dashboard/vercel.json` sets `github.enabled: false`, so a push never deploys
-on its own. Those fourteen failed deployments still answer publicly with
-Vercel's failure page (F-012), as does a v0 placeholder pushed on 2026-08-02
-from a chat that was never in version control. Deleting them is a human's
-call.
+on its own. Those failed deployments, their branch aliases and a v0
+placeholder pushed on 2026-08-02 from a chat that was never in version control
+answered publicly with Vercel's failure page until 2026-09-16 (F-012), when
+they were removed and each hostname was fetched anonymously to confirm it
+answers 404.
 
 Two things are worth remembering from that. A red deployment on every commit
 is noise, and noise that is always there teaches people to stop reading

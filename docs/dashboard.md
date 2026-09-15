@@ -168,10 +168,15 @@ supposed to provide it.
 Two things remain true:
 
 - `vercel.json` sets `github.enabled: false`, so a push never deploys on its
-  own; deployment is `vercel deploy --prebuilt` from `dashboard/`, by hand.
-- Sixteen historical deployment URLs and one stale branch alias also answer
-  publicly (F-012), serving Vercel's failure page and an abandoned placeholder.
-  Deleting them is destructive and is a human's call, not this repository's.
+  own; deployment is by hand from `dashboard/`, with the project linked
+  through `VERCEL_ORG_ID` and `VERCEL_PROJECT_ID`: `vercel build --prod` over
+  the same `npm run build` the checks run, then `vercel deploy --prebuilt
+  --prod`. Last done on 2026-09-16 from 64121e4, and verified by fetching the
+  production domain anonymously afterwards.
+- Until 2026-09-16, historical deployment URLs and stale branch aliases also
+  answered publicly (F-012), serving Vercel's failure page and an abandoned
+  placeholder. They were removed that day; every one of them answers 404 now,
+  and one previous production build is kept as a rollback candidate.
 
 The build still sends `X-Robots-Tag: noindex, nofollow, noarchive, nosnippet`
 (D-005: public and indexed are different things), a strict
