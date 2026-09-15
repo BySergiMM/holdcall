@@ -360,7 +360,7 @@
       "id": "journal-schema-versioning",
       "title": "A journal spanning schema versions still verifies",
       "status": "verified",
-      "statement": "Verification dispatches on the version each entry stored: v1 before agent existed, v2 with it, v3 with the enrolment fields. A mixed chain checks out end to end, and a table an earlier build created is rebuilt to the current definition on open with every row copied verbatim, so the chain that comes out is the chain that went in.",
+      "statement": "Verification dispatches on the version each entry stored: v1 before agent existed, v2 with it, v3 with the enrolment fields, v4 with a budget's cap. A mixed chain checks out end to end, and a table an earlier build created is rebuilt to the current definition on open with every row copied verbatim, so the chain that comes out is the chain that went in.",
       "notGuaranteed": "An entry claiming a version this build does not know is refused rather than checked. That is intended, but it means a downgrade cannot read a newer journal.",
       "implementation": [
         "engine/internal/journal/canonical.go",
@@ -374,11 +374,14 @@
         "TestAJournalTableFromAnEarlierBuildIsRebuiltWithoutChangingTheChain",
         "TestOpeningACurrentJournalRecreatesNothing",
         "TestAV3EntryVerifies",
-        "TestAChainSpanningV1V2AndV3Verifies",
+        "TestAChainSpanningV1ToV4Verifies",
         "TestTheV2AndV3EncodingsAreDistinct",
         "TestADatabaseFromTheM4BuildGainsTheEnrolmentColumnsAndStillVerifies",
         "TestANimRulesTableFromTheCurrentDDLIsWidenedForAllowRules",
-        "TestOpeningACurrentRulesTableRecreatesNothing"
+        "TestOpeningACurrentRulesTableRecreatesNothing",
+        "TestAV4EntryVerifies",
+        "TestTheV3AndV4EncodingsAreDistinct",
+        "TestADatabaseFromTheCurrentBuildGainsTheBudgetKindsAndStillVerifies"
       ],
       "platforms": {
         "darwin": "verified",
@@ -668,6 +671,34 @@
       "platforms": {
         "darwin": "verified",
         "linux": "verified",
+        "windows": "unverified"
+      },
+      "lastVerified": "2026-09-15",
+      "provenance": "declared"
+    },
+    {
+      "id": "budgets-cap-allowed-calls",
+      "title": "A budget caps the allowed calls one session may make",
+      "status": "verified",
+      "statement": "Once the rules allow a call, every budget whose scope matches is weighed against that session's call.request entries with decision allow or approved; a call that would exceed a matching budget's cap is denied, with a reason naming the budget, and the decision is written before the relay is told.",
+      "notGuaranteed": "A budget never grants: it cannot turn a rule's deny into anything else. It counts decisions, not outcomes, so a call the relay gave up waiting on still counts. It does not survive a restarted relay: a new session starts with a fresh count.",
+      "implementation": [
+        "engine/internal/journal/budgets.go",
+        "engine/internal/daemon/budgets.go",
+        "engine/internal/daemon/daemon.go"
+      ],
+      "tests": [
+        "TestTheNthPlusOneAllowedCallIsDeniedAndRefusalsDoNotCount",
+        "TestANewSessionStartsWithAFreshBudget",
+        "TestABudgetCannotMakeADeniedCallPass",
+        "TestABudgetScopedToAllToolsCountsAcrossTools",
+        "TestABudgetAndItsEntryAreOneChange",
+        "TestABudgetChangeThatCannotBeRecordedIsNotMade",
+        "TestABudgetOfTwoRefusesTheThirdCallAndANewRelayStartsFresh"
+      ],
+      "platforms": {
+        "darwin": "verified",
+        "linux": "unverified",
         "windows": "unverified"
       },
       "lastVerified": "2026-09-15",
@@ -1261,6 +1292,19 @@
         "TestARefusalCarriesResultTypeOnlyWhenTheProtocolRequiresIt",
         "TestTheDiscoverHandshakeIsRelayedByteForByte"
       ]
+    },
+    {
+      "id": "exhaust-budget-then-keep-calling",
+      "name": "Exhaust a budget, then keep calling",
+      "category": "policy",
+      "status": "pass",
+      "wasLive": true,
+      "evidence": "Through a real relay against a real daemon, a budget of 2 allowed exactly two calls and refused the third; the refusal was journaled with the budget named in the reason. A session's own refusals do not spend the budget, and a budget cannot make a call a rule denies pass. Restarting the relay starts a new session with a fresh count, which is the documented scope of a budget, not a bypass of it.",
+      "tests": [
+        "TestTheNthPlusOneAllowedCallIsDeniedAndRefusalsDoNotCount",
+        "TestABudgetCannotMakeADeniedCallPass",
+        "TestABudgetOfTwoRefusesTheThirdCallAndANewRelayStartsFresh"
+      ]
     }
   ],
   "findings": [
@@ -1748,14 +1792,26 @@
     {
       "id": "M5",
       "name": "Budgets",
-      "status": "planned",
-      "objective": "Per session, decremented at authorization time.",
-      "deliverables": [],
-      "guarantees": [],
-      "limitations": [],
-      "pending": [
-        "Per-session call budgets per (agent, connector), decremented at decision time and recorded in the chain."
-      ]
+      "status": "done",
+      "objective": "Per session, decremented at authorization time, not at execution time.",
+      "deliverables": [
+        "a budget is a cap on ALLOWED calls per session, scoped like a rule: (agent, connector, tool or every tool)",
+        "checked in daemon.answer only once the rules have allowed the call: a budget narrows, never grants",
+        "the count is of allow/approved decisions, never outcomes, so a call the relay gave up on still spent its share and a refusal never does",
+        "nim_budgets outside the chain, every change one transaction with a budget.add / budget.remove entry",
+        "schema_version 4: canonical_encode_v4, field 20 budget_calls; existing databases rebuilt on open",
+        "nim policy budget <n> --tool <tool>|--all-tools [--agent] [--connector], nim policy budget remove, a BUDGETS table in nim policy list, matching budgets in nim policy explain",
+        "docs/decisions/0004-budgets.md"
+      ],
+      "guarantees": [
+        "budgets-cap-allowed-calls"
+      ],
+      "limitations": [
+        "Per session means one relay run: a client that restarts its relay starts with a fresh count, on purpose; a cap meant to survive restarts needs a different subject than a session.",
+        "No time bounds and no conditions on arguments: every allowed call costs one unit.",
+        "What the client is told is the same policy refusal as for a rule; the reason naming the budget is on the daemon's answer and in nim log, not in the tool error."
+      ],
+      "pending": []
     },
     {
       "id": "M6",

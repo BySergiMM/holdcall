@@ -142,6 +142,19 @@ the test names behind each claim live.
   is now the allow-list M4's deny-only rules could not express, and an
   unenrolled program is denied by the default rather than merely
   unprivileged by an absent one.
+- **M5 -- budgets.** A budget caps the number of *allowed* calls one session
+  may make, scoped like a rule (`agent`, `connector`, a tool or `--all-tools`)
+  and checked only once the rules have allowed the call, so it narrows and
+  never grants. The count is of `allow`/`approved` decisions, never outcomes:
+  a call the relay gave up on still spent its share and a refusal never does;
+  a session is one relay run, so a restarted relay starts fresh. `nim policy
+  budget <n> --tool <tool>|--all-tools [--agent] [--connector]`, `nim policy
+  budget remove`, a BUDGETS table in `nim policy list`, and the matching
+  budgets in `nim policy explain`. `nim_budgets` sits outside the chain like
+  `nim_rules`, every change one transaction with a `budget.add` or
+  `budget.remove` entry, which needed schema version 4 (`canonical_encode_v4`,
+  field 20 `budget_calls`); existing databases are rebuilt on open.
+  `docs/decisions/0004-budgets.md` argues what counts and why.
 - **`nim init` and `nim doctor`.** `nim init` rewrites Claude Code's,
   Cursor's and Claude Desktop's stdio `mcpServers` entries to route
   through Nim, preserving every other key -- `env` included -- via an

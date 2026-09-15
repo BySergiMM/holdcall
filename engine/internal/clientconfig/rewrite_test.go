@@ -478,13 +478,16 @@ func TestInitNeverShowsAnEnvValue(t *testing.T) {
 	path := writeFixture(t, "mcp.json", `{
 	"mcpServers": {
 		"github": {"command": "npx", "args": ["-y", "server-github"],
-		           "env": {"GITHUB_TOKEN": "ghp_SUPERSECRET0000000000000", "OTHER": 42}}
+		           "env": {"GITHUB_TOKEN": "ghp_SUPERSECRET0000000000000", "OTHER": 8675309}}
 	}
 }`)
 	res := mustBuildResult(t, path, nimPathFor(t))
 	e := entryByKey(t, res, "github")
+	// The number is distinctive on purpose: the preview also prints the nim
+	// path, which lives under a temp directory named with random digits, and
+	// a two-digit value was found in one of those names once in five runs.
 	for _, text := range []string{e.Before, e.After} {
-		if strings.Contains(text, "ghp_SUPERSECRET") || strings.Contains(text, "42") {
+		if strings.Contains(text, "ghp_SUPERSECRET") || strings.Contains(text, "8675309") {
 			t.Fatalf("an env value was printed:\n%s", text)
 		}
 		if !strings.Contains(text, "GITHUB_TOKEN") || !strings.Contains(text, "(value not shown)") {

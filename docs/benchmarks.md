@@ -68,6 +68,17 @@ command: `DecisionRoundTrip` p50 0.092 ms, p99 0.272 ms; contended p50
 1.17 ms, p99 1.78 ms; `DecisionDenied` p50 0.091 ms, p99 0.151 ms. Within the
 noise of the M4 figures above, so the table is not restated.
 
+**What M5 cost.** A budget is consulted only once the rules have allowed a
+call, and costs two more reads on the same connection: the budgets whose
+scope matches, and a count of this session's allowed `call.request` entries
+through the unique index on `(session_id, seq, kind)`. Measured on
+2026-09-15 with one budget configured and never exhausted
+(`BenchmarkDecisionWithBudget`, same command, `-benchtime 2000x`): p50
+0.32 ms, p95 0.51 ms, p99 0.79 ms, max 3.2 ms, against `DecisionRoundTrip`
+p50 0.11 ms, p99 0.20 ms on the same run. Three times the plain allow, and
+still three orders of magnitude under `decisionTimeout`; a session with no
+matching budget pays one read for the empty match and nothing for the count.
+
 **Deny is not slower than allow.** It does the same journal write and the same
 rule lookup. If those diverged it would mean the rules had become the expensive
 part; for an indexed exact-name lookup they must not, and they do not.

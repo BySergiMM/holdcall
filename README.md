@@ -39,6 +39,11 @@ Pre-alpha, and honest about it. What works:
 - **Policy in SQLite**, per agent and per connector, with a stated precedence
   between `allow` and `deny`. Every change is an entry in the journal;
   `config.toml` carries no policy at all — a file that still does is refused.
+- **Budgets.** A cap on how many *allowed* calls one session may make,
+  scoped like a rule and checked only once the rules have allowed the call —
+  a budget narrows, never grants. Decremented at authorization time: a call
+  the relay gave up on still spent its share, a refusal never does, and a
+  restarted relay is a new session with a fresh count.
 - **`nim init` and `nim doctor`** — pointing a client at Nim, and checking
   the result, without hand-editing JSON.
 
@@ -138,6 +143,9 @@ nim policy default deny                                  # every tool, unless so
 nim policy remove delete_repository                       # or --default
 nim policy list
 nim policy explain force_push --agent claude-code --connector github
+nim policy budget 20 --tool list_repos --agent claude-code    # at most 20 allowed calls per session
+nim policy budget 100 --all-tools --connector github          # every tool on one connector, per session
+nim policy budget remove --tool list_repos --agent claude-code
 ```
 
 **Precedence, in one sentence:** the most specific matching rule wins — an
@@ -153,7 +161,9 @@ alone could not express — `docs/decisions/0002-what-an-unknown-agent-may-do.md
 and `docs/decisions/0003-allow-rules-and-precedence.md` argue both halves.
 
 Every rule added or removed is a `rule.add` or `rule.remove` entry in the
-chain, in the same transaction as the rule.
+chain, in the same transaction as the rule; a budget is a `budget.add` or
+`budget.remove` entry the same way. A budget never grants — it only lowers
+what the rules already allow, per session (`docs/decisions/0004-budgets.md`).
 
 ## Agents
 
@@ -206,15 +216,14 @@ secret and the whole chain can be recomputed. Only a head recorded elsewhere
 Do not describe it as tamper-proof, tamper-evident, or an immutable audit log.
 
 Policy and enrolment changes are entries in the chain too, not a separate
-record with weaker guarantees: `rule.add`, `rule.remove`, `agent.add` and
-`agent.remove` are each written in the same SQLite transaction as the change
-they describe, so the rules and the enrolments they are scoped to have a
-history that verifies exactly like the calls do.
+record with weaker guarantees: `rule.add`, `rule.remove`, `agent.add`,
+`agent.remove`, `budget.add` and `budget.remove` are each written in the same
+SQLite transaction as the change they describe, so the rules, the budgets and
+the enrolments they are scoped to have a history that verifies exactly like
+the calls do.
 
 ## What does not exist yet
 
-- **Budgets.** A cap on how much or how often a tool may be called, per
-  session, decremented at authorization time — M5.
 - **Human approval.** An out-of-band prompt showing a call's real
   parameters before it runs, never a model-generated summary — M6.
 - **A hosted journal viewer.** M8: syncing a record whose authenticity
