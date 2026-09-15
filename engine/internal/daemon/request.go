@@ -27,6 +27,9 @@ var requestKinds = map[string]bool{
 	KindPolicyRemove:    true,
 	KindPolicyList:      true,
 	KindPolicyExplain:   true,
+	KindBudgetSet:       true,
+	KindBudgetRemove:    true,
+	KindBudgetList:      true,
 }
 
 // requestState is the per-connection authorization state the Request family
@@ -80,7 +83,8 @@ func handleRequest(
 		thisKind = "connector"
 	case KindAgentAdd, KindAgentList, KindAgentRemove:
 		thisKind = "agent"
-	case KindPolicyDeny, KindPolicyAllow, KindPolicyRemove, KindPolicyList, KindPolicyExplain:
+	case KindPolicyDeny, KindPolicyAllow, KindPolicyRemove, KindPolicyList, KindPolicyExplain,
+		KindBudgetSet, KindBudgetRemove, KindBudgetList:
 		thisKind = "policy"
 	default:
 		return Response{ID: req.ID, Error: fmt.Sprintf("unknown request kind %q", req.Kind)}
@@ -116,6 +120,12 @@ func handleRequest(
 		return handlePolicyList(req, j)
 	case KindPolicyExplain:
 		return handlePolicyExplain(req, j)
+	case KindBudgetSet:
+		return handleBudgetSet(req, j)
+	case KindBudgetRemove:
+		return handleBudgetRemove(req, j)
+	case KindBudgetList:
+		return handleBudgetList(req, j)
 	default:
 		panic("unreachable: the switch above is exhaustive for req.Kind")
 	}

@@ -83,15 +83,30 @@ func TestAChainSpanningBothVersionsVerifies(t *testing.T) {
 	}
 }
 
-// A v3 entry -- one carrying exec_path and exec_id, written by AddAgent --
-// verifies under its own encoding, the same proof the v1 and v2 entries
-// already have.
+// A v3 entry -- one carrying exec_path and exec_id -- verifies under its own
+// encoding, the same proof the v1 and v2 entries already have. Seeded by
+// hand, the way the v1 entry above is: AddAgent now writes at
+// CurrentSchemaVersion (4), so a pure v3 entry -- one schema_version behind
+// what this build writes -- is exactly what an install upgraded once more
+// would already hold, and nothing here can produce a fresh one any longer.
 func TestAV3EntryVerifies(t *testing.T) {
 	j, _ := openTemp(t)
-	if err := j.AddAgent(Agent{
-		Name: "claude-code", ExecDev: 7, ExecIno: 42, ExecPath: "/bin/claude", EnrolledAt: time.Now(),
-	}); err != nil {
-		t.Fatalf("AddAgent: %v", err)
+
+	agent, path, id := "claude-code", "/bin/claude", "7:42"
+	e := Entry{
+		ChainSeq: 1, SchemaVersion: SchemaVersion3,
+		Kind: KindAgentAdd, SessionID: "", OccurredAt: nowRFC(),
+		Agent: &agent, ExecPath: &path, ExecID: &id,
+		PrevHash: j.genesis,
+	}
+	e.Hash = chainHash(e.PrevHash, canonicalEncodeV3(e))
+	if _, err := j.db.Exec(
+		`insert into nim_journal
+		   (chain_seq, schema_version, kind, session_id, agent, exec_path, exec_id, occurred_at, prev_hash, hash)
+		 values (?,?,?,?,?,?,?,?,?,?)`,
+		e.ChainSeq, e.SchemaVersion, e.Kind, e.SessionID, e.Agent, e.ExecPath, e.ExecID, e.OccurredAt, e.PrevHash, e.Hash,
+	); err != nil {
+		t.Fatalf("seeding a v3 entry: %v", err)
 	}
 
 	entries, err := j.EntriesSince(0, 10)
@@ -99,11 +114,14 @@ func TestAV3EntryVerifies(t *testing.T) {
 		t.Fatalf("EntriesSince: %v", err)
 	}
 	if len(entries) != 1 || entries[0].SchemaVersion != SchemaVersion3 {
-		t.Fatalf("AddAgent did not write one v3 entry: %+v", entries)
+		t.Fatalf("did not read back one v3 entry: %+v", entries)
 	}
 	if entries[0].ExecPath == nil || *entries[0].ExecPath != "/bin/claude" ||
 		entries[0].ExecID == nil || *entries[0].ExecID != "7:42" {
 		t.Fatalf("the agent.add entry does not carry the enrolment: %+v", entries[0])
+	}
+	if entries[0].BudgetCalls != nil {
+		t.Fatalf("a v3 entry gained a budget_calls it was never written with: %+v", entries[0])
 	}
 
 	rep, err := j.Verify("")
@@ -115,9 +133,39 @@ func TestAV3EntryVerifies(t *testing.T) {
 	}
 }
 
-// A chain spanning all three versions has to check out end to end, because
-// that is what an install upgraded across two schema changes becomes.
-func TestAChainSpanningV1V2AndV3Verifies(t *testing.T) {
+// A v4 entry -- one carrying budget_calls, written by AddBudget -- verifies
+// under its own encoding, the same proof the v1, v2 and v3 entries already
+// have. Unlike v3, this build writes v4 naturally: CurrentSchemaVersion is
+// 4, so AddBudget needs no hand-seeding to produce one.
+func TestAV4EntryVerifies(t *testing.T) {
+	j, _ := openTemp(t)
+	if _, err := j.AddBudget(Budget{Tool: "rm", Calls: 5}); err != nil {
+		t.Fatalf("AddBudget: %v", err)
+	}
+
+	entries, err := j.EntriesSince(0, 10)
+	if err != nil {
+		t.Fatalf("EntriesSince: %v", err)
+	}
+	if len(entries) != 1 || entries[0].SchemaVersion != SchemaVersion4 {
+		t.Fatalf("AddBudget did not write one v4 entry: %+v", entries)
+	}
+	if entries[0].BudgetCalls == nil || *entries[0].BudgetCalls != 5 {
+		t.Fatalf("the budget.add entry does not carry the cap: %+v", entries[0])
+	}
+
+	rep, err := j.Verify("")
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if !rep.OK {
+		t.Fatalf("a v4 entry did not verify: %s", rep.Problem)
+	}
+}
+
+// A chain spanning all four versions has to check out end to end, because
+// that is what an install upgraded across three schema changes becomes.
+func TestAChainSpanningV1ToV4Verifies(t *testing.T) {
 	j, _ := openTemp(t)
 
 	v1 := Entry{
@@ -151,12 +199,26 @@ func TestAChainSpanningV1V2AndV3Verifies(t *testing.T) {
 		t.Fatalf("seeding v2: %v", err)
 	}
 
-	// Everything after it is written by the current build, at v3, linking to
-	// the v2 entry's hash.
-	if err := j.AddAgent(Agent{
-		Name: "cursor", ExecDev: 1, ExecIno: 2, ExecPath: "/bin/cursor", EnrolledAt: time.Now(),
-	}); err != nil {
-		t.Fatalf("AddAgent: %v", err)
+	execPath, execID := "/bin/cursor", "1:2"
+	v3 := Entry{
+		ChainSeq: 3, SchemaVersion: SchemaVersion3,
+		Kind: KindAgentAdd, SessionID: "", Agent: &agent, ExecPath: &execPath, ExecID: &execID,
+		OccurredAt: nowRFC(), PrevHash: v2.Hash,
+	}
+	v3.Hash = chainHash(v3.PrevHash, canonicalEncodeV3(v3))
+	if _, err := j.db.Exec(
+		`insert into nim_journal
+		   (chain_seq, schema_version, kind, session_id, agent, exec_path, exec_id, occurred_at, prev_hash, hash)
+		 values (?,?,?,?,?,?,?,?,?,?)`,
+		v3.ChainSeq, v3.SchemaVersion, v3.Kind, v3.SessionID, v3.Agent, v3.ExecPath, v3.ExecID, v3.OccurredAt, v3.PrevHash, v3.Hash,
+	); err != nil {
+		t.Fatalf("seeding v3: %v", err)
+	}
+
+	// Everything after it is written by the current build, at v4, linking to
+	// the v3 entry's hash.
+	if _, err := j.AddBudget(Budget{Tool: "rm", Calls: 3}); err != nil {
+		t.Fatalf("AddBudget: %v", err)
 	}
 
 	rep, err := j.Verify("")
@@ -164,10 +226,10 @@ func TestAChainSpanningV1V2AndV3Verifies(t *testing.T) {
 		t.Fatalf("Verify: %v", err)
 	}
 	if !rep.OK {
-		t.Fatalf("a chain spanning v1, v2 and v3 did not verify: %s", rep.Problem)
+		t.Fatalf("a chain spanning v1 through v4 did not verify: %s", rep.Problem)
 	}
-	if rep.Entries != 3 {
-		t.Fatalf("walked %d entries, want 3", rep.Entries)
+	if rep.Entries != 4 {
+		t.Fatalf("walked %d entries, want 4", rep.Entries)
 	}
 }
 
@@ -233,6 +295,36 @@ func TestTheV2AndV3EncodingsAreDistinct(t *testing.T) {
 	}
 	if !strings.Contains(string(v3), path) || !strings.Contains(string(v3), id) {
 		t.Error("the v3 encoding did not contain exec_path and exec_id")
+	}
+}
+
+// The same proof again for v3 and v4. If they ever produced the same bytes
+// for the same entry, budget_calls could be dropped from a v4 entry and it
+// would still verify as v3.
+func TestTheV3AndV4EncodingsAreDistinct(t *testing.T) {
+	calls := int64(5)
+	e := Entry{
+		ChainSeq: 1, Kind: KindBudgetAdd, SessionID: "", OccurredAt: "t",
+		BudgetCalls: &calls,
+	}
+	e.SchemaVersion = SchemaVersion3
+	v3 := canonicalEncodeV3(e)
+	e.SchemaVersion = SchemaVersion4
+	v4 := canonicalEncodeV4(e)
+
+	if string(v3) == string(v4) {
+		t.Fatal("v3 and v4 encoded the same entry identically")
+	}
+	if !strings.HasPrefix(string(v3), "nim.journal.v3\n") {
+		t.Error("v3 does not carry the v3 domain")
+	}
+	if !strings.HasPrefix(string(v4), "nim.journal.v4\n") {
+		t.Error("v4 does not carry the v4 domain")
+	}
+	// v3 cannot express budget_calls at all, which is why a new version was
+	// needed rather than one field grafted onto v3.
+	if len(v3) == len(v4) {
+		t.Error("v3 and v4 encoded to the same length despite v4 carrying one more field")
 	}
 }
 

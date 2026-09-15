@@ -34,12 +34,14 @@ is updated.
 | 17 | `agent` | string, nullable | `session.start` (from schema_version 2); `rule.add`, `rule.remove`; `agent.add`, `agent.remove` (schema_version 3 only) |
 | 18 | `exec_path` | string, nullable | `agent.add`, `agent.remove` (schema_version 3 only) |
 | 19 | `exec_id` | string, nullable | `agent.add`, `agent.remove` (schema_version 3 only) |
+| 20 | `budget_calls` | int, nullable | `budget.add`, `budget.remove` (schema_version 4 only) |
 
 `prev_hash` and `hash` are stored alongside but are **not** encoded: they are the
 chain, not the content.
 
 `kind` is one of `session.start`, `call.request`, `call.outcome`, `session.end`,
-`anomaly`, `rule.add`, `rule.remove`, `agent.add`, `agent.remove`.
+`anomaly`, `rule.add`, `rule.remove`, `agent.add`, `agent.remove`, `budget.add`,
+`budget.remove`.
 
 `rule.add` and `rule.remove` record a policy change: a rule with one effect
 -- deny or allow -- for `tool`, for the sessions in its scope. They carry the
@@ -71,6 +73,25 @@ was not stored and no enrolment exists that the chain does not know about.
 Re-enrolling a name writes a fresh `agent.add` carrying the new identity; it
 does not rewrite the old one, because entries are never modified after they
 are written.
+
+`budget.add` and `budget.remove` record a budget change: a cap on the number
+of ALLOWED calls one session may make, for the sessions in its scope. They
+carry the scope in `agent` (null: every session) and `connector` (null:
+every connector), the tool in `tool` -- an exact name or `*`, meaning every
+tool, through `nim policy budget <n> --all-tools` and nowhere else, the same
+convention `RuleToolDefault` uses for a rule -- and the cap in
+`budget_calls`. `budget.add` carries the budget being set; `budget.remove`
+carries the one being removed, not nulls, so the chain says what stopped
+applying rather than only that something did -- the same reasoning
+`agent.add`/`agent.remove` follow for an enrolment. They carry no session,
+exactly like a rule or an enrolment: `session_id` is the empty string and
+`seq` is null. `decision` is null on both: a budget carries a magnitude, not
+an effect, so there is nothing for that field to hold. The budget and its
+entry are written in one SQLite transaction -- `AddBudget` and
+`RemoveBudget` -- so the chain never describes a budget that was not stored
+and no budget exists that the chain does not know about.
+docs/decisions/0004-budgets.md is the argument for what a budget counts and
+why.
 
 `decision` is one of `observed`, `allow`, `deny`, `approved`, `rejected`. M2
 writes `allow` and `deny` on `call.request`; M4.5 writes them on `rule.add`
@@ -188,14 +209,42 @@ would make a re-enrolment indistinguishable from the enrolment it replaced.
 The genesis is unaffected by v3 for the same reason it is unaffected by v2: it
 is not versioned with the entry encoding.
 
+## canonical_encode_v4
+
+Identical to v3 except that the domain is `nim.journal.v4` and there are
+**twenty** fields, the last being `budget_calls`:
+
+    output := "nim.journal.v4" 0x0A || field(1) || ... || field(20)
+
+`budget_calls` is the cap a budget change carries -- the number of ALLOWED
+calls one session may make, for the scope the entry's `agent`, `connector`
+and `tool` already carry. It is set on `budget.add`, carrying the cap being
+set, and on `budget.remove`, carrying the cap being removed, so the chain
+says what stopped applying rather than only that something did. It is null
+on every other kind, exactly as `exec_path` and `exec_id` are null off
+`agent.add` and `agent.remove`.
+
+The domain differs from v3 for the same reason v3's differs from v2: one
+more field hashed under the v3 domain would let the same entry produce a
+different hash depending on which build read it, which is precisely what a
+version exists to prevent. `decision` could not simply carry the cap either
+-- it already carries a rule's effect on `rule.add`/`rule.remove`, and a
+budget is a magnitude, not an effect; collapsing the two into one field
+would make a reader guess which meaning a number was supposed to have.
+
+The genesis is unaffected by v4 for the same reason it is unaffected by v2
+and v3: it is not versioned with the entry encoding.
+
 ## Verifying a journal that spans versions
 
 `schema_version` is stored per entry and verification dispatches on what each
 entry says, never on what the current build writes. A journal written before
 `agent` existed keeps verifying with the v1 encoder, one written before
-`exec_path` and `exec_id` existed keeps verifying with the v2 encoder, and a
-chain containing all three versions checks out end to end — the chain links by
-hash, and each entry's own encoding is decided by its own stored version.
+`exec_path` and `exec_id` existed keeps verifying with the v2 encoder, one
+written before `budget_calls` existed keeps verifying with the v3 encoder,
+and a chain containing all four versions checks out end to end — the chain
+links by hash, and each entry's own encoding is decided by its own stored
+version.
 
 An entry claiming a version this build does not know is refused by name rather
 than encoded under a guess. Encoding it under whatever rules happen to be
@@ -280,10 +329,10 @@ field is what makes that safe.
 
 The encoder is the one the entry's own `schema_version` names: `v1` for
 entries written before `agent` existed, `v2` after, `v3` for entries carrying
-`exec_path` and `exec_id`. An earlier version of this formula said
-`canonical_encode_v1` for every entry, which a second implementation
-transcribing it would have followed into rejecting every v2 entry. See
-*Verifying a journal that spans versions*.
+`exec_path` and `exec_id`, `v4` for entries carrying `budget_calls`. An
+earlier version of this formula said `canonical_encode_v1` for every entry,
+which a second implementation transcribing it would have followed into
+rejecting every v2 entry. See *Verifying a journal that spans versions*.
 
 `raw_bytes` is the 32-byte decoding of the hex-encoded previous hash, not its
 hex text. Hashes are stored as lowercase hex.
@@ -394,6 +443,17 @@ is exactly what could not be reached. Those refusals are counted as lost events
 and printed on stderr by the relay; the journal never learns of them. So
 `decision = deny` in this file always means a policy refusal, never an inability
 to decide.
+
+**A budget counts decisions, not outcomes, for the same reason "an allow is
+not evidence the call was made" holds above.** A budget's cap is weighed
+against how many `call.request` entries a session already has with
+`decision` `allow` or `approved` -- never against `call.outcome`, which a
+denied call never has and an allowed one may still be missing if the relay
+gave up first. So a call the relay never actually forwarded still spent its
+share of the budget the moment it was allowed, exactly as it still counts
+toward "a call that reached a connector is a call this journal recorded, with
+the decision that allowed it." docs/decisions/0004-budgets.md is the
+argument in full.
 
 ## What this does not protect against
 

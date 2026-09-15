@@ -134,7 +134,7 @@ func (j *Journal) EntriesSince(since int64, limit int) ([]Entry, error) {
 	rows, err := j.db.Query(
 		`select chain_seq, schema_version, kind, session_id, seq, connector, tool,
 		        params_digest, decision, ok, duration_ms, anomaly, occurred_at,
-		        machine_id, client, protocol_version, agent, exec_path, exec_id, prev_hash, hash
+		        machine_id, client, protocol_version, agent, exec_path, exec_id, budget_calls, prev_hash, hash
 		   from nim_journal
 		  where chain_seq > ?
 		  order by chain_seq
@@ -261,7 +261,7 @@ func (j *Journal) SessionEntries(id string, limit int) ([]Entry, error) {
 	rows, err := j.db.Query(
 		`select chain_seq, schema_version, kind, session_id, seq, connector, tool,
 		        params_digest, decision, ok, duration_ms, anomaly, occurred_at,
-		        machine_id, client, protocol_version, agent, exec_path, exec_id, prev_hash, hash
+		        machine_id, client, protocol_version, agent, exec_path, exec_id, budget_calls, prev_hash, hash
 		   from nim_journal
 		  where session_id = ?
 		  order by chain_seq

@@ -445,3 +445,150 @@ func TestOpeningACurrentRulesTableRecreatesNothing(t *testing.T) {
 		t.Fatalf("a fresh rules table was rebuilt (rebuilt=%v, err=%v)", rebuilt, err)
 	}
 }
+
+// journalTableM45 is nim_journal exactly as the build before this milestone
+// created it: nine kinds, no budget.add or budget.remove, and no
+// budget_calls column. Copied verbatim from journalTableBody as it stood
+// before schema_version 4, because the point is to open a file that build
+// left behind -- the same technique journalTableM4 uses for the build
+// before it.
+const journalTableM45 = `create table nim_journal (
+    chain_seq        integer primary key,
+    schema_version   integer not null,
+    kind             text    not null check (kind in
+                       ('session.start','call.request','call.outcome','session.end','anomaly',
+                        'rule.add','rule.remove','agent.add','agent.remove')),
+    session_id       text    not null,
+    seq              integer,
+    connector        text,
+    tool             text,
+    params_digest    text,
+    decision         text    check (decision is null or decision in
+                       ('observed','allow','deny','approved','rejected')),
+    ok               integer,
+    duration_ms      integer,
+    anomaly          text    check (anomaly is null or anomaly in
+                       ('batch','malformed_json','framing','duplicate_id','duplicate_key','unreadable_call')),
+    occurred_at      text    not null,
+    machine_id       text,
+    client           text,
+    protocol_version text,
+    agent            text,
+    exec_path        text,
+    exec_id          text,
+    prev_hash        text    not null,
+    hash             text    not null
+)`
+
+// anM45Journal writes a database the way the build before this milestone
+// would have left it: the pre-M5 table, an M4.5-shaped view over it, and two
+// v3 entries chained from the genesis -- a session.start carrying an agent,
+// and an agent.add carrying exec_path and exec_id, both kinds that build
+// already wrote. It returns the entries as written, so what comes out of the
+// rebuild can be held to them byte for byte.
+func anM45Journal(t *testing.T, path string) []Entry {
+	t.Helper()
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	defer db.Close()
+	for _, stmt := range []string{
+		journalTableM45,
+		`create unique index nim_journal_entry_idx on nim_journal (session_id, seq, kind)`,
+		`create view nim_calls as select chain_seq from nim_journal where kind = 'call.request'`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("%s: %v", stmt, err)
+		}
+	}
+
+	entries := []Entry{
+		{ChainSeq: 1, SchemaVersion: SchemaVersion2, Kind: KindSessionStart, SessionID: "old",
+			Agent: sp("claude-code"), Connector: sp("github"), OccurredAt: "2026-09-14T00:00:00Z",
+			PrevHash: genesisHash("test-machine")},
+		{ChainSeq: 2, SchemaVersion: SchemaVersion3, Kind: KindAgentAdd, SessionID: "",
+			Agent: sp("claude-code"), ExecPath: sp("/bin/claude"), ExecID: sp("7:42"),
+			OccurredAt: "2026-09-14T00:00:01Z"},
+	}
+	entries[0].Hash = chainHash(entries[0].PrevHash, canonicalEncodeV2(entries[0]))
+	entries[1].PrevHash = entries[0].Hash
+	entries[1].Hash = chainHash(entries[1].PrevHash, canonicalEncodeV3(entries[1]))
+	for _, e := range entries {
+		if _, err := db.Exec(
+			`insert into nim_journal (chain_seq, schema_version, kind, session_id, connector, agent,
+			   exec_path, exec_id, occurred_at, prev_hash, hash) values (?,?,?,?,?,?,?,?,?,?,?)`,
+			e.ChainSeq, e.SchemaVersion, e.Kind, e.SessionID, e.Connector, e.Agent,
+			e.ExecPath, e.ExecID, e.OccurredAt, e.PrevHash, e.Hash); err != nil {
+			t.Fatalf("seeding entry %d: %v", e.ChainSeq, err)
+		}
+	}
+	return entries
+}
+
+// A journal written by the build before this milestone has a table this
+// build cannot write budget.add or budget.remove into, and no budget_calls
+// column to carry what they need. Opening it must gain the column and widen
+// the CHECK, through the same rebuild that carried M2 and M4 databases
+// forward, and the chain that comes out must be the chain that went in.
+func TestADatabaseFromTheCurrentBuildGainsTheBudgetKindsAndStillVerifies(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nim.db")
+	seeded := anM45Journal(t, path)
+
+	j, err := Open(path, "test-machine")
+	if err != nil {
+		t.Fatalf("Open on a pre-M5 journal: %v", err)
+	}
+	defer j.Close()
+
+	var stored string
+	if err := j.db.QueryRow(
+		`select sql from sqlite_master where type = 'table' and name = 'nim_journal'`).Scan(&stored); err != nil {
+		t.Fatalf("reading the definition: %v", err)
+	}
+	if stored != journalTableStored {
+		t.Fatalf("the table was not rebuilt to this build's definition:\n%s", stored)
+	}
+	if _, err := j.db.Exec(`select budget_calls from nim_journal limit 0`); err != nil {
+		t.Fatalf("the budget_calls column was not added on the way: %v", err)
+	}
+
+	got, err := j.EntriesSince(0, 10)
+	if err != nil {
+		t.Fatalf("EntriesSince: %v", err)
+	}
+	if len(got) != len(seeded) {
+		t.Fatalf("%d entries after the rebuild, want %d", len(got), len(seeded))
+	}
+	for i, e := range got {
+		want := seeded[i]
+		if e.ChainSeq != want.ChainSeq || e.SchemaVersion != want.SchemaVersion ||
+			e.PrevHash != want.PrevHash || e.Hash != want.Hash || e.Kind != want.Kind {
+			t.Errorf("entry %d changed in the rebuild:\n got %+v\nwant %+v", i+1, e, want)
+		}
+		if e.BudgetCalls != nil {
+			t.Errorf("entry %d gained a budget_calls it was never written with: %+v", i+1, e)
+		}
+	}
+	rep, err := j.Verify("")
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if !rep.OK || rep.Entries != int64(len(seeded)) {
+		t.Fatalf("the rebuilt chain does not verify: %+v", rep)
+	}
+
+	// The reason this rebuild exists: an entry the old CHECK refused, needing
+	// a column the old table did not have.
+	if _, err := j.AddBudget(Budget{Tool: "rm", Calls: 3}); err != nil {
+		t.Fatalf("adding a budget after the rebuild: %v", err)
+	}
+	if rep, _ := j.Verify(""); !rep.OK {
+		t.Fatalf("the chain broke across the old and new rows: %s", rep.Problem)
+	}
+
+	// Once is enough: a second look finds nothing to do.
+	if rebuilt, err := rebuildJournalTable(j.db); err != nil || rebuilt {
+		t.Fatalf("a second rebuild ran (rebuilt=%v, err=%v)", rebuilt, err)
+	}
+}

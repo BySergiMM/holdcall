@@ -119,6 +119,12 @@ type Event struct {
 	ExecPath *string `json:"exec_path,omitempty"`
 	ExecID   *string `json:"exec_id,omitempty"`
 
+	// BudgetCalls is set on budget.add and budget.remove: the cap the
+	// budget carries, being set or having been removed. It is hashed like
+	// every other field, so a reader recomputing a v4 entry's hash needs it
+	// -- the same reasoning ExecPath and ExecID were added under for v3.
+	BudgetCalls *int64 `json:"budget_calls,omitempty"`
+
 	PrevHash string `json:"prev_hash"`
 	Hash     string `json:"hash"`
 }
@@ -146,6 +152,7 @@ func EventFrom(e journal.Entry) Event {
 		Agent:           copyString(e.Agent),
 		ExecPath:        copyString(e.ExecPath),
 		ExecID:          copyString(e.ExecID),
+		BudgetCalls:     copyInt(e.BudgetCalls),
 		PrevHash:        e.PrevHash,
 		Hash:            e.Hash,
 	}

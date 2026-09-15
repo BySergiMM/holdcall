@@ -50,6 +50,23 @@ type Request struct {
 	RuleAgent     string `json:"rule_agent,omitempty"`
 	RuleConnector string `json:"rule_connector,omitempty"`
 	RuleDefault   bool   `json:"rule_default,omitempty"`
+
+	// BudgetTool, BudgetAgent, BudgetConnector and BudgetAllTools describe a
+	// budget's scope for the budget.set and budget.remove kinds -- the same
+	// shape ruleScope validates for a rule, held in fields of their own
+	// rather than the Rule* ones above because a budget and a rule are
+	// different things that happen to share a scope shape, not the same
+	// request. BudgetAllTools marks `nim policy budget <n> --all-tools` the
+	// way RuleDefault marks `nim policy default`: the budget's tool becomes
+	// journal.BudgetToolAll ("*") rather than BudgetTool, and a caller may
+	// not set both.
+	BudgetTool      string `json:"budget_tool,omitempty"`
+	BudgetAgent     string `json:"budget_agent,omitempty"`
+	BudgetConnector string `json:"budget_connector,omitempty"`
+	BudgetAllTools  bool   `json:"budget_all_tools,omitempty"`
+	// BudgetCalls is the cap budget.set stores; ignored by budget.remove and
+	// budget.list.
+	BudgetCalls int `json:"budget_calls,omitempty"`
 }
 
 const (
@@ -67,6 +84,14 @@ const (
 	KindPolicyRemove  = "policy.remove"
 	KindPolicyList    = "policy.list"
 	KindPolicyExplain = "policy.explain"
+
+	// Budgets are policy too -- a connection that has committed to the
+	// "policy" purpose may send any of these alongside policy.* -- but keep
+	// their own kind names because setting a cap and setting a rule's effect
+	// are different operations, not two spellings of one.
+	KindBudgetSet    = "budget.set"
+	KindBudgetRemove = "budget.remove"
+	KindBudgetList   = "budget.list"
 )
 
 // String redacts Secret so that even a future fmt.Printf/log.Printf("%v", req)
@@ -108,6 +133,10 @@ type Response struct {
 	// policy.remove acted on.
 	Rules []RuleInfo `json:"rules,omitempty"`
 
+	// budget.list; also the one budget budget.set and budget.remove acted
+	// on.
+	Budgets []BudgetInfo `json:"budgets,omitempty"`
+
 	// policy.explain
 	Explain *ExplainInfo `json:"explain,omitempty"`
 }
@@ -120,6 +149,17 @@ type RuleInfo struct {
 	Connector string `json:"connector,omitempty"`
 	Tool      string `json:"tool"`
 	Effect    string `json:"effect"`
+	CreatedAt string `json:"created_at"`
+}
+
+// BudgetInfo is one budget as reported to the CLI. Agent and Connector are
+// empty when the budget applies to every one; Tool is journal.BudgetToolAll
+// ("*") for --all-tools.
+type BudgetInfo struct {
+	Agent     string `json:"agent,omitempty"`
+	Connector string `json:"connector,omitempty"`
+	Tool      string `json:"tool"`
+	Calls     int64  `json:"calls"`
 	CreatedAt string `json:"created_at"`
 }
 
@@ -140,6 +180,12 @@ type ExplainInfo struct {
 	Rule       *RuleInfo `json:"rule,omitempty"`
 	Reason     string    `json:"reason"`
 	Candidates int       `json:"candidates"`
+	// Budgets are every budget whose scope matches this agent, connector and
+	// tool -- shown alongside the rule so nim policy explain can answer
+	// "does a budget apply here, and what is its cap" without inventing
+	// session state it was never given: explain has no session id to weigh
+	// a count against, only a scope. See handlePolicyExplain.
+	Budgets []BudgetInfo `json:"budgets,omitempty"`
 }
 
 // ConnectorInfo is non-secret connector metadata: which env var name a
@@ -173,8 +219,8 @@ func (r Response) String() string {
 	if len(r.Env) > 0 {
 		env = "<redacted>"
 	}
-	return fmt.Sprintf("Response{ID:%s Error:%q Found:%v Env:%s Connectors:%d Agents:%d Rules:%d}",
-		r.ID, r.Error, r.Found, env, len(r.Connectors), len(r.Agents), len(r.Rules))
+	return fmt.Sprintf("Response{ID:%s Error:%q Found:%v Env:%s Connectors:%d Agents:%d Rules:%d Budgets:%d}",
+		r.ID, r.Error, r.Found, env, len(r.Connectors), len(r.Agents), len(r.Rules), len(r.Budgets))
 }
 
 // SendRequest writes req and reads back its Response on conn. Used by the

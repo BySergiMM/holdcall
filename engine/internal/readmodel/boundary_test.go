@@ -65,15 +65,21 @@ func TestReadModelSurfaceIsFrozen(t *testing.T) {
 		// They are added here for the same reason "agent" was -- the journal
 		// carries the value and hashes it, so a read model that could not
 		// show it would be hiding something the chain commits to.
+		//
+		// budget_calls joins them for the same reason, at schema_version 4:
+		// it is set on budget.add and budget.remove, the cap a budget change
+		// carries, and it is hashed like every other field -- a read model
+		// that could not show it would again be hiding something the chain
+		// commits to.
 		{"Event", Event{}, []string{
-			"agent", "anomaly", "chain_seq", "client", "connector", "decision", "duration_ms",
-			"exec_id", "exec_path", "hash", "kind", "machine_id", "occurred_at", "ok", "params_digest",
-			"prev_hash", "protocol_version", "schema_version", "seq", "session_id", "tool",
+			"agent", "anomaly", "budget_calls", "chain_seq", "client", "connector", "decision",
+			"duration_ms", "exec_id", "exec_path", "hash", "kind", "machine_id", "occurred_at", "ok",
+			"params_digest", "prev_hash", "protocol_version", "schema_version", "seq", "session_id", "tool",
 		}},
 		{"Page", Page{}, []string{
-			"agent", "anomaly", "chain_seq", "client", "connector", "cursor", "decision",
-			"duration_ms", "events", "exec_id", "exec_path", "hash", "kind", "machine_id", "occurred_at",
-			"ok", "params_digest", "prev_hash", "protocol_version", "schema_version",
+			"agent", "anomaly", "budget_calls", "chain_seq", "client", "connector", "cursor",
+			"decision", "duration_ms", "events", "exec_id", "exec_path", "hash", "kind", "machine_id",
+			"occurred_at", "ok", "params_digest", "prev_hash", "protocol_version", "schema_version",
 			"seq", "session_id", "tool",
 		}},
 		{"JournalState", JournalState{}, []string{

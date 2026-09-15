@@ -181,7 +181,13 @@ the CLI says a call would get can never drift from what it actually gets.
 docs/decisions/0003-allow-rules-and-precedence.md is the argument. What a
 rule is worth is bounded by what an enrolment is worth -- anything that can
 run this binary as this user can make either -- and the entry is what makes
-that visible afterwards, not what prevents it.
+that visible afterwards, not what prevents it. **A budget narrows what the
+rules allow, never widens it.** Checked only once a rule has already said
+allow, a budget caps the number of allowed calls one session may make, scoped
+like a rule; it counts decisions, not outcomes, so a call the relay gave up
+on still spent its share, and it has no way to express "allow" itself, so it
+can never turn a rule's deny into anything else. docs/decisions/0004-budgets.md
+is the argument.
 
 **Strict reading** of the one message Nim acts on. Objects are read by exact
 key and a repeated key is refused, because that is the one shape on which

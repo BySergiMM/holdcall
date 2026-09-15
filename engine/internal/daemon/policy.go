@@ -153,9 +153,24 @@ func handlePolicyExplain(req Request, j *journal.Journal) Response {
 		return Response{ID: req.ID, Error: fmt.Sprintf("reading the rules: %v", err)}
 	}
 	decision, info, reason := explainDecision(candidates)
+
+	// Budgets are shown too, but kept simple on purpose: explain has no
+	// session id, so it reports which budgets would apply and their caps,
+	// never a count against them -- inventing session state it was never
+	// given would be a guess dressed up as an answer.
+	budgets, err := j.MatchingBudgets(a, c, req.RuleTool)
+	if err != nil {
+		return Response{ID: req.ID, Error: fmt.Sprintf("reading the budgets: %v", err)}
+	}
+	budgetInfos := make([]BudgetInfo, len(budgets))
+	for i, b := range budgets {
+		budgetInfos[i] = budgetInfo(b)
+	}
+
 	return Response{ID: req.ID, Explain: &ExplainInfo{
 		Agent: a, Connector: c, Tool: req.RuleTool,
 		Decision: decision, Rule: info, Reason: reason, Candidates: len(candidates),
+		Budgets: budgetInfos,
 	}}
 }
 
