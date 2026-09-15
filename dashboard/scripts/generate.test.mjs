@@ -253,8 +253,10 @@ test("a forged decision status is refused", () => {
 // day, so naming the day is the price of claiming it.
 test("an open decision cannot be marked resolved without a date", () => {
   const open = {
-    id: "D-099", title: "A synthetic question", question: "Is this still open?",
-    status: "open", resolution: "Undecided.", provenance: "declared",
+    id: "D-099", title: "A synthetic question",
+    question: "Whether this synthetic question, which exists only so the test does not depend on the roadmap having an open one, is still open.",
+    status: "open", provenance: "declared",
+    resolution: "Undecided: the two ways out are named here at enough length for the generator to read the resolution as a real one.",
   };
   const legitimate = runWith((s) => { s.decisions.push({ ...open }); });
   assert.equal(legitimate.ok, true, `an open decision is a legitimate state:\n${legitimate.out}`);
