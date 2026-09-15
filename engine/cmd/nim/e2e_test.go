@@ -294,6 +294,25 @@ func (s *stack) deny(t *testing.T, args ...string) {
 	}
 }
 
+// allow is deny's counterpart, added for M4.5.
+func (s *stack) allow(t *testing.T, args ...string) {
+	t.Helper()
+	out, err := s.run(t, append([]string{"policy", "allow"}, args...)...)
+	if err != nil || !strings.Contains(out, "recorded in the journal") {
+		t.Fatalf("nim policy allow %v: %v\n%s", args, err, out)
+	}
+}
+
+// policyDefault sets deny or allow across every tool through the real CLI:
+// nim policy default deny|allow [--agent] [--connector].
+func (s *stack) policyDefault(t *testing.T, effect string, args ...string) {
+	t.Helper()
+	out, err := s.run(t, append([]string{"policy", "default", effect}, args...)...)
+	if err != nil || !strings.Contains(out, "recorded in the journal") {
+		t.Fatalf("nim policy default %s %v: %v\n%s", effect, args, err, out)
+	}
+}
+
 // One allowed call and one refused one, through the whole stack.
 func TestRealRelayForwardsOneCallAndRefusesTheOther(t *testing.T) {
 	s := build(t)
@@ -580,6 +599,75 @@ func TestTwoRealAgentsAgainstOneConnectorReceiveDifferentVerdicts(t *testing.T) 
 	}
 	if out, _ := s.run(t, "policy", "list"); !strings.Contains(out, "alpha") {
 		t.Errorf("nim policy list does not show the rule:\n%s", out)
+	}
+}
+
+// D-002 for the allow model (docs/decisions/0003's last section), run end to
+// end the way TestTwoRealAgentsAgainstOneConnectorReceiveDifferentVerdicts
+// runs M4's: a default deny closes every tool for every session, and an
+// agent-scoped allow is the enrolment that reopens one tool for one enrolled
+// agent -- "only alpha may read_file", the shape docs/decisions/0002 said
+// needed a precedence and a new answer. beta is built but never enrolled, so
+// its call meets only the default: an unknown agent is denied, not merely
+// unprivileged the way M4's deny-only model left it.
+func TestADefaultDenyClosesEverythingAndAnAgentScopedAllowReopensOneToolForOneAgent(t *testing.T) {
+	s := build(t)
+	dir := filepath.Dir(s.nim)
+	src := filepath.Join(dir, "launcher.go")
+	if err := os.WriteFile(src, []byte(launcherSource), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	alpha, beta := filepath.Join(dir, "alpha"), filepath.Join(dir, "beta")
+	for _, bin := range []string{alpha, beta} {
+		if out, err := exec.Command("go", "build", "-o", bin, src).CombinedOutput(); err != nil {
+			t.Fatalf("building %s: %v\n%s", bin, err, out)
+		}
+	}
+	s.daemon(t)
+	if out, err := s.run(t, "agent", "add", "alpha", alpha); err != nil || !strings.Contains(out, "enrolled") {
+		t.Fatalf("enrolling alpha: %v\n%s", err, out)
+	}
+	// beta is deliberately never enrolled.
+
+	s.policyDefault(t, "deny")
+	s.allow(t, "read_file", "--agent", "alpha")
+
+	call := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"read_file","arguments":{}}}`
+	verdict := func(launcher string) bool {
+		t.Helper()
+		r := s.serveVia(t, launcher)
+		r.send(t, call)
+		_, isError, _ := decodeLine(t, r.next(t))
+		r.in.Close()
+		r.cmd.Wait()
+		return !isError
+	}
+	if !verdict(alpha) {
+		t.Error("alpha's call was refused; alpha has an allow more specific than the default deny")
+	}
+	if verdict(beta) {
+		t.Error("beta's call was allowed; beta is unenrolled and meets only the default deny")
+	}
+
+	if out, err := s.run(t, "policy", "explain", "read_file", "--agent", "alpha"); err != nil ||
+		!strings.Contains(out, "ALLOW") {
+		t.Errorf("nim policy explain read_file --agent alpha: %v\n%s", err, out)
+	}
+	if out, err := s.run(t, "policy", "explain", "read_file"); err != nil || !strings.Contains(out, "DENY") {
+		t.Errorf("nim policy explain read_file (no agent): %v\n%s", err, out)
+	}
+
+	if out, _ := s.run(t, "policy", "list"); !strings.Contains(out, "alpha") || !strings.Contains(out, "allow") {
+		t.Errorf("nim policy list does not show the allow rule:\n%s", out)
+	}
+
+	// Removing the default leaves the M4 baseline for beta: still nothing
+	// grants it read_file, but nothing else refuses it either.
+	if out, err := s.run(t, "policy", "remove", "--default"); err != nil || !strings.Contains(out, "recorded in the journal") {
+		t.Fatalf("nim policy remove --default: %v\n%s", err, out)
+	}
+	if !verdict(beta) {
+		t.Error("beta was still refused after the default was removed; the M4 baseline is allow")
 	}
 }
 

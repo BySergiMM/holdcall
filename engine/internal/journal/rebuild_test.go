@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // journalTableM2 is nim_journal exactly as the M2 build created it: five
@@ -181,5 +182,120 @@ func TestOpeningACurrentJournalRecreatesNothing(t *testing.T) {
 	}
 	if rebuilt, err := rebuildJournalTable(j.db); err != nil || rebuilt {
 		t.Fatalf("a fresh journal's table was rebuilt (rebuilt=%v, err=%v)", rebuilt, err)
+	}
+}
+
+// rulesTableM4 is nim_rules exactly as the M4 build created it: effect may
+// only be 'deny'. Kept as text rather than derived from anything current,
+// because the point is to open a file an earlier build left behind.
+const rulesTableM4 = `create table nim_rules (
+    id          integer primary key autoincrement,
+    agent       text,
+    connector   text,
+    tool        text    not null,
+    effect      text    not null check (effect in ('deny')),
+    created_at  text    not null
+)`
+
+// anM4RulesTable writes a database the way the M4 build would have left it:
+// the old table, its indexes, and one deny rule. No nim_journal at all --
+// opening it is what is meant to bring nim_journal up to date too, and this
+// test is only about the CHECK constraint on nim_rules.effect.
+func anM4RulesTable(t *testing.T, path string) Rule {
+	t.Helper()
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	defer db.Close()
+	for _, stmt := range []string{
+		rulesTableM4,
+		`create unique index nim_rules_scope_idx on nim_rules (ifnull(agent, ''), ifnull(connector, ''), tool)`,
+		`create index nim_rules_tool_idx on nim_rules (tool)`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("%s: %v", stmt, err)
+		}
+	}
+	r := Rule{Agent: sp("cursor"), Tool: "delete_repository", Effect: DecisionDeny, CreatedAt: time.Now().UTC()}
+	res, err := db.Exec(
+		`insert into nim_rules (agent, connector, tool, effect, created_at) values (?, ?, ?, ?, ?)`,
+		r.Agent, r.Connector, r.Tool, r.Effect, r.CreatedAt.Format(time.RFC3339Nano))
+	if err != nil {
+		t.Fatalf("seeding the old rule: %v", err)
+	}
+	if r.ID, err = res.LastInsertId(); err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+// A nim_rules table built under the DDL before allow rules existed has a
+// CHECK constraint effect could not satisfy beyond 'deny', and SQLite cannot
+// widen a CHECK in place -- the same problem rebuildJournalTable solves for
+// nim_journal's kind column, solved here the same way for nim_rules.effect.
+func TestANimRulesTableFromTheCurrentDDLIsWidenedForAllowRules(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nim.db")
+	seeded := anM4RulesTable(t, path)
+
+	j, err := Open(path, "test-machine")
+	if err != nil {
+		t.Fatalf("Open on an M4 rules table: %v", err)
+	}
+	defer j.Close()
+
+	// The table is now this build's, byte for byte.
+	var stored string
+	if err := j.db.QueryRow(
+		`select sql from sqlite_master where type = 'table' and name = 'nim_rules'`).Scan(&stored); err != nil {
+		t.Fatalf("reading the definition: %v", err)
+	}
+	if stored != rulesTableStored {
+		t.Fatalf("the table was not rebuilt to this build's definition:\n%s", stored)
+	}
+	var leftovers int
+	if err := j.db.QueryRow(
+		`select count(*) from sqlite_master where name like 'nim_rules_rebuild%'`).Scan(&leftovers); err != nil {
+		t.Fatal(err)
+	}
+	if leftovers != 0 {
+		t.Fatalf("%d rebuild leftovers in the schema", leftovers)
+	}
+
+	// The old rule survived, unchanged.
+	rules, err := j.ListRules()
+	if err != nil {
+		t.Fatalf("ListRules: %v", err)
+	}
+	if len(rules) != 1 {
+		t.Fatalf("%d rules after the rebuild, want 1", len(rules))
+	}
+	got := rules[0]
+	if got.ID != seeded.ID || got.Tool != seeded.Tool || got.Effect != seeded.Effect ||
+		got.Agent == nil || seeded.Agent == nil || *got.Agent != *seeded.Agent {
+		t.Errorf("the rule changed in the rebuild:\n got %+v\nwant %+v", got, seeded)
+	}
+
+	// The reason the rebuild exists: effects and tools the old constraint,
+	// or the old absence of a default, would have refused.
+	if _, err := j.AddRule(Rule{Tool: "delete_repository", Connector: sp("github"), Effect: DecisionAllow}); err != nil {
+		t.Errorf("adding an allow rule after the rebuild: %v", err)
+	}
+	if _, err := j.AddRule(Rule{Tool: RuleToolDefault, Effect: DecisionDeny}); err != nil {
+		t.Errorf("adding a default rule after the rebuild: %v", err)
+	}
+
+	// Once is enough: a second look finds nothing to do.
+	if rebuilt, err := rebuildRulesTable(j.db); err != nil || rebuilt {
+		t.Fatalf("a second rebuild ran (rebuilt=%v, err=%v)", rebuilt, err)
+	}
+}
+
+// Opening a journal this build made is a read, for nim_rules exactly as it
+// is for nim_journal (TestOpeningACurrentJournalRecreatesNothing).
+func TestOpeningACurrentRulesTableRecreatesNothing(t *testing.T) {
+	j, _ := openTemp(t)
+	if rebuilt, err := rebuildRulesTable(j.db); err != nil || rebuilt {
+		t.Fatalf("a fresh rules table was rebuilt (rebuilt=%v, err=%v)", rebuilt, err)
 	}
 }

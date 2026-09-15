@@ -42,18 +42,28 @@ The same holds for connectors: a rule naming one applies to sessions started
 for it, and the connector is a property of the session, taken from
 `session.start`, never from the call.
 
-## What this does not answer
+## What this did not answer, until M4.5
 
 An allow-list per agent -- "only Claude Code may touch github; nothing else
-may" -- is the case where an unknown agent must be denied, because enrolment
-would be what grants. That needs an allow rule, and an allow rule needs a
-precedence between allow and deny, which is a policy language. That is M4.5,
-with the Cedar spike in front of it, and it has to answer this question again
-for that model rather than inherit this answer.
+may" -- was the case where an unknown agent must be denied, because
+enrolment would be what grants. That needed an allow rule, and an allow rule
+needed a precedence between allow and deny, which the deny-only model this
+decision was written for had no way to express.
 
-Until then the direction is fixed: enrolment restricts. A rule that could
-widen what a session may do would invert the sentence above, and must not be
-added to the deny-only model as a convenience.
+**Answered in docs/decisions/0003-allow-rules-and-precedence.md.** The
+mechanism above did not change: a session with no agent is still bound by
+the rules that name no agent, and by nothing else. What changed is what
+those rules can say. `nim policy default deny` is a deny naming no agent, so
+it binds every session, enrolled or not; `nim policy allow <tool> --agent
+claude-code` is more specific and wins for that agent alone. An unenrolled
+program meets only the default, which grants it nothing, and is denied --
+enrolment is what grants, exactly as this section asked for.
+
+Before 0003, the direction was fixed the other way: enrolment restricts, and
+a rule that could widen what a session may do would invert that and must not
+be added to the deny-only model as a convenience. 0003 is not a convenience
+added to that model; it is a different model, arrived at deliberately, with
+its own precedence and its own version of this argument.
 
 ## What an enrolment is worth
 

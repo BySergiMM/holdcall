@@ -505,3 +505,142 @@ func TestAnUnnumberedCallIsRefused(t *testing.T) {
 		t.Fatalf("%d unnumbered calls were journaled", n)
 	}
 }
+
+// D-002 for the allow model, restated in docs/decisions/0003's terms and
+// checked the way TestTwoAgentsAgainstOneConnectorReceiveDifferentVerdicts
+// checks M4's: a default deny closes everything, and an agent-scoped allow
+// is the enrolment that reopens one tool for one agent -- exactly the "only
+// Claude Code may touch github" shape 0002 said needed its own answer.
+// cmd/nim's TestTwoRealAgentsAgainstOneConnectorReceiveDifferentVerdicts-style
+// end-to-end test proves the same thing with real processes.
+func TestDefaultDenyDeniesAnUnknownAgentWhileAnAgentScopedAllowAdmitsAnEnrolledOne(t *testing.T) {
+	cfg, dbPath := start(t)
+	enrol(t, dbPath, "claude-code")
+	defaultRule(t, cfg, journal.DecisionDeny, "", "")
+	allow(t, cfg, "read_file", "claude-code", "")
+
+	j := openJournal(t, dbPath)
+	ask := func(agent string) string {
+		t.Helper()
+		mine, theirs := net.Pipe()
+		defer mine.Close()
+		defer theirs.Close()
+		go answer(theirs, Event{Kind: KindCallRequest, SessionID: agent + "-s", Seq: 1,
+			Tool: "read_file", Digest: "d", OccurredAt: now()}, j, agent, "github")
+		mine.SetReadDeadline(time.Now().Add(5 * time.Second))
+		raw, err := mcp.NewReader(mine).ReadRaw()
+		if err != nil {
+			t.Fatalf("no answer for %q: %v", agent, err)
+		}
+		var d Decision
+		if err := json.Unmarshal(raw, &d); err != nil {
+			t.Fatal(err)
+		}
+		return d.Decision
+	}
+
+	// Enrolment grants here: an unknown agent meets only the default, which
+	// denies everything.
+	if got := ask(""); got != journal.DecisionDeny {
+		t.Errorf("an unknown agent was %s under a default deny", got)
+	}
+	// A second enrolled agent with no allow of its own is denied the same way
+	// -- the allow is scoped to claude-code, not to "any enrolled agent".
+	if got := ask("cursor"); got != journal.DecisionDeny {
+		t.Errorf("an enrolled agent with no allow of its own was %s under a default deny", got)
+	}
+	// claude-code's allow is more specific than the default (an exact tool
+	// naming an agent beats a default naming none), so it wins.
+	if got := ask("claude-code"); got != journal.DecisionAllow {
+		t.Errorf("claude-code was %s; its allow rule is more specific than the default deny", got)
+	}
+	// A tool the allow does not name still meets only the default.
+	mine, theirs := net.Pipe()
+	defer mine.Close()
+	defer theirs.Close()
+	go answer(theirs, Event{Kind: KindCallRequest, SessionID: "claude-code-other", Seq: 1,
+		Tool: "delete_repository", Digest: "d", OccurredAt: now()}, j, "claude-code", "github")
+	mine.SetReadDeadline(time.Now().Add(5 * time.Second))
+	raw, err := mcp.NewReader(mine).ReadRaw()
+	if err != nil {
+		t.Fatalf("no answer: %v", err)
+	}
+	var d Decision
+	if err := json.Unmarshal(raw, &d); err != nil {
+		t.Fatal(err)
+	}
+	if d.Decision != journal.DecisionDeny {
+		t.Errorf("claude-code calling a tool its allow does not name was %s, want deny", d.Decision)
+	}
+}
+
+// policy.explain reports the rule that decides a call, and the reason names
+// it: an exact tool beats a default, so the explanation should say so and
+// name the allow rule, not the deny default that also matched.
+func TestPolicyExplainNamesTheDecidingRuleAndWhy(t *testing.T) {
+	cfg, _ := start(t)
+	defaultRule(t, cfg, journal.DecisionDeny, "", "")
+	allow(t, cfg, "read_file", "", "")
+
+	conn, err := net.Dial("unix", cfg.Daemon.Socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	resp, err := SendRequest(conn, Request{ID: "e1", Kind: KindPolicyExplain, RuleTool: "read_file"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Error != "" {
+		t.Fatalf("policy.explain: %s", resp.Error)
+	}
+	if resp.Explain == nil {
+		t.Fatal("policy.explain returned no explanation")
+	}
+	e := resp.Explain
+	if e.Decision != journal.DecisionAllow {
+		t.Errorf("explained decision = %q, want allow", e.Decision)
+	}
+	if e.Rule == nil || e.Rule.Tool != "read_file" || e.Rule.Effect != journal.DecisionAllow {
+		t.Errorf("explain did not name the allow rule as the reason: %+v", e.Rule)
+	}
+	if e.Candidates != 2 {
+		t.Errorf("explain saw %d candidates, want 2 (the default and the allow)", e.Candidates)
+	}
+
+	// A tool the allow does not name still meets the default deny -- the
+	// default matches every tool by construction, so this is not the "no
+	// rule at all" case; that one is covered by removing the default too,
+	// below.
+	resp, err = SendRequest(conn, Request{ID: "e2", Kind: KindPolicyExplain, RuleTool: "untouched_tool"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Explain == nil || resp.Explain.Decision != journal.DecisionDeny ||
+		resp.Explain.Rule == nil || resp.Explain.Rule.Tool != journal.RuleToolDefault || resp.Explain.Candidates != 1 {
+		t.Errorf("explain for a tool only the default names = %+v, want deny by the default alone", resp.Explain)
+	}
+
+	// With no rule at all, the M4 baseline: allow, and no rule to name.
+	if resp, err := SendRequest(conn, Request{ID: "e2b", Kind: KindPolicyRemove, RuleDefault: true}); err != nil || resp.Error != "" {
+		t.Fatalf("removing the default: %v %s", err, resp.Error)
+	}
+	resp, err = SendRequest(conn, Request{ID: "e2c", Kind: KindPolicyExplain, RuleTool: "untouched_tool"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Explain == nil || resp.Explain.Decision != journal.DecisionAllow || resp.Explain.Rule != nil || resp.Explain.Candidates != 0 {
+		t.Errorf("explain for an unmentioned tool with no rules left = %+v, want allow with no rule", resp.Explain)
+	}
+
+	// "*" is not something a caller may ask to explain: it is how a default
+	// is stored, not a tool a call can name.
+	resp, err = SendRequest(conn, Request{ID: "e3", Kind: KindPolicyExplain, RuleTool: journal.RuleToolDefault})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Error == "" {
+		t.Error(`policy.explain "*" was accepted`)
+	}
+}

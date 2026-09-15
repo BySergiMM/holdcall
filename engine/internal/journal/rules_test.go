@@ -22,7 +22,7 @@ func TestARuleAndItsEntryAreOneChange(t *testing.T) {
 	before := chainLength(t, j)
 
 	agent := "cursor"
-	r, err := j.AddRule(Rule{Agent: &agent, Tool: "delete_repository"})
+	r, err := j.AddRule(Rule{Agent: &agent, Tool: "delete_repository", Effect: DecisionDeny})
 	if err != nil {
 		t.Fatalf("AddRule: %v", err)
 	}
@@ -40,7 +40,7 @@ func TestARuleAndItsEntryAreOneChange(t *testing.T) {
 		t.Fatalf("the rule.add entry does not describe the rule: %+v", e)
 	}
 
-	if _, err := j.AddRule(Rule{Agent: &agent, Tool: "delete_repository"}); !errors.Is(err, ErrRuleExists) {
+	if _, err := j.AddRule(Rule{Agent: &agent, Tool: "delete_repository", Effect: DecisionDeny}); !errors.Is(err, ErrRuleExists) {
 		t.Fatalf("adding the same rule twice: %v, want ErrRuleExists", err)
 	}
 	if got := chainLength(t, j); got != before+1 {
@@ -83,7 +83,7 @@ func TestAPolicyChangeThatCannotBeRecordedIsNotMade(t *testing.T) {
 	// The entry cannot be written: the rule must not exist afterwards.
 	tamper(t, path, `create trigger no_rule_entries before insert on nim_journal
 		when new.kind = 'rule.add' begin select raise(abort, 'no'); end`)
-	if _, err := j.AddRule(Rule{Tool: "rm"}); err == nil {
+	if _, err := j.AddRule(Rule{Tool: "rm", Effect: DecisionDeny}); err == nil {
 		t.Fatal("AddRule succeeded although its entry could not be written")
 	}
 	if rules, _ := j.ListRules(); len(rules) != 0 {
@@ -94,7 +94,7 @@ func TestAPolicyChangeThatCannotBeRecordedIsNotMade(t *testing.T) {
 	// The rule cannot be stored: the chain must not say it was.
 	tamper(t, path, `create trigger no_rules before insert on nim_rules
 		begin select raise(abort, 'no'); end`)
-	if _, err := j.AddRule(Rule{Tool: "rm"}); err == nil {
+	if _, err := j.AddRule(Rule{Tool: "rm", Effect: DecisionDeny}); err == nil {
 		t.Fatal("AddRule succeeded although the rule could not be stored")
 	}
 	if got := chainLength(t, j); got != before {
@@ -109,10 +109,10 @@ func TestRuleScopes(t *testing.T) {
 	j, _ := openTemp(t)
 	cursor, github := "cursor", "github"
 	for _, r := range []Rule{
-		{Tool: "rm"},
-		{Agent: &cursor, Tool: "delete_repository"},
-		{Connector: &github, Tool: "force_push"},
-		{Agent: &cursor, Connector: &github, Tool: "merge"},
+		{Tool: "rm", Effect: DecisionDeny},
+		{Agent: &cursor, Tool: "delete_repository", Effect: DecisionDeny},
+		{Connector: &github, Tool: "force_push", Effect: DecisionDeny},
+		{Agent: &cursor, Connector: &github, Tool: "merge", Effect: DecisionDeny},
 	} {
 		if _, err := j.AddRule(r); err != nil {
 			t.Fatalf("AddRule(%s): %v", r, err)
@@ -140,12 +140,18 @@ func TestRuleScopes(t *testing.T) {
 		{"cursor", "github", "rm ", false}, // no trimming
 	}
 	for _, c := range cases {
-		_, denied, err := j.RuleDenying(c.agent, c.connector, c.tool)
+		// Every rule in this test denies, so RuleFor's found tracks "denied"
+		// exactly: a decision without a rule is the M4 baseline (allow), and
+		// with one it is that rule's effect. The precedence between allow and
+		// deny has its own test, TestDecidePrecedence, because it does not
+		// depend on scope matching at all.
+		rule, found, err := j.RuleFor(c.agent, c.connector, c.tool)
 		if err != nil {
-			t.Fatalf("RuleDenying(%q, %q, %q): %v", c.agent, c.connector, c.tool, err)
+			t.Fatalf("RuleFor(%q, %q, %q): %v", c.agent, c.connector, c.tool, err)
 		}
+		denied := found && rule.Effect == DecisionDeny
 		if denied != c.denied {
-			t.Errorf("RuleDenying(agent=%q, connector=%q, tool=%q) = %v, want %v",
+			t.Errorf("RuleFor(agent=%q, connector=%q, tool=%q) = %v, want %v",
 				c.agent, c.connector, c.tool, denied, c.denied)
 		}
 	}
@@ -155,7 +161,7 @@ func TestRuleScopes(t *testing.T) {
 // fact breaks verification.
 func TestAlteringAPolicyEntryBreaksTheChain(t *testing.T) {
 	j, path := openTemp(t)
-	if _, err := j.AddRule(Rule{Tool: "rm"}); err != nil {
+	if _, err := j.AddRule(Rule{Tool: "rm", Effect: DecisionDeny}); err != nil {
 		t.Fatal(err)
 	}
 	if rep, _ := j.Verify(""); !rep.OK {
@@ -174,7 +180,7 @@ func TestAlteringAPolicyEntryBreaksTheChain(t *testing.T) {
 // A read-only handle can look at the rules and change none of them.
 func TestAReadOnlyJournalCannotChangePolicy(t *testing.T) {
 	w, path := openTemp(t)
-	if _, err := w.AddRule(Rule{Tool: "rm"}); err != nil {
+	if _, err := w.AddRule(Rule{Tool: "rm", Effect: DecisionDeny}); err != nil {
 		t.Fatal(err)
 	}
 	w.Close()
@@ -187,10 +193,66 @@ func TestAReadOnlyJournalCannotChangePolicy(t *testing.T) {
 	if rules, err := j.ListRules(); err != nil || len(rules) != 1 {
 		t.Fatalf("ListRules = %v, %v", rules, err)
 	}
-	if _, err := j.AddRule(Rule{Tool: "ls"}); err == nil {
+	if _, err := j.AddRule(Rule{Tool: "ls", Effect: DecisionDeny}); err == nil {
 		t.Error("a read-only journal accepted a rule")
 	}
 	if _, err := j.RemoveRule(nil, nil, "rm"); err == nil {
 		t.Error("a read-only journal removed a rule")
+	}
+}
+
+// An allow rule and a default rule are ordinary chain entries: rule.add and
+// rule.remove carry whatever effect and tool the rule actually has -- allow
+// as readily as deny, RuleToolDefault ("*") as readily as an exact tool --
+// and the chain verifies across them exactly as it does across a plain deny.
+func TestAllowAndDefaultRuleEntriesCarryTheEffectAndVerify(t *testing.T) {
+	j, _ := openTemp(t)
+	before := chainLength(t, j)
+
+	cursor := "cursor"
+	if _, err := j.AddRule(Rule{Agent: &cursor, Tool: "read_file", Effect: DecisionAllow}); err != nil {
+		t.Fatalf("AddRule (allow): %v", err)
+	}
+	if _, err := j.AddRule(Rule{Tool: RuleToolDefault, Effect: DecisionDeny}); err != nil {
+		t.Fatalf("AddRule (default): %v", err)
+	}
+
+	entries, err := j.EntriesSince(before, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("%d entries after two rules, want 2", len(entries))
+	}
+	allowEntry, defaultEntry := entries[0], entries[1]
+	if allowEntry.Kind != KindRuleAdd || allowEntry.Tool == nil || *allowEntry.Tool != "read_file" ||
+		allowEntry.Decision == nil || *allowEntry.Decision != DecisionAllow {
+		t.Fatalf("the allow rule's entry does not carry allow: %+v", allowEntry)
+	}
+	if defaultEntry.Kind != KindRuleAdd || defaultEntry.Tool == nil || *defaultEntry.Tool != RuleToolDefault ||
+		defaultEntry.Decision == nil || *defaultEntry.Decision != DecisionDeny {
+		t.Fatalf("the default rule's entry does not carry \"*\" and deny: %+v", defaultEntry)
+	}
+
+	if _, err := j.RemoveRule(&cursor, nil, "read_file"); err != nil {
+		t.Fatalf("RemoveRule (allow): %v", err)
+	}
+	if _, err := j.RemoveRule(nil, nil, RuleToolDefault); err != nil {
+		t.Fatalf("RemoveRule (default): %v", err)
+	}
+	entries, err = j.EntriesSince(before+2, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 || entries[0].Kind != KindRuleRemove || entries[1].Kind != KindRuleRemove {
+		t.Fatalf("removing the two rules did not leave two rule.remove entries: %+v", entries)
+	}
+
+	rep, err := j.Verify("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rep.OK {
+		t.Fatalf("the chain does not verify across allow and default rules: %s", rep.Problem)
 	}
 }

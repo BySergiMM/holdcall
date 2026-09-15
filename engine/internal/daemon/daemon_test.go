@@ -54,19 +54,46 @@ func start(t testing.TB) (cfg config.Config, dbPath string) {
 // part of every test that uses this.
 func deny(t testing.TB, cfg config.Config, tool, agent, connector string) {
 	t.Helper()
+	policyChange(t, cfg, Request{
+		ID: "rule", Kind: KindPolicyDeny, RuleTool: tool, RuleAgent: agent, RuleConnector: connector,
+	})
+}
+
+// allow is deny's counterpart, added for M4.5: the same one-off connection,
+// the same expectation that the daemon accepts it.
+func allow(t testing.TB, cfg config.Config, tool, agent, connector string) {
+	t.Helper()
+	policyChange(t, cfg, Request{
+		ID: "rule", Kind: KindPolicyAllow, RuleTool: tool, RuleAgent: agent, RuleConnector: connector,
+	})
+}
+
+// defaultRule sets deny or allow across every tool -- RuleDefault, the one
+// path that ever asks the daemon for a rule whose tool is "*".
+func defaultRule(t testing.TB, cfg config.Config, effect, agent, connector string) {
+	t.Helper()
+	kind := KindPolicyDeny
+	if effect == journal.DecisionAllow {
+		kind = KindPolicyAllow
+	}
+	policyChange(t, cfg, Request{
+		ID: "rule", Kind: kind, RuleAgent: agent, RuleConnector: connector, RuleDefault: true,
+	})
+}
+
+func policyChange(t testing.TB, cfg config.Config, req Request) {
+	t.Helper()
 	conn, err := net.Dial("unix", cfg.Daemon.Socket)
 	if err != nil {
 		t.Fatalf("dialling for a rule: %v", err)
 	}
 	defer conn.Close()
-	resp, err := SendRequest(conn, Request{
-		ID: "rule", Kind: KindPolicyDeny, RuleTool: tool, RuleAgent: agent, RuleConnector: connector,
-	})
+	resp, err := SendRequest(conn, req)
 	if err != nil {
-		t.Fatalf("policy.deny: %v", err)
+		t.Fatalf("%s: %v", req.Kind, err)
 	}
 	if resp.Error != "" {
-		t.Fatalf("policy.deny %s: %s", tool, resp.Error)
+		t.Fatalf("%s %s: %s", req.Kind, req.RuleTool, resp.Error)
 	}
 }
 

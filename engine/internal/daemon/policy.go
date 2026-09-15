@@ -20,6 +20,12 @@ import (
 // rule.remove entry, so `nim log` shows when the rules changed as it shows when
 // the calls were made.
 //
+// M4.5 adds allow rules and the precedence between them and deny --
+// docs/decisions/0003-allow-rules-and-precedence.md -- so policy.deny and
+// policy.allow share one handler below, differing only in the effect they
+// store, and policy.explain exists so the CLI can show which rule would
+// decide a call without ever reading the database itself.
+//
 // What a rule is worth is bounded by what an enrolment is worth, and that is
 // stated rather than implied: anything that can run this binary as this user
 // can add or remove a rule, exactly as it can enrol an agent or register a
@@ -27,7 +33,23 @@ import (
 // what prevents it.
 
 func handlePolicyDeny(req Request, j *journal.Journal) Response {
+	return handlePolicyAdd(req, journal.DecisionDeny, j)
+}
+
+func handlePolicyAllow(req Request, j *journal.Journal) Response {
+	return handlePolicyAdd(req, journal.DecisionAllow, j)
+}
+
+// handlePolicyAdd is shared by policy.deny and policy.allow: everything but
+// the effect they store -- validating the scope, resolving the tool,
+// checking a named agent is enrolled, refusing a duplicate -- is one piece of
+// logic that must not drift between the two.
+func handlePolicyAdd(req Request, effect string, j *journal.Journal) Response {
 	agent, connector, err := ruleScope(req)
+	if err != nil {
+		return Response{ID: req.ID, Error: err.Error()}
+	}
+	tool, err := ruleTool(req)
 	if err != nil {
 		return Response{ID: req.ID, Error: err.Error()}
 	}
@@ -44,9 +66,11 @@ func handlePolicyDeny(req Request, j *journal.Journal) Response {
 				*agent, *agent)}
 		}
 	}
-	r, err := j.AddRule(journal.Rule{Agent: agent, Connector: connector, Tool: req.RuleTool})
+	r, err := j.AddRule(journal.Rule{Agent: agent, Connector: connector, Tool: tool, Effect: effect})
 	if errors.Is(err, journal.ErrRuleExists) {
-		return Response{ID: req.ID, Error: fmt.Sprintf("that rule already exists: %s", ruleString(agent, connector, req.RuleTool))}
+		return Response{ID: req.ID, Error: fmt.Sprintf(
+			"a rule already exists for %s; a scope holds one rule, allow or deny -- remove it first to change the effect",
+			scopeDescription(agent, connector, tool))}
 	}
 	if err != nil {
 		return Response{ID: req.ID, Error: fmt.Sprintf("recording the rule: %v", err)}
@@ -57,16 +81,23 @@ func handlePolicyDeny(req Request, j *journal.Journal) Response {
 // A rule can be removed whether or not its agent is still enrolled: an
 // enrolment can be removed first, and a rule that outlived it must still be
 // removable, or the list would hold rules nothing can delete.
+//
+// The effect is not part of what identifies a rule to remove -- a scope and
+// tool hold at most one rule, allow or deny, so naming the scope is enough.
 func handlePolicyRemove(req Request, j *journal.Journal) Response {
 	agent, connector, err := ruleScope(req)
 	if err != nil {
 		return Response{ID: req.ID, Error: err.Error()}
 	}
-	r, err := j.RemoveRule(agent, connector, req.RuleTool)
+	tool, err := ruleTool(req)
+	if err != nil {
+		return Response{ID: req.ID, Error: err.Error()}
+	}
+	r, err := j.RemoveRule(agent, connector, tool)
 	if errors.Is(err, journal.ErrNoSuchRule) {
 		return Response{ID: req.ID, Error: fmt.Sprintf(
 			"no such rule: %s. nim policy list shows the rules that exist, with their exact scope",
-			ruleString(agent, connector, req.RuleTool))}
+			scopeDescription(agent, connector, tool))}
 	}
 	if err != nil {
 		return Response{ID: req.ID, Error: fmt.Sprintf("removing the rule: %v", err)}
@@ -86,12 +117,70 @@ func handlePolicyList(req Request, j *journal.Journal) Response {
 	return Response{ID: req.ID, Rules: infos}
 }
 
-// ruleScope validates the three fields a rule is made of and turns the empty
-// ones into nil, which is how "every" is stored.
-func ruleScope(req Request) (agent, connector *string, err error) {
-	if err := validateTool(req.RuleTool); err != nil {
-		return nil, nil, err
+// handlePolicyExplain answers "which rule decides this call, and why" --
+// nim policy explain <tool> [--agent] [--connector] -- by gathering the same
+// candidates the decision path would and running them through journal.Decide,
+// the one implementation of the precedence. The CLI never reads nim_rules
+// itself; this is the only door to it.
+//
+// Unlike policy.deny/allow/remove, RuleTool here names the tool a call would
+// carry, not a rule's own tool -- so RuleToolDefault ("*") is refused: it is
+// not something a client sends as params.name for this purpose, only a way a
+// rule expresses a default, and explaining "what happens for the literal
+// tool *" would answer a different, much rarer question than the one the
+// command name promises.
+func handlePolicyExplain(req Request, j *journal.Journal) Response {
+	agent, connector, err := ruleScope(req)
+	if err != nil {
+		return Response{ID: req.ID, Error: err.Error()}
 	}
+	if err := validateTool(req.RuleTool); err != nil {
+		return Response{ID: req.ID, Error: err.Error()}
+	}
+	if req.RuleTool == journal.RuleToolDefault {
+		return Response{ID: req.ID, Error: `"*" is not a tool a call names; nim policy explain takes the exact tool to ask about`}
+	}
+
+	a, c := "", ""
+	if agent != nil {
+		a = *agent
+	}
+	if connector != nil {
+		c = *connector
+	}
+	candidates, err := j.MatchingRules(a, c, req.RuleTool)
+	if err != nil {
+		return Response{ID: req.ID, Error: fmt.Sprintf("reading the rules: %v", err)}
+	}
+	decision, info, reason := explainDecision(candidates)
+	return Response{ID: req.ID, Explain: &ExplainInfo{
+		Agent: a, Connector: c, Tool: req.RuleTool,
+		Decision: decision, Rule: info, Reason: reason, Candidates: len(candidates),
+	}}
+}
+
+// explainDecision turns the candidates policy.explain gathered into the
+// verdict the decision path would reach, plus a reason a human can read. It
+// calls journal.Decide, never a second copy of the precedence, so what this
+// says can never drift from what a real call gets.
+func explainDecision(candidates []journal.Rule) (decision string, rule *RuleInfo, reason string) {
+	winner, found := journal.Decide(candidates)
+	if !found {
+		return journal.DecisionAllow, nil, "no rule's scope matches this agent, connector and tool -- the M4 baseline applies: allow"
+	}
+	info := ruleInfo(winner)
+	if len(candidates) == 1 {
+		return winner.Effect, &info, "the only rule whose scope matches: " + winner.String()
+	}
+	return winner.Effect, &info, fmt.Sprintf(
+		"the most specific of %d matching rules (a tie in specificity goes to deny): %s", len(candidates), winner.String())
+}
+
+// ruleScope validates the two fields that name a rule's scope and turns the
+// empty ones into nil, which is how "every" is stored. Tool is not part of
+// scope -- see ruleTool -- because a default rule (RuleDefault) has no tool
+// field of its own to validate.
+func ruleScope(req Request) (agent, connector *string, err error) {
 	if req.RuleAgent != "" {
 		if err := validateAgentName(req.RuleAgent); err != nil {
 			return nil, nil, err
@@ -107,12 +196,56 @@ func ruleScope(req Request) (agent, connector *string, err error) {
 	return agent, connector, nil
 }
 
-func ruleString(agent, connector *string, tool string) string {
-	return journal.Rule{Agent: agent, Connector: connector, Tool: tool}.String()
+// ruleTool resolves the tool a policy.deny/allow/remove request names:
+// RuleToolDefault for `nim policy default ...` or `nim policy remove
+// --default`, or the validated literal tool otherwise.
+//
+// "*" is refused as an ordinary tool here, on purpose: it exists only to
+// express a default, and typing it directly through --agent/--connector
+// scoped policy deny/allow would create one by accident, indistinguishable
+// at match time from one made through nim policy default. Requiring
+// --default keeps there being exactly one way to ask for a default rule.
+// This has nothing to do with whether a *client* may call a tool literally
+// named "*" -- it can, and such a call matches this rule exactly as it would
+// match one written for that literal name; see MatchingRules.
+func ruleTool(req Request) (string, error) {
+	if req.RuleDefault {
+		if req.RuleTool != "" {
+			return "", fmt.Errorf("a default rule has no tool of its own; drop the tool, or drop --default and name one")
+		}
+		return journal.RuleToolDefault, nil
+	}
+	if err := validateTool(req.RuleTool); err != nil {
+		return "", err
+	}
+	if req.RuleTool == journal.RuleToolDefault {
+		return "", fmt.Errorf(`tool "*" is reserved for defaults; use nim policy default deny|allow instead`)
+	}
+	return req.RuleTool, nil
+}
+
+// scopeDescription names a rule's scope and tool without claiming an effect,
+// for messages about a rule that does or does not exist -- removal in
+// particular does not know in advance whether a missing rule would have
+// allowed or denied.
+func scopeDescription(agent, connector *string, tool string) string {
+	name := tool
+	if tool == journal.RuleToolDefault {
+		name = "the default"
+	}
+	scope := "every agent"
+	if agent != nil {
+		scope = "agent " + *agent
+	}
+	where := "every connector"
+	if connector != nil {
+		where = "connector " + *connector
+	}
+	return fmt.Sprintf("%s for %s on %s", name, scope, where)
 }
 
 func ruleInfo(r journal.Rule) RuleInfo {
-	info := RuleInfo{Tool: r.Tool, CreatedAt: r.CreatedAt.Format(time.RFC3339Nano)}
+	info := RuleInfo{Tool: r.Tool, Effect: r.Effect, CreatedAt: r.CreatedAt.Format(time.RFC3339Nano)}
 	if r.Agent != nil {
 		info.Agent = *r.Agent
 	}

@@ -39,20 +39,29 @@ chain, not the content.
 `kind` is one of `session.start`, `call.request`, `call.outcome`, `session.end`,
 `anomaly`, `rule.add`, `rule.remove`.
 
-`rule.add` and `rule.remove` record a policy change: a rule that refuses
-`tool` for the sessions in its scope. They carry the scope in `agent` (null:
-every session) and `connector` (null: every connector), the tool in `tool`,
-and the effect in `decision`, which is always `deny` today. They carry no
-session: `session_id` is the empty string, which the encoding keeps distinct
-from null, and `seq` is null. The rule and its entry are written in one SQLite
-transaction, so the chain never describes a rule that was not stored and no
-rule exists that the chain does not know about.
+`rule.add` and `rule.remove` record a policy change: a rule with one effect
+-- deny or allow -- for `tool`, for the sessions in its scope. They carry the
+scope in `agent` (null: every session) and `connector` (null: every
+connector), the tool in `tool`, and the effect in `decision`. `tool` is
+either an exact name or `*`, which means a default set by `nim policy
+default deny|allow` -- see
+docs/decisions/0003-allow-rules-and-precedence.md -- never a pattern or a
+prefix. Before M4.5 `decision` on these two kinds was always `deny`; a
+journal written before then has only that value here, and a reader does not
+need to treat it specially -- it is exactly what an M4.5 build would have
+written for the same rule. They carry no session: `session_id` is the empty
+string, which the encoding keeps distinct from null, and `seq` is null. The
+rule and its entry are written in one SQLite transaction, so the chain never
+describes a rule that was not stored and no rule exists that the chain does
+not know about.
 
 `decision` is one of `observed`, `allow`, `deny`, `approved`, `rejected`. M2
-writes `allow` and `deny`. `observed` is what earlier milestones wrote, when
-nothing was authorized at all, and it is still what those entries hold — which is
-why enforcement needed no migration. `approved` and `rejected` belong to human
-approval and are not written yet. See *What a decision means* below.
+writes `allow` and `deny` on `call.request`; M4.5 writes them on `rule.add`
+and `rule.remove` too, now that a rule can allow as well as deny.
+`observed` is what earlier milestones wrote, when nothing was authorized at
+all, and it is still what those entries hold — which is why enforcement
+needed no migration. `approved` and `rejected` belong to human approval and
+are not written yet. See *What a decision means* below.
 
 `anomaly` is one of `batch`, `malformed_json`, `framing`, `duplicate_id`,
 `duplicate_key`, `unreadable_call`. Since M2 the relay refuses most of them

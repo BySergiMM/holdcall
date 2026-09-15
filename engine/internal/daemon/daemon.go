@@ -472,7 +472,7 @@ func handle(conn net.Conn, j *journal.Journal, store credential.Store, locks *ta
 // daemon could not decide -- and is answered as undecided, not as a verdict.
 func answer(conn net.Conn, ev Event, j *journal.Journal, agent, connector string) error {
 	decision, reason := journal.DecisionAllow, ""
-	rule, denied, err := j.RuleDenying(agent, connector, ev.Tool)
+	rule, found, err := j.RuleFor(agent, connector, ev.Tool)
 	if err != nil {
 		log.Printf("reading the rules for %s seq %d: %v", ev.SessionID, ev.Seq, err)
 		return json.NewEncoder(conn).Encode(Decision{
@@ -480,9 +480,13 @@ func answer(conn net.Conn, ev Event, j *journal.Journal, agent, connector string
 			Decision: DecisionUndecided, Reason: "the rules could not be read",
 		})
 	}
-	if denied {
-		decision = journal.DecisionDeny
-		reason = "refused by rule: " + rule.String()
+	// found may carry either effect: an explicit allow can be the answer too,
+	// when it is the more specific rule -- docs/decisions/0003 has the
+	// precedence. No matching rule at all is the M4 baseline, decision's zero
+	// value above: allow, with nothing to name as the reason.
+	if found {
+		decision = rule.Effect
+		reason = "by rule: " + rule.String()
 	}
 
 	ev.Decision = decision
