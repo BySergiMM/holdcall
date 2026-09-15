@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"io"
 	"net"
@@ -14,6 +15,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/BySergiMM/nim/engine/internal/peer"
 )
 
 // End to end, with the real binary: a real daemon, a real relay, a real child
@@ -142,6 +145,74 @@ func (s *stack) daemon(t *testing.T) func() {
 	}
 	t.Fatal("the daemon did not come up")
 	return stop
+}
+
+// syncBuffer is an io.Writer safe for a subprocess to write to concurrently
+// with a test reading what has been written so far -- cmd.Stderr is written
+// from a goroutine the exec package owns, and String() below is called
+// while that is still happening.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// daemonCapturing is daemon with its stderr kept rather than discarded, for
+// a test that needs to see what the accept-time peer check logged -- F-001's
+// daemon-side diagnosis, which daemon() 's callers have never needed before.
+func (s *stack) daemonCapturing(t *testing.T) (stop func(), stderr *syncBuffer) {
+	t.Helper()
+	cmd := exec.Command(s.nim, "daemon")
+	cmd.Env = s.env
+	buf := &syncBuffer{}
+	cmd.Stdout, cmd.Stderr = io.Discard, buf
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	stop = func() {
+		if cmd.Process != nil {
+			cmd.Process.Kill()
+			cmd.Wait()
+		}
+	}
+	t.Cleanup(stop)
+
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		out, _ := s.run(t, "status")
+		if strings.Contains(out, "daemon   running") {
+			return stop, buf
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatal("the daemon did not come up")
+	return stop, buf
+}
+
+// socketFromStatus reads the socket path off `nim status`'s own output --
+// the daemon's to choose, so a test that needs it asks rather than guesses.
+func socketFromStatus(t *testing.T, s *stack) string {
+	t.Helper()
+	out, _ := s.run(t, "status")
+	for _, line := range strings.Split(out, "\n") {
+		if rest, ok := strings.CutPrefix(line, "socket   "); ok {
+			return strings.TrimSpace(rest)
+		}
+	}
+	t.Fatalf("status did not print the socket path:\n%s", out)
+	return ""
 }
 
 func (s *stack) run(t *testing.T, args ...string) (string, error) {
@@ -956,5 +1027,134 @@ func TestStatusDoesNotCallAnImpostorTheDaemon(t *testing.T) {
 	}
 	if !strings.Contains(out, "NOT NIM") {
 		t.Errorf("status did not say what is bound is not Nim:\n%s", out)
+	}
+}
+
+// F-001: replacing the binary while a daemon runs used to leave the old
+// daemon and every new client refusing each other with nothing to go on --
+// the daemon logged "refusing a connection from an unverified peer" and the
+// client saw an EOF, both true and neither useful. peer.Diagnose tells that
+// specific shape (same launch path, different file) apart from a genuine
+// impostor, and `nim daemon restart` is the one-command fix.
+//
+// Run with the real binary, rebuilt in place while its own daemon is still
+// running -- the same thing `go build -o <path>` or an install over a
+// running binary does -- because nothing short of that actually reproduces
+// dev/ino identity differing while the path stays the same.
+func TestAnInPlaceUpgradeIsDiagnosedAndDaemonRestartFixesIt(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("peer identity, and therefore peer.Diagnose, is unsupported on windows by design " +
+			"(see internal/peer/peer_windows.go); nim daemon restart refuses outright there too")
+	}
+	s := build(t)
+	_, daemonStderr := s.daemonCapturing(t)
+
+	// The shape of an in-place upgrade: rebuild the exact same path while
+	// the daemon started from it is still running. A different -ldflags -X
+	// value is enough to make `go build` write a different file at that
+	// path; it does not need to be a different program.
+	if out, err := exec.Command("go", "build", "-ldflags", "-X main.commit=rebuilt",
+		"-o", s.nim, ".").CombinedOutput(); err != nil {
+		t.Fatalf("rebuilding nim in place while its daemon runs: %v\n%s", err, out)
+	}
+
+	// The new binary and the still-running old daemon now refuse each
+	// other. `nim status`, run with the new binary, must name the specific
+	// case -- an older build at the same path -- not the generic wording a
+	// real impostor gets.
+	out, _ := s.run(t, "status")
+	if !strings.Contains(out, "OLDER BUILD") {
+		t.Fatalf("status did not name the older build:\n%s", out)
+	}
+	if !strings.Contains(out, "nim daemon restart") {
+		t.Fatalf("status did not name the remedy:\n%s", out)
+	}
+	if strings.Contains(out, "NOT NIM") {
+		t.Fatalf("status called an older build of Nim an impostor:\n%s", out)
+	}
+
+	// `nim doctor`, same binary, reports the same diagnosis as a FAIL naming
+	// the remedy, not the generic "something other than Nim" wording.
+	out, _ = s.run(t, "doctor")
+	if !strings.Contains(out, "daemon build") || !strings.Contains(out, "nim daemon restart") {
+		t.Fatalf("doctor did not report the stale daemon build with its remedy:\n%s", out)
+	}
+
+	// The old daemon's own log says what it refused and why, in the same
+	// terms as the client: it is the older build, at this path, and the fix
+	// is restarting it.
+	//
+	// Diagnosing the caller is the daemon's own job here, done
+	// asynchronously in the goroutine handle() spawns per connection (see
+	// daemon.go). Reading a peer's credentials at the exact moment it is
+	// closing its end is a genuine OS-level race, not a Nim bug: on the rare
+	// loss, peer.DiagnosePID correctly reports DiagnosisUnavailable rather
+	// than guessing, and the daemon logs the older, generic line instead of
+	// the specific one -- the fallback the design calls for, not a wrong
+	// answer. `nim status` and `nim doctor` exit within a few milliseconds of
+	// being refused and so are more likely to lose that race than win it; a
+	// relay does not have that problem on its own (it stays up, blocked on
+	// stdin, whether or not it found a daemon to talk to), but retrying with
+	// a fresh one is still the honest way to test a check that is allowed to
+	// occasionally, safely decline to guess.
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) && !strings.Contains(daemonStderr.String(), "different build of Nim") {
+		probe := s.serve(t)
+		time.Sleep(150 * time.Millisecond)
+		probe.kill()
+	}
+	logged := daemonStderr.String()
+	if !strings.Contains(logged, "different build of Nim") {
+		t.Fatalf("the old daemon's log never named the specific reason it refused a connection:\n%s", logged)
+	}
+	if !strings.Contains(logged, "nim daemon restart") {
+		t.Fatalf("the old daemon's log did not name the remedy:\n%s", logged)
+	}
+
+	// The one-command fix: the new binary asks the old daemon to exit and
+	// starts a new one it can talk to, verifying both before it returns.
+	out, err := s.run(t, "daemon", "restart")
+	if err != nil {
+		t.Fatalf("nim daemon restart: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "restarted") {
+		t.Errorf("nim daemon restart did not say what it did:\n%s", out)
+	}
+
+	// The restarted daemon runs detached from this process, the same as any
+	// daemon StartDaemon launches -- so, unlike s.daemon's, nothing here
+	// holds an *exec.Cmd for it to clean up automatically. Find its pid the
+	// same way `nim daemon restart` itself does and stop it the same way, or
+	// it outlives the test. stopDaemonPID rather than a direct syscall.Kill:
+	// this file has no build tag, so it must compile for windows too, where
+	// syscall.Kill does not exist -- stopDaemonPID is already split by
+	// platform for exactly this (see daemon_restart_unix.go and
+	// daemon_restart_windows.go), and this whole test already skips there.
+	t.Cleanup(func() {
+		socket := socketFromStatus(t, s)
+		conn, err := net.Dial("unix", socket)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		if pid, supported, err := peer.PIDOf(conn); supported && err == nil {
+			stopDaemonPID(pid)
+		}
+	})
+
+	out, _ = s.run(t, "status")
+	if !strings.Contains(out, "daemon   running") {
+		t.Fatalf("status does not show a running daemon after restart:\n%s", out)
+	}
+	if strings.Contains(out, "OLDER BUILD") {
+		t.Fatalf("status still reports an older build after restart:\n%s", out)
+	}
+
+	// The restarted daemon is not merely reachable -- it is the one deciding
+	// calls again, the property the rest of this file's tests exist for.
+	r := s.serve(t)
+	r.send(t, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"echo","arguments":{}}}`)
+	if _, isError, _ := decodeLine(t, r.next(t)); isError {
+		t.Errorf("a call was refused by the daemon nim daemon restart started")
 	}
 }

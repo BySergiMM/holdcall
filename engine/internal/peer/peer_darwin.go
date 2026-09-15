@@ -38,10 +38,10 @@ const kernProcargs2 = 49
 // in an internal ABI would show up. Falling back is not a silent downgrade: it
 // is the previous behaviour, and it is the honest response to a mechanism that
 // has just failed to describe something we already know.
-func isSelfImpl(conn net.Conn) (supported, same bool) {
+func isSelfImpl(conn net.Conn) (supported, same bool, pid int) {
 	uc, ok := conn.(*net.UnixConn)
 	if !ok {
-		return false, false
+		return false, false, 0
 	}
 	// A *net.UnixConn whose SyscallConn() itself errors is not "this platform
 	// cannot check" (that is the type-assertion failure above) -- it is a
@@ -51,16 +51,15 @@ func isSelfImpl(conn net.Conn) (supported, same bool) {
 	// same as every other error below.
 	raw, err := uc.SyscallConn()
 	if err != nil {
-		return true, false
+		return true, false, 0
 	}
 
-	var pid int
 	var sockErr error
 	ctrlErr := raw.Control(func(fd uintptr) {
 		pid, sockErr = unix.GetsockoptInt(int(fd), unix.SOL_LOCAL, unix.LOCAL_PEERPID)
 	})
 	if ctrlErr != nil || sockErr != nil {
-		return true, false
+		return true, false, 0
 	}
 
 	if self, trustworthy := selfImageID(); trustworthy {
@@ -68,12 +67,12 @@ func isSelfImpl(conn net.Conn) (supported, same bool) {
 		if err != nil {
 			// The peer exited, or belongs to another user we cannot inspect.
 			// Either way this is not an identity we can confirm.
-			return true, false
+			return true, false, pid
 		}
-		return true, peer.Equal(self)
+		return true, peer.Equal(self), pid
 	}
 
-	return true, samePathIdentity(pid)
+	return true, samePathIdentity(pid), pid
 }
 
 // samePathIdentity is the pre-vnode comparison, kept only as the fallback

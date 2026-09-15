@@ -136,7 +136,12 @@ func checkConfig(report reportFunc) (config.Config, bool) {
 	return cfg, true
 }
 
-// 3. The daemon socket answers, and the peer on the other end is genuine.
+// 3. The daemon socket answers, the peer on the other end is genuine, and it
+// is the same build as this binary -- F-001: replacing the binary while a
+// daemon runs makes the two refuse each other, and an operator reading a
+// bare "something other than Nim is on that socket" cannot tell that apart
+// from a real impostor. shim.ErrDaemonOlderBuild is the specific case;
+// everything else keeps the older, more general FAIL.
 func checkDaemon(report reportFunc, cfg config.Config, cfgOK bool) {
 	if !cfgOK {
 		report(sevWarn, "daemon -- skipped: config.toml did not load, see above")
@@ -144,14 +149,18 @@ func checkDaemon(report reportFunc, cfg config.Config, cfgOK bool) {
 	}
 	conn, err := shim.DialRunningDaemon(cfg, dialTimeout)
 	if err != nil {
-		if errors.Is(err, shim.ErrDaemonNotReachable) {
+		switch {
+		case errors.Is(err, shim.ErrDaemonNotReachable):
 			report(sevWarn, "daemon -- not running at %s -- it starts on demand when a client spawns `nim serve`, or run `nim daemon`", cfg.Daemon.Socket)
-			return
+		case errors.Is(err, shim.ErrDaemonOlderBuild):
+			report(sevFail, "daemon build -- %v", err)
+		default:
+			report(sevFail, "daemon -- %v -- something other than Nim is on that socket; stop it and let a client restart the daemon", err)
 		}
-		report(sevFail, "daemon -- %v -- something other than Nim is on that socket; stop it and let a client restart the daemon", err)
 		return
 	}
 	defer conn.Close()
+	report(sevOK, "daemon build -- matches this binary")
 
 	resp, err := daemon.SendRequest(conn, daemon.Request{ID: config.NewID(), Kind: daemon.KindAgentList})
 	if err != nil {

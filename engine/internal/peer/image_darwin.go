@@ -164,6 +164,26 @@ func selfImageID() (Image, bool) {
 	return selfImage.id, selfImage.trustworthy
 }
 
+// ExecPathOf returns the path pid was launched from, via kern.procargs2 --
+// see peerExecPath in peer_darwin.go, which this wraps and which isSelfImpl
+// already uses as its own weaker fallback when the vnode mechanism above
+// cannot be trusted.
+//
+// This is a launch path, not a running image: unlike ImageOf, it says
+// nothing about what pid is actually executing right now, so it must never
+// be used to decide identity -- see Diagnose's doc comment in peer.go, the
+// one place this is used, only to tell an in-place upgrade apart from an
+// impostor after IsSelf has already decided the connection.
+//
+// ok is false wherever the pid cannot be inspected at all.
+func ExecPathOf(pid int) (path string, ok bool) {
+	p, err := peerExecPath(pid)
+	if err != nil {
+		return "", false
+	}
+	return p, true
+}
+
 // Layout constants for PROC_PIDTBSDINFO, from the same SDK header. Only the
 // parent pid is read: struct proc_bsdinfo begins with pbi_flags, pbi_status,
 // pbi_xstatus and pbi_pid, four uint32s, so pbi_ppid sits at offset 16.
