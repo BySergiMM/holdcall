@@ -3,6 +3,7 @@ package daemon
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -29,6 +30,11 @@ func anExecutable(t *testing.T, name string) string {
 // identity of a file, taken by the daemon from the filesystem, and never a
 // device and inode the caller supplied.
 func TestEnrolmentRecordsTheFilesOwnIdentity(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("agent enrolment resolves identity via peer.ImageOfFile, which always errors on " +
+			"windows by design (see internal/peer/image_windows.go: \"Windows has no implementation " +
+			"of any of this yet\"), so enrolling a real file cannot succeed there")
+	}
 	j := freshJournal(t)
 	path := anExecutable(t, "claude")
 
@@ -82,6 +88,11 @@ func TestARequestCannotCarryAnIdentity(t *testing.T) {
 // Two different files are two different agents, which is the whole basis for
 // telling agents apart later.
 func TestTwoDifferentExecutablesEnrolAsDifferentIdentities(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("agent enrolment resolves identity via peer.ImageOfFile, which always errors on " +
+			"windows by design (see internal/peer/image_windows.go: \"Windows has no implementation " +
+			"of any of this yet\"), so enrolling a real file cannot succeed there")
+	}
 	j := freshJournal(t)
 	a := anExecutable(t, "claude")
 	b := anExecutable(t, "cursor")
@@ -110,6 +121,11 @@ func TestTwoDifferentExecutablesEnrolAsDifferentIdentities(t *testing.T) {
 // second executable that also counts as it. It is also how an operator repairs
 // an enrolment after an application updates itself.
 func TestReEnrollingReplacesTheIdentity(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("agent enrolment resolves identity via peer.ImageOfFile, which always errors on " +
+			"windows by design (see internal/peer/image_windows.go: \"Windows has no implementation " +
+			"of any of this yet\"), so enrolling a real file cannot succeed there")
+	}
 	j := freshJournal(t)
 	first := anExecutable(t, "old")
 	second := anExecutable(t, "new")
@@ -139,6 +155,11 @@ func TestReEnrollingReplacesTheIdentity(t *testing.T) {
 // has to be visible in a listing, because otherwise it is discovered later as
 // a silent denial with no explanation.
 func TestAReplacedFileIsReportedStaleRatherThanFailing(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("agent enrolment resolves identity via peer.ImageOfFile, which always errors on " +
+			"windows by design (see internal/peer/image_windows.go: \"Windows has no implementation " +
+			"of any of this yet\"), so enrolling a real file cannot succeed there")
+	}
 	j := freshJournal(t)
 	path := anExecutable(t, "claude")
 
@@ -186,6 +207,11 @@ func TestAReplacedFileIsReportedStaleRatherThanFailing(t *testing.T) {
 }
 
 func TestEnrolmentRejectsWhatIsNotAnExecutableFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("agent enrolment resolves identity via peer.ImageOfFile, which always errors on " +
+			"windows by design (see internal/peer/image_windows.go: \"Windows has no implementation " +
+			"of any of this yet\"), so enrolling a real file cannot succeed there")
+	}
 	j := freshJournal(t)
 	dir := t.TempDir()
 	notExecutable := filepath.Join(dir, "plain")
@@ -257,6 +283,11 @@ func TestRemovingAnAgentIsIdempotent(t *testing.T) {
 // alongside credentials and connectors, and mixing it with either is the shape
 // a process probing this protocol would take.
 func TestAConnectionCannotMixAgentAndOtherPurposes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("agent enrolment resolves identity via peer.ImageOfFile, which always errors on " +
+			"windows by design (see internal/peer/image_windows.go: \"Windows has no implementation " +
+			"of any of this yet\"), so enrolling a real file cannot succeed there")
+	}
 	j := freshJournal(t)
 	store := newFakeStore()
 	locks := newTargetLocks()

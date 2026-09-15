@@ -14,6 +14,12 @@ node_modules/
 out/
 .vercel/
 
+# Python: the relay rig's own venv, needed because fastmcp requires
+# Python >=3.10 and this repo has no other Python dependency to pin one for.
+tools/relay-rig/.venv/
+__pycache__/
+*.pyc
+
 # Local state: this is where credentials and the journal live. Never commit it.
 .nim/
 *.db
