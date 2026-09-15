@@ -6,6 +6,7 @@ const { project, derived, summary, ciSnapshot, runtime, architecture } = state;
 
 const NAV = [
   ["overview", "Overview", ""],
+  ["getting-started", "Get started", ""],
   ["architecture", "Architecture", ""],
   ["guarantees", "Guarantees", `${summary.guarantees.total}`],
   ["break", "Break Nim", `${summary.attacks.total}`],
@@ -108,6 +109,39 @@ export default function Page() {
               progress. The counts above are what can be counted.
             </p>
           </div>
+        </Section>
+
+        {/* ----------------------------------------------- getting started */}
+        <Section
+          id="getting-started"
+          title="Get started"
+          lede="Point a real MCP client at Nim in about five minutes."
+        >
+          <Field k="Install">
+            <code>curl -fsSL https://raw.githubusercontent.com/BySergiMM/nim/m1-bootstrap/install.sh | sh</code>
+          </Field>
+          <Field k="Five minutes to a first decision">
+            <ol style={{ margin: 0, paddingLeft: "1.1rem" }}>
+              <li>
+                <code>nim init</code>, then <code>nim init --write</code>, to point Claude Code, Cursor or
+                Claude Desktop at Nim
+              </li>
+              <li>
+                <code>nim doctor</code> to check the result
+              </li>
+              <li>
+                <code>nim policy deny &lt;tool-name&gt;</code> to refuse one tool
+              </li>
+              <li>call it from the client, and watch the call come back refused</li>
+              <li>
+                <code>nim log</code> to see the decision, <code>nim console</code> to see the journal
+              </li>
+            </ol>
+          </Field>
+          <p style={{ color: "var(--text-2)", maxWidth: "var(--measure)" }}>
+            The full walkthrough, one client at a time with before/after config examples, is{" "}
+            <code>docs/getting-started.md</code>; what this page is and is not is <code>docs/dashboard.md</code>.
+          </p>
         </Section>
 
         {/* --------------------------------------------------- architecture */}
