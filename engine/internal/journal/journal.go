@@ -51,6 +51,14 @@ const (
 	// was removed rather than only that something was.
 	KindAgentAdd    = "agent.add"
 	KindAgentRemove = "agent.remove"
+
+	// A budget change is an entry in the chain for the same reason a rule
+	// change is: nim_budgets sits outside the hash chain, like nim_rules and
+	// nim_agents, so these entries are what make a change to it auditable.
+	// Both carry the budget's scope in agent, connector and tool, its cap in
+	// budget_calls, and no session, exactly like a rule. See budgets.go.
+	KindBudgetAdd    = "budget.add"
+	KindBudgetRemove = "budget.remove"
 )
 
 // The decisions an entry can carry.
@@ -87,7 +95,8 @@ const journalTableBody = `(
     schema_version   integer not null,
     kind             text    not null check (kind in
                        ('session.start','call.request','call.outcome','session.end','anomaly',
-                        'rule.add','rule.remove','agent.add','agent.remove')),
+                        'rule.add','rule.remove','agent.add','agent.remove',
+                        'budget.add','budget.remove')),
     session_id       text    not null,
     seq              integer,
     connector        text,
@@ -106,6 +115,7 @@ const journalTableBody = `(
     agent            text,
     exec_path        text,
     exec_id          text,
+    budget_calls     integer,
     prev_hash        text    not null,
     hash             text    not null
 )`
@@ -156,6 +166,31 @@ const rulesIndexes = `
 create unique index if not exists nim_rules_scope_idx
     on nim_rules (ifnull(agent, ''), ifnull(connector, ''), tool);
 create index if not exists nim_rules_tool_idx on nim_rules (tool);
+`
+
+// budgetsTableBody is everything after the table name in nim_budgets's
+// definition, held apart from the schema for the same reason
+// journalTableBody and rulesTableBody are: it is what a second install's
+// sqlite_master would need to match byte for byte, and keeping it separate
+// is what would let a future rebuild compare against it, the way
+// rebuildRulesTable compares against rulesTableStored today. nim_budgets is
+// new with this milestone, so no earlier install has one to bring forward --
+// unlike nim_journal and nim_rules, nothing here needs a rebuild yet.
+const budgetsTableBody = `(
+    id          integer primary key autoincrement,
+    agent       text,
+    connector   text,
+    tool        text    not null,
+    calls       integer not null check (calls >= 0),
+    created_at  text    not null
+)`
+
+// budgetsIndexes are recreated after a rebuild -- if nim_budgets ever needs
+// one -- and the schema below creates them too, the same pattern
+// rulesIndexes uses.
+const budgetsIndexes = `
+create unique index if not exists nim_budgets_scope_idx
+    on nim_budgets (ifnull(agent, ''), ifnull(connector, ''), tool);
 `
 
 const schema = `
@@ -234,6 +269,23 @@ create table if not exists nim_agents (
 -- rows themselves.
 create table if not exists nim_rules ` + rulesTableBody + `;
 ` + rulesIndexes + `
+
+-- Budgets: a cap on the number of ALLOWED calls one session may make for a
+-- tool, or for every tool (BudgetToolAll), scoped like a rule -- see
+-- MatchingBudgets and daemon.checkBudgets. Checked only once the rules have
+-- already allowed a call: a budget never grants, it only lowers what the
+-- rules allow -- docs/decisions/0004-budgets.md.
+--
+-- Configuration, not the record of what happened, so -- like nim_rules and
+-- nim_agents -- it sits outside the hash chain; budget.add and budget.remove
+-- entries in nim_journal are what make a change to it auditable, written in
+-- the same transaction as the change itself.
+--
+-- calls is a magnitude rather than an effect, so unlike nim_rules a scope
+-- never holds two things that could disagree -- there is no allow-vs-deny
+-- precedence to resolve here, only whether a session's count has reached it.
+create table if not exists nim_budgets ` + budgetsTableBody + `;
+` + budgetsIndexes + `
 `
 
 // migrations are additive statements applied after schema, each of which must
@@ -253,6 +305,11 @@ var migrations = []string{
 	// rebuild's SELECT with "no such column: exec_path" instead of gaining it.
 	`alter table nim_journal add column exec_path text`,
 	`alter table nim_journal add column exec_id text`,
+	// budget_calls is named on the renamed source table by
+	// rebuildJournalTable's column list below, so a database that reaches
+	// that rebuild without it -- any built before this version -- needs it
+	// added first, for the same reason exec_path and exec_id needed it.
+	`alter table nim_journal add column budget_calls integer`,
 }
 
 func migrate(db *sql.DB) error {
@@ -315,7 +372,7 @@ func rebuildJournalTable(db *sql.DB) (rebuilt bool, err error) {
 
 	const columns = `chain_seq, schema_version, kind, session_id, seq, connector, tool,
 		params_digest, decision, ok, duration_ms, anomaly, occurred_at,
-		machine_id, client, protocol_version, agent, exec_path, exec_id, prev_hash, hash`
+		machine_id, client, protocol_version, agent, exec_path, exec_id, budget_calls, prev_hash, hash`
 	for _, stmt := range []string{
 		`drop view if exists nim_sessions`,
 		`drop view if exists nim_calls`,
@@ -582,8 +639,15 @@ type Entry struct {
 	// both null.
 	ExecPath *string
 	ExecID   *string
-	PrevHash string
-	Hash     string
+	// BudgetCalls is set on budget.add and budget.remove: the cap the
+	// budget carries. On budget.add it is the cap being set; on
+	// budget.remove it is the cap that was removed, so the chain says what
+	// stopped applying rather than only that something did -- the same
+	// reasoning ExecPath and ExecID follow for an enrolment. Every other
+	// kind leaves it null.
+	BudgetCalls *int64
+	PrevHash    string
+	Hash        string
 }
 
 type Journal struct {
@@ -818,11 +882,11 @@ func (j *Journal) appendTx(tx *sql.Tx, e Entry) error {
 		`insert into nim_journal
 		   (chain_seq, schema_version, kind, session_id, seq, connector, tool,
 		    params_digest, decision, ok, duration_ms, anomaly, occurred_at,
-		    machine_id, client, protocol_version, agent, exec_path, exec_id, prev_hash, hash)
-		 values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		    machine_id, client, protocol_version, agent, exec_path, exec_id, budget_calls, prev_hash, hash)
+		 values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		e.ChainSeq, e.SchemaVersion, e.Kind, e.SessionID, e.Seq, e.Connector, e.Tool,
 		e.ParamsDigest, e.Decision, e.OK, e.DurationMS, e.Anomaly, e.OccurredAt,
-		e.MachineID, e.Client, e.ProtocolVersion, e.Agent, e.ExecPath, e.ExecID, e.PrevHash, e.Hash,
+		e.MachineID, e.Client, e.ProtocolVersion, e.Agent, e.ExecPath, e.ExecID, e.BudgetCalls, e.PrevHash, e.Hash,
 	)
 	return err
 }

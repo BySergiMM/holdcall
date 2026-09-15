@@ -135,6 +135,14 @@ func usage() {
         "default" sets one across every tool. Every change is an entry in
         the journal.
 
+  nim policy budget <n> --tool <tool>|--all-tools [--agent <name>] [--connector <name>]
+  nim policy budget remove --tool <tool>|--all-tools [--agent <name>] [--connector <name>]
+        Cap the number of ALLOWED calls one session may make, decremented at
+        authorization time. Per session: session.start to session.end, so a
+        client that restarts its relay starts fresh. A budget never grants
+        -- it only lowers what the rules already allow. Every change is an
+        entry in the journal.
+
   nim init [--client <name>] [--config <path>] [--write] [--repoint]
         Rewrite MCP client configs so every stdio server goes through Nim.
         Without --write this only prints what would change.
@@ -542,6 +550,9 @@ func formatEvent(ev readmodel.Event) string {
 	}
 	if ev.Tool != nil {
 		add("tool=%s", *ev.Tool)
+	}
+	if ev.BudgetCalls != nil {
+		add("budget_calls=%d", *ev.BudgetCalls)
 	}
 	if ev.Decision != nil {
 		add("decision=%s", *ev.Decision)

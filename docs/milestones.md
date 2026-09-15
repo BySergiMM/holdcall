@@ -450,7 +450,81 @@ agent identity before a policy language had anything to say.
 
 ## M5 — Budgets
 
-Per session, decremented at authorization time, not at execution time.
+**Status: done, 2026-09-15.** Per session, decremented at authorization
+time, not at execution time -- the sentence this section opened with, now
+the thing `daemon.checkBudgets` does. `docs/decisions/0004-budgets.md` is
+the argument behind every choice below.
+
+What landed:
+
+- **A budget is a cap on ALLOWED calls, scoped like a rule.** `(agent,
+  connector, tool, calls)` -- agent and connector null mean every session or
+  every connector, and tool is an exact name or `*` (`journal.BudgetToolAll`)
+  for every tool, set only through `--all-tools`, the same convention
+  `RuleToolDefault` uses for a rule's default. `nim_budgets` holds one budget
+  per scope, unique on `(agent, connector, tool)`.
+- **Checked once the rules already allow a call, and only then.**
+  `checkBudgets` runs inside `daemon.answer` after `journal.Decide` has
+  reached `allow`; a call the rules deny never reaches it. A budget has no
+  effect field and no way to express "allow," so there is no path by which
+  one could turn a `deny` into anything else --
+  `TestABudgetCannotMakeADeniedCallPass`.
+- **The count is of decisions, not outcomes.** `journal.CountAllowedCalls`
+  weighs a session's `call.request` entries whose `decision` is `allow` or
+  `approved`; a refused call, by a rule or by this same budget, spends
+  nothing, and a call the relay gave up waiting on still spent its share the
+  moment it was allowed -- the same "an allow is not evidence the call was
+  made" `docs/journal-format.md` already states, now load-bearing for a
+  second guarantee. `TestTheNthPlusOneAllowedCallIsDeniedAndRefusalsDoNotCount`
+  proves both halves in one sequence: the (N+1)th allowed call is refused,
+  and the refusals woven through the sequence never counted.
+- **Per session means session.start to session.end**, the unit Nim already
+  had; a client that restarts its relay starts a new session with a fresh
+  count (`TestANewSessionStartsWithAFreshBudget`, and end to end with a real
+  relay, `TestABudgetOfTwoRefusesTheThirdCallAndANewRelayStartsFresh`).
+- **Schema version 4, `canonical_encode_v4`, field 20 `budget_calls`.** Set
+  on `budget.add`, carrying the cap being set; on `budget.remove`, carrying
+  the cap being removed, so the chain says what stopped applying rather than
+  only that something did -- the same reasoning `exec_path`/`exec_id`
+  followed for an enrolment. `nim_journal`'s `kind` CHECK widened the same
+  way it did for `rule.add` and `agent.add` before it, rebuilt once on open,
+  rows copied verbatim
+  (`TestADatabaseFromTheCurrentBuildGainsTheBudgetKindsAndStillVerifies`).
+- **`nim_budgets` sits outside the hash chain**, exactly like `nim_rules` and
+  `nim_agents`: configuration, not the record of what happened. `budget.add`
+  and `budget.remove` are what make a change to it auditable, written in the
+  same SQLite transaction as the change itself
+  (`TestABudgetAndItsEntryAreOneChange`,
+  `TestABudgetChangeThatCannotBeRecordedIsNotMade`).
+- **`nim policy budget <n> --tool <tool>|--all-tools [--agent] [--connector]`**
+  and **`nim policy budget remove`** with the same scope, through new daemon
+  request kinds `budget.set`, `budget.remove` and `budget.list` -- budgets
+  are policy, so a connection that has committed to that purpose may send
+  either alongside `policy.deny`/`allow`/`remove`/`list`/`explain`. `nim
+  policy list` shows a BUDGETS table under the rules table.
+- **`nim policy explain` lists the budgets that would apply to a call and
+  their caps, and stops there.** It has no session to weigh a count against
+  -- explain answers "what would apply to a call shaped like this," and a
+  session's usage is not part of that shape. Inventing a count would be a
+  guess dressed up as an answer; `docs/decisions/0004-budgets.md`'s closing
+  section is the argument.
+
+What it does not do, stated rather than implied:
+
+- **No time bounds.** A budget counts calls, not calls per hour or calls
+  since a clock reading -- `docs/decisions/0003`'s closing section named
+  this, alongside budgets, as needing a subject beyond a rule's scope; a
+  session is the subject this milestone chose, a clock is a different one.
+- **No budget that survives a restarted relay.** Per session means exactly
+  that: a crash-and-restart loop is not throttled by a budget scoped to one
+  session, on purpose, and the docs say so plainly rather than let an
+  operator discover it.
+- **No conditions on a call's arguments, and no weighting by cost.** A
+  budget is `(agent, connector, tool, calls)`; it does not read
+  `params.arguments`, and every allowed call spends exactly one unit of
+  whichever budgets cover it, regardless of what the call actually asked a
+  connector to do.
+- **No human approval.** Still M6.
 
 ## M6 — Human approval
 

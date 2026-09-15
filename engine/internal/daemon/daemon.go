@@ -1,8 +1,8 @@
 // Package daemon owns everything shared between shims.
 //
 // A client spawns one shim per configured MCP server, so decisions, the journal
-// and (later) budgets and human approval need a single writer. The shims report
-// here; this process is the only one that touches SQLite.
+// and (later) human approval need a single writer. The shims report here; this
+// process is the only one that touches SQLite.
 //
 // One report is answered, and only one. A shim asks before it forwards a
 // tools/call and waits, because a call that has been sent cannot be recalled.
@@ -465,11 +465,16 @@ func handle(conn net.Conn, j *journal.Journal, store credential.Store, locks *ta
 // is the property M4 exists to establish, and the record distinguishes them
 // because the agent is on their sessions' start entries.
 //
+// Once the rules allow a call, checkBudgets gets a turn: a budget can lower
+// that allow to a deny, per session, but nothing here lets a budget overrule
+// a rule that already denied -- docs/decisions/0004-budgets.md.
+//
 // The order is the point. If the entry cannot be written the answer is deny,
 // because allowing a call Nim failed to record would break the one thing this
 // milestone guarantees: that a call which reached a connector is a call the
-// journal knows about. A rule lookup that fails is the same shape -- the
-// daemon could not decide -- and is answered as undecided, not as a verdict.
+// journal knows about. A rule lookup or a budget lookup that fails is the same
+// shape -- the daemon could not decide -- and is answered as undecided, not as
+// a verdict.
 func answer(conn net.Conn, ev Event, j *journal.Journal, agent, connector string) error {
 	decision, reason := journal.DecisionAllow, ""
 	rule, found, err := j.RuleFor(agent, connector, ev.Tool)
@@ -487,6 +492,24 @@ func answer(conn net.Conn, ev Event, j *journal.Journal, agent, connector string
 	if found {
 		decision = rule.Effect
 		reason = "by rule: " + rule.String()
+	}
+
+	// Budgets are consulted only once the rules have allowed a call, and only
+	// then: a budget never grants, it only lowers what the rules already
+	// allow -- docs/decisions/0004-budgets.md. A call the rules denied pays
+	// no budget lookup, because nothing a budget could say would change it.
+	if decision == journal.DecisionAllow {
+		budgetDecision, budgetReason, err := checkBudgets(j, agent, connector, ev.Tool, ev.SessionID)
+		if err != nil {
+			log.Printf("reading the budgets for %s seq %d: %v", ev.SessionID, ev.Seq, err)
+			return json.NewEncoder(conn).Encode(Decision{
+				Kind: KindDecision, SessionID: ev.SessionID, Seq: ev.Seq,
+				Decision: DecisionUndecided, Reason: "the budgets could not be read",
+			})
+		}
+		if budgetDecision != "" {
+			decision, reason = budgetDecision, budgetReason
+		}
 	}
 
 	ev.Decision = decision

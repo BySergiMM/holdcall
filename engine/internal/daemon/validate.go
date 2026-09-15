@@ -197,3 +197,23 @@ func validateTool(tool string) error {
 	}
 	return nil
 }
+
+// MaxBudgetCalls bounds what a budget's cap may be: a positive integer, far
+// past any session anyone runs today, and small enough that a bug turning it
+// into a loop bound could not do much damage.
+const MaxBudgetCalls = 1_000_000
+
+// validateBudgetCalls checks the shape of a budget's cap. It must be a
+// positive integer -- zero would deny every call outright, which is what a
+// rule is for, and a budget that already denies everything is not what "a
+// cap on how many calls may be made" is asking for.
+func validateBudgetCalls(n int) error {
+	if n <= 0 {
+		return fmt.Errorf(
+			"a budget's calls must be a positive integer: nim policy budget <n> --tool <tool>|--all-tools")
+	}
+	if n > MaxBudgetCalls {
+		return fmt.Errorf("budget calls is %d, over the %d limit", n, MaxBudgetCalls)
+	}
+	return nil
+}
