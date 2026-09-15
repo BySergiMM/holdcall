@@ -228,6 +228,16 @@ func runStatus() error {
 		return err
 	}
 	renderStatus(os.Stdout, snap)
+
+	// Policy too: rules, agents and connectors, from the same read-only
+	// handle status already opened. No daemon needed, and none of this is a
+	// record of what happened -- it is what may happen, which is why it
+	// prints as its own block after the journal one rather than inside it.
+	pol, err := readmodel.TakePolicy(j)
+	if err != nil {
+		return err
+	}
+	renderPolicy(os.Stdout, pol)
 	return nil
 }
 
@@ -312,6 +322,37 @@ func renderGaps(w io.Writer, gaps readmodel.Gaps) {
 		fmt.Fprintf(w, "         anomaly        %-16s %d (%s)\n", name, gaps.Anomalies[name],
 			readmodel.AnomalyDisposition(name))
 	}
+}
+
+// renderPolicy writes the policy block: what may happen, as opposed to the
+// journal block above it, which is what did. Separate from runStatus, and
+// takes a Policy rather than reading one, for the same reason renderStatus
+// does: a test can render the projection without a daemon or a socket, and
+// the console can be held to reporting the same counts.
+func renderPolicy(w io.Writer, pol readmodel.Policy) {
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "policy   rules        ", len(pol.Rules))
+
+	stale, unknown := 0, 0
+	for _, a := range pol.Agents {
+		switch {
+		case a.Current == nil:
+			unknown++
+		case !*a.Current:
+			stale++
+		}
+	}
+	switch {
+	case stale > 0:
+		fmt.Fprintf(w, "         agents        %d (%d stale)\n", len(pol.Agents), stale)
+	default:
+		fmt.Fprintln(w, "         agents       ", len(pol.Agents))
+	}
+	if unknown > 0 {
+		fmt.Fprintf(w, "                        %d enrolment(s) could not be checked on this platform\n", unknown)
+	}
+
+	fmt.Fprintln(w, "         connectors   ", len(pol.Connectors))
 }
 
 func runLog(args []string) error {
@@ -469,6 +510,12 @@ func streamEntries(asJSON, follow bool, since int64, sinceSet bool, limit int) e
 
 // formatEvent renders one entry on one line, leading with the position that
 // orders it.
+//
+// Agent comes before connector and client: a rule.add or rule.remove entry
+// carries only agent, connector, tool and decision (see journal.ruleEntry),
+// and this order is what makes such a line read as a scope followed by an
+// effect -- "agent=cursor connector=github tool=rm decision=deny" -- rather
+// than an arbitrary field dump.
 func formatEvent(ev readmodel.Event) string {
 	line := fmt.Sprintf("%6d  %-14s %s", ev.ChainSeq, ev.Kind, shortID(ev.SessionID))
 	add := func(format string, args ...any) { line += "  " + fmt.Sprintf(format, args...) }
@@ -476,14 +523,14 @@ func formatEvent(ev readmodel.Event) string {
 	if ev.Seq != nil {
 		add("seq=%d", *ev.Seq)
 	}
+	if ev.Agent != nil {
+		add("agent=%s", *ev.Agent)
+	}
 	if ev.Connector != nil {
 		add("connector=%s", *ev.Connector)
 	}
 	if ev.Client != nil {
 		add("client=%s", *ev.Client)
-	}
-	if ev.Agent != nil {
-		add("agent=%s", *ev.Agent)
 	}
 	if ev.ExecPath != nil {
 		add("exec_path=%s", *ev.ExecPath)

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/BySergiMM/nim/engine/internal/journal"
 	"github.com/BySergiMM/nim/engine/internal/readmodel"
 )
 
@@ -220,6 +221,29 @@ func TestFormatEventRendersAnAgentEntry(t *testing.T) {
 // release built with -ldflags -- the release workflow is not what this test
 // exercises, only the shape it depends on.
 var versionShape = regexp.MustCompile(`^nim (\S+) \((\S+), built (\S+), (\S+)/(\S+), (go\S+)\)$`)
+
+// A rule.add or rule.remove entry carries a scope (agent, connector) and an
+// effect (tool, decision), no session and no seq -- see journal.ruleEntry --
+// and formatEvent must read as that, not as a call with some fields missing.
+func TestFormatEventRendersARuleEntry(t *testing.T) {
+	agent, connector, tool, decision := "cursor", "github", "rm", journal.DecisionDeny
+	ev := readmodel.Event{
+		ChainSeq: 9, Kind: journal.KindRuleAdd, SessionID: "",
+		Agent: &agent, Connector: &connector, Tool: &tool, Decision: &decision,
+	}
+
+	got := formatEvent(ev)
+	if !strings.Contains(got, "rule.add") {
+		t.Fatalf("formatEvent(rule.add) = %q, lost the kind", got)
+	}
+	want := "agent=cursor  connector=github  tool=rm  decision=deny"
+	if !strings.Contains(got, want) {
+		t.Fatalf("formatEvent(rule.add) = %q, want it to contain %q", got, want)
+	}
+	if strings.Contains(got, "seq=") {
+		t.Errorf("formatEvent(rule.add) = %q, a rule entry has no seq", got)
+	}
+}
 
 func TestVersionStringHasTheDocumentedShape(t *testing.T) {
 	got := versionString()

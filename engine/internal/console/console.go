@@ -53,6 +53,7 @@ func New(src readmodel.Source, socketPath string) *Server {
 	s.mux.HandleFunc("/api/snapshot", s.handleSnapshot)
 	s.mux.HandleFunc("/api/events", s.handleEvents)
 	s.mux.HandleFunc("/api/sessions/", s.handleSession)
+	s.mux.HandleFunc("/api/policy", s.handlePolicy)
 	return s
 }
 
@@ -215,6 +216,20 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, detail)
+}
+
+// handlePolicy serves what may happen: the rules, agents and connectors held
+// outside the chain in nim_rules, nim_agents and nim_connectors. Unlike
+// everything else this server shows, none of it is a record of something
+// that occurred -- it is the configuration a decision reads, which is why it
+// gets its own endpoint rather than a field on the snapshot.
+func (s *Server) handlePolicy(w http.ResponseWriter, r *http.Request) {
+	pol, err := readmodel.TakePolicy(s.src)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, pol)
 }
 
 // validSessionID keeps anything surprising out of the query. Ids are opaque
