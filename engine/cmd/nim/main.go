@@ -15,6 +15,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"runtime"
@@ -50,7 +51,7 @@ func main() {
 	case "serve":
 		err = runServe(os.Args[2:])
 	case "daemon":
-		err = runDaemon()
+		err = runDaemonCmd(os.Args[2:])
 	case "status":
 		err = runStatus()
 	case "log":
@@ -103,6 +104,13 @@ func usage() {
 
   nim daemon
         Run the shared daemon. Started automatically when needed.
+
+  nim daemon restart
+        Ask the running daemon to exit and start a new one from this
+        binary. The remedy for F-001: replacing the binary while a daemon
+        runs otherwise leaves the old daemon and every new client refusing
+        each other, since the socket is exactly what an older build cannot
+        answer for a new client. Not supported on Windows.
 
   nim status
         Where state lives, and what the record says about itself.
@@ -210,6 +218,117 @@ func runDaemon() error {
 	return daemon.Run(cfg)
 }
 
+// runDaemonCmd dispatches `nim daemon`'s one subcommand. Kept separate from
+// runDaemon, which is also what a detached daemon process re-execs itself
+// into (see shim.StartDaemon: `<self> daemon`, no further arguments) --
+// that call must keep working exactly as it does today.
+func runDaemonCmd(args []string) error {
+	if len(args) == 0 {
+		return runDaemon()
+	}
+	if args[0] == "restart" {
+		return runDaemonRestart(args[1:])
+	}
+	return fmt.Errorf("nim daemon: unknown argument %q (did you mean `nim daemon restart`?)", args[0])
+}
+
+// restartTimeout bounds how long `nim daemon restart` waits for the old
+// daemon to exit after SIGTERM, and separately for the new one to answer.
+// Generous next to the p99 numbers in docs/benchmarks.md for an ordinary
+// request; a daemon that has not managed either in this long is worth
+// reporting as stuck rather than waiting longer.
+const restartTimeout = 5 * time.Second
+
+// runDaemonRestart is F-001's remedy: `nim daemon restart` asks the running
+// daemon to exit and starts a new one from this binary, so replacing the
+// binary while a daemon runs no longer leaves an operator with a daemon and
+// a client that can only refuse each other with no way forward.
+//
+// The request to stop travels by signal, not by the socket: the socket is
+// exactly what an older build refuses to answer for a new client, which is
+// the whole problem this command exists to fix. SIGTERM goes to the pid the
+// socket itself reports -- read from the kernel via peer.PIDOf, not
+// self-reported -- and only once shim.PeerPID has confirmed that pid is
+// genuinely Nim, either this exact build or an older one at this binary's
+// own path. Anything else on the socket is left alone: signalling a process
+// this cannot confirm is Nim is not this command's call to make.
+func runDaemonRestart(args []string) error {
+	fs := flag.NewFlagSet("daemon restart", flag.ExitOnError)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if runtime.GOOS == "windows" {
+		return fmt.Errorf("nim daemon restart is not supported on windows: peer identity has no way " +
+			"to confirm the process on the socket is Nim (see docs/security.md) -- end the daemon " +
+			"process yourself (Task Manager, or `taskkill /PID <pid> /F`), then run `nim daemon`")
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+
+	pid, confirmed, err := shim.PeerPID(cfg, dialTimeout)
+	switch {
+	case errors.Is(err, shim.ErrDaemonNotReachable):
+		fmt.Println("nim: no daemon was running")
+	case err != nil:
+		return err
+	case !confirmed:
+		return fmt.Errorf(
+			"something other than Nim is listening on %s; refusing to signal it -- stop it yourself, then run this again",
+			cfg.Daemon.Socket)
+	default:
+		fmt.Printf("nim: stopping the daemon (pid %d)\n", pid)
+		if err := stopDaemonPID(pid); err != nil {
+			return fmt.Errorf("could not signal pid %d: %w", pid, err)
+		}
+		if !waitDaemonGone(cfg, restartTimeout) {
+			return fmt.Errorf("pid %d did not exit within %s", pid, restartTimeout)
+		}
+	}
+
+	if !shim.StartDaemon() {
+		return fmt.Errorf("could not start a new daemon")
+	}
+	if !waitDaemonRunning(cfg, restartTimeout) {
+		return fmt.Errorf("the new daemon did not come up at %s -- see %s", cfg.Daemon.Socket, config.LogPath())
+	}
+	fmt.Println("nim: daemon restarted and answering at", cfg.Daemon.Socket)
+	return nil
+}
+
+// waitDaemonGone polls until nothing answers the socket at all -- the old
+// daemon's own shutdown removes the socket file, so a dial failure is what
+// "gone" looks like from here.
+func waitDaemonGone(cfg config.Config, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		conn, err := net.DialTimeout("unix", cfg.Daemon.Socket, 200*time.Millisecond)
+		if err != nil {
+			return true
+		}
+		conn.Close()
+		time.Sleep(50 * time.Millisecond)
+	}
+	return false
+}
+
+// waitDaemonRunning polls until a new daemon answers and is confirmed
+// genuine -- the same verification every relay performs, not a bare
+// connect.
+func waitDaemonRunning(cfg config.Config, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if conn, err := shim.DialRunningDaemon(cfg, 200*time.Millisecond); err == nil {
+			conn.Close()
+			return true
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return false
+}
+
 func runStatus() error {
 	cfg, err := config.Load()
 	if err != nil {
@@ -242,6 +361,12 @@ func runStatus() error {
 		if _, statErr := os.Stat(config.LogPath()); statErr == nil {
 			fmt.Println("         see", config.LogPath())
 		}
+	case errors.Is(err, shim.ErrDaemonOlderBuild):
+		// F-001: the daemon on the socket is provably this same binary, just
+		// an older file at the same path -- an in-place upgrade or rebuild
+		// while it was running. Not an impostor, so not NOT NIM; a specific
+		// line with the one-command fix instead.
+		fmt.Println("daemon   OLDER BUILD -- run nim daemon restart")
 	default:
 		fmt.Println("daemon   NOT NIM --", err)
 		fmt.Println("         something else is bound on the socket; every relay will refuse its answers")
