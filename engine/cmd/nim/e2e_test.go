@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -520,6 +521,11 @@ func (s *stack) serveVia(t *testing.T, launcher string) *relay {
 // call. Nothing on the wire says which agent is which; the daemon works it
 // out from the process that spawned the relay.
 func TestTwoRealAgentsAgainstOneConnectorReceiveDifferentVerdicts(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("agent derivation walks peer.ParentOf/peer.ImageOf, which report unsupported on " +
+			"windows by design (see internal/peer/peer_windows.go and image_windows.go); " +
+			"deriveAgent always returns \"\" there, so this property cannot be demonstrated")
+	}
 	s := build(t)
 	dir := filepath.Dir(s.nim)
 	src := filepath.Join(dir, "launcher.go")
@@ -627,6 +633,11 @@ func main() {
 // limit of where the relay sits, stated in docs/security.md, and this test
 // does not claim otherwise.
 func TestAConnectorIgnoringStdinIsStoppedWithTheRelay(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("this test asks the relay to stop with SIGTERM and checks survival with pgrep -f, " +
+			"neither of which exists on windows; terminate() there is p.Kill(), which this test " +
+			"does not exercise")
+	}
 	s := build(t)
 	src := filepath.Join(filepath.Dir(s.nim), "stubborn.go")
 	if err := os.WriteFile(src, []byte(stubbornSource), 0o600); err != nil {

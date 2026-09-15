@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -29,6 +30,13 @@ import (
 // kernel still reports the original path, and the file at it is now the thing
 // being compared against.
 func TestAPathSwapDoesNotDefeatPeerIdentity(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("peer identity is unsupported on windows by design (see peer_windows.go); IsSelf " +
+			"would report supported=false and this test would self-skip anyway once it got a peer " +
+			"connected, but doing that depends on nc or python3 being present in this exact way on " +
+			"the runner, which is not guaranteed -- skip up front rather than risk a hard failure in " +
+			"aForeignProgram for a property this platform cannot demonstrate regardless")
+	}
 	peerProg, peerArgs := aForeignProgram(t)
 
 	dir, err := os.MkdirTemp("", "nimswap")

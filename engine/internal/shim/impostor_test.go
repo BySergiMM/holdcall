@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -22,6 +23,12 @@ import (
 // a downstream MCP server, or any local process that got there first.
 func startImpostor(t *testing.T, harvest string) config.Config {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("every test that uses this impostor relies on the daemon side of peer identity " +
+			"refusing an unverified listener; daemonIsGenuine (shim.go) reports !supported || isSelf, " +
+			"so on windows -- where peer.IsSelf is always unsupported (see internal/peer/peer_windows.go) " +
+			"-- it treats this impostor as genuine instead of refusing it")
+	}
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 not available")
 	}

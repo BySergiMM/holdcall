@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -107,6 +108,11 @@ func runShim(t *testing.T, opts Options) (stdout string, err error) {
 // thing and the registered command runs instead, so the environment carrying
 // the secret is handed to a process the caller did not choose.
 func TestTheDaemonsCommandIsSpawnedNotTheCallersEndToEnd(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("this test spawns a real downstream command hardcoded as /bin/echo or /bin/sh -c, " +
+			"neither of which exists at that path on windows; the credential-injection logic under " +
+			"test is not windows-specific, only this fixture's command strings are")
+	}
 	const secret = "ghp_REAL_SECRET_must_not_leak"
 
 	cfg := stubDaemon(t, daemon.Response{
@@ -140,6 +146,11 @@ func TestTheDaemonsCommandIsSpawnedNotTheCallersEndToEnd(t *testing.T) {
 // the ordinary case -- most targets have no credential -- and it must keep
 // working exactly as it did before credentials existed.
 func TestWithNoConnectorTheCallersCommandRuns(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("this test spawns a real downstream command hardcoded as /bin/echo or /bin/sh -c, " +
+			"neither of which exists at that path on windows; the credential-injection logic under " +
+			"test is not windows-specific, only this fixture's command strings are")
+	}
 	cfg := stubDaemon(t, daemon.Response{Found: false})
 
 	stdout, err := runShim(t, Options{
@@ -221,6 +232,11 @@ func TestNoCommandAnywhereIsAClearError(t *testing.T) {
 // what it does -- the orphan case, which is also the one that leaves a
 // session in the journal with no end.
 func TestTheDownstreamDiesWithTheRelay(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("this test spawns a real downstream command hardcoded as /bin/echo or /bin/sh -c, " +
+			"neither of which exists at that path on windows; the credential-injection logic under " +
+			"test is not windows-specific, only this fixture's command strings are")
+	}
 	cfg := stubDaemon(t, daemon.Response{Found: false})
 
 	marker := filepath.Join(t.TempDir(), "alive")
