@@ -177,7 +177,11 @@ type PendingInfo struct {
 	Agent     string          `json:"agent,omitempty"`
 	Connector string          `json:"connector,omitempty"`
 	Arguments json.RawMessage `json:"arguments,omitempty"`
-	StartedAt string          `json:"started_at"`
+	// ArgumentsKnown is whether the relay has reported the call's arguments
+	// yet. False means "not received yet", which nim approve says in those
+	// words; it is not the same as a call that carries none.
+	ArgumentsKnown bool   `json:"arguments_known"`
+	StartedAt      string `json:"started_at"`
 }
 
 // RuleInfo is one rule as reported to the CLI. Agent and Connector are empty

@@ -711,7 +711,7 @@
       "id": "approval-shows-real-parameters",
       "title": "A held call is shown to the human as its real parameters, and decided before the relay acts",
       "status": "verified",
-      "statement": "A call an ask rule wins is held in the daemon's memory and answered pending; nim approve prints the exact params.arguments bytes the relay read, pretty-printed with every byte shown as itself, never a summary and never text a model wrote about the call. The decision -- approved or rejected -- is written to the journal before the relay is told, and on approval the relay forwards the original frame byte for byte.",
+      "statement": "A call an ask rule wins is held in the daemon's memory and answered pending; nim approve prints the exact params.arguments bytes the relay read, pretty-printed with every byte shown as itself, never a summary and never text a model wrote about the call. The decision -- approved or rejected -- is written to the journal before the relay is told, and on approval the relay forwards the original frame byte for byte. An approve is refused until that report has arrived, so nothing can be approved before the bytes exist on the daemon's side.",
       "notGuaranteed": "Who approves is anyone who can run nim as this user; the socket cannot tell an operator from a model that has been given a shell. The arguments are the model's to write: what is shown is what was sent, which may itself be misleading. A held call does not survive a daemon killed outright.",
       "implementation": [
         "engine/internal/daemon/approval.go",
@@ -731,7 +731,10 @@
         "TestARejectedApprovalAnswersTheClientWithTheHumanRefusalText",
         "TestAnApprovalTimeoutAnswersTheClientWithItsOwnRefusalText",
         "TestApproveShowsEveryByteOfTheArgumentsAsItself",
-        "TestRealApprovalHoldsACallForAHumanWhoDecidesItThroughTheCLI"
+        "TestRealApprovalHoldsACallForAHumanWhoDecidesItThroughTheCLI",
+        "TestAnApprovalBeforeTheArgumentsArriveIsRefusedButARejectionIsNot",
+        "TestASecondArgumentsReportDoesNotReplaceTheFirst",
+        "TestApproveSaysWhenTheArgumentsHaveNotArrived"
       ],
       "platforms": {
         "darwin": "verified",
@@ -1365,7 +1368,21 @@
       "tests": [
         "TestTheRealArgumentsNeverReachTheJournalOrTheDaemonsLog",
         "TestResponseStringNeverIncludesPendingArguments",
-        "TestApproveShowsEveryByteOfTheArgumentsAsItself"
+        "TestApproveShowsEveryByteOfTheArgumentsAsItself",
+        "TestEventStringNeverIncludesArguments"
+      ]
+    },
+    {
+      "id": "approve-before-the-arguments-arrive",
+      "name": "Get a call approved before the daemon has received its arguments",
+      "category": "policy",
+      "status": "pass",
+      "wasLive": true,
+      "evidence": "Found by the 2026-09-15 review of the merged M6 code and reproduced in a scratch test: with the relay's call.arguments report withheld, approval.decide accepted an approve, journaled it and told the relay, and nim approve showed the call as one with no arguments. The daemon now records whether the report has arrived and refuses an approve until it has; a reject goes through regardless; a second report never replaces the first.",
+      "tests": [
+        "TestAnApprovalBeforeTheArgumentsArriveIsRefusedButARejectionIsNot",
+        "TestASecondArgumentsReportDoesNotReplaceTheFirst",
+        "TestApproveSaysWhenTheArgumentsHaveNotArrived"
       ]
     }
   ],
@@ -1885,6 +1902,7 @@
         "the daemon answers a held call pending with a hold id and keeps it in memory only: tool, agent, connector, digest, the real arguments, the time",
         "the relay sends the real params.arguments bytes once, in a call.arguments event, and waits on the same connection up to [daemon] approval_timeout (default 2m)",
         "nim approve lists held calls with their real arguments, pretty-printed, every byte shown as itself; nim approve <id> and nim reject <id> [--reason] decide one",
+        "an approve is refused until the relay's report of the arguments has reached the daemon, and the first report is the one shown and approved; a reject goes through regardless",
         "the decision is written to the journal as approved or rejected before the relay is told; on approval the relay forwards the exact original bytes",
         "a session ending, its connection dropping, or the timer running out all reject and journal the call, so none is left neither approved nor rejected",
         "the human's reason is returned to the CLI and logged by the daemon, never journaled; the arguments never reach the journal or a log line",
@@ -1896,7 +1914,8 @@
       "limitations": [
         "Anyone who can run nim as this user can approve a call: the approval defends against the model driving the client, not against the operator, and a model that has been given a shell is indistinguishable from the operator on the socket.",
         "Held calls live in the daemon's memory; a daemon killed outright loses them with no journal trace, and the relay then denies them locally.",
-        "No notification: an operator learns of a held call by running nim approve. No delegation, no queueing beyond the timeout, no conditions on arguments that would ask automatically."
+        "No notification: an operator learns of a held call by running nim approve. No delegation, no queueing beyond the timeout, no conditions on arguments that would ask automatically.",
+        "A budget is not consulted for a call an ask rule holds: a human's approval is not subject to the cap, though the approved call counts toward it for the session's later allowed calls."
       ],
       "pending": []
     },

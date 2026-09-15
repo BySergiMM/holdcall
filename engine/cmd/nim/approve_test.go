@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"github.com/BySergiMM/nim/engine/internal/daemon"
 	"strings"
 	"testing"
 )
@@ -40,5 +42,22 @@ func TestApproveShowsEveryByteOfTheArgumentsAsItself(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("ordinary arguments were altered:\n%s", out)
 		}
+	}
+}
+
+// A call whose arguments the relay has not reported yet is not a call with
+// no arguments, and nim approve must not let a human mistake one for the
+// other: the daemon refuses to approve the first, and the text says why.
+func TestApproveSaysWhenTheArgumentsHaveNotArrived(t *testing.T) {
+	var out bytes.Buffer
+	printPending(&out, daemon.PendingInfo{ID: "s1-1", Tool: "send_email", StartedAt: "2026-09-15T10:00:00Z"})
+	if !strings.Contains(out.String(), "not received from the relay yet") || strings.Contains(out.String(), "(none)") {
+		t.Fatalf("an unreported call was not described as such:\n%s", out.String())
+	}
+
+	out.Reset()
+	printPending(&out, daemon.PendingInfo{ID: "s1-2", Tool: "ping", ArgumentsKnown: true, StartedAt: "2026-09-15T10:00:00Z"})
+	if !strings.Contains(out.String(), "(none)") || strings.Contains(out.String(), "not received") {
+		t.Fatalf("a call with no arguments was not described as such:\n%s", out.String())
 	}
 }

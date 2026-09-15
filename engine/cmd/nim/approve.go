@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"text/tabwriter"
@@ -98,7 +99,7 @@ func listPending() error {
 		if i > 0 {
 			fmt.Println()
 		}
-		printPending(p)
+		printPending(os.Stdout, p)
 	}
 	return nil
 }
@@ -106,16 +107,23 @@ func listPending() error {
 // printPending shows one held call exactly as nim approve promises: the
 // real params.arguments, pretty-printed, never a summary and never
 // anything a model wrote -- the whole point of docs/decisions/0005-human-approval.md.
-func printPending(p daemon.PendingInfo) {
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+func printPending(out io.Writer, p daemon.PendingInfo) {
+	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 	fmt.Fprintf(w, "id\t%s\n", p.ID)
 	fmt.Fprintf(w, "age\t%s\n", ageSince(p.StartedAt))
 	fmt.Fprintf(w, "agent\t%s\n", orEvery(p.Agent))
 	fmt.Fprintf(w, "connector\t%s\n", orEvery(p.Connector))
 	fmt.Fprintf(w, "tool\t%s\n", p.Tool)
 	w.Flush()
-	fmt.Println("arguments:")
-	fmt.Println(prettyArguments(p.Arguments))
+	if !p.ArgumentsKnown {
+		// Not the same as a call with no arguments: the relay has not
+		// reported them yet, and the daemon refuses to approve until it
+		// has. Saying so is what stops a human approving a tool name.
+		fmt.Fprintln(out, "arguments: (not received from the relay yet -- run nim approve again in a moment)")
+		return
+	}
+	fmt.Fprintln(out, "arguments:")
+	fmt.Fprintln(out, prettyArguments(p.Arguments))
 }
 
 // prettyArguments renders a call's real arguments for a human to read, not a

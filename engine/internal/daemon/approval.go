@@ -47,7 +47,13 @@ type pendingCall struct {
 	mu        sync.Mutex
 	resolved  bool
 	arguments json.RawMessage
-	timer     *time.Timer
+	// argumentsKnown separates "the relay reported no arguments" from "the
+	// relay has not reported yet": the two look the same in arguments, and
+	// only the first is something a human can approve. Found by review --
+	// an approve could be recorded before the daemon held a single byte of
+	// what was being approved.
+	argumentsKnown bool
+	timer          *time.Timer
 }
 
 // id is the string nim approve lists a call under and nim approve/reject
@@ -58,16 +64,23 @@ func (p *pendingCall) id() string { return holdID(p.SessionID, p.Seq) }
 
 func holdID(sessionID string, seq int) string { return fmt.Sprintf("%s-%d", sessionID, seq) }
 
+// setArguments records the one report the relay makes. The first report is
+// the one: a later one for the same call is ignored rather than replacing
+// what a human may already have read, so the bytes shown are the bytes
+// approved. The relay sends exactly one, so a second is a bug or an
+// impostor, and either way not something to act on.
 func (p *pendingCall) setArguments(raw json.RawMessage) {
 	p.mu.Lock()
-	p.arguments = raw
+	if !p.argumentsKnown {
+		p.arguments, p.argumentsKnown = raw, true
+	}
 	p.mu.Unlock()
 }
 
-func (p *pendingCall) getArguments() json.RawMessage {
+func (p *pendingCall) getArguments() (json.RawMessage, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.arguments
+	return p.arguments, p.argumentsKnown
 }
 
 // errAlreadyResolved means a call's decision was already made by whichever
@@ -270,6 +283,16 @@ func handleApprovalDecide(req Request, approvals *pendingRegistry, j *journal.Jo
 	}
 	info := pendingInfo(p)
 
+	// An approval is of the arguments, so until the relay has reported them
+	// there is nothing to approve: the human would be approving a tool
+	// name. A rejection needs no such thing -- refusing what was not even
+	// seen is the safe direction -- so it goes through regardless.
+	if req.ApprovalDecision == journal.DecisionApproved && !info.ArgumentsKnown {
+		return Response{ID: req.ID, Error: fmt.Sprintf(
+			"the arguments of %s have not reached the daemon yet, so there is nothing to approve; "+
+				"run nim approve again in a moment, or nim reject %s", req.ApprovalID, req.ApprovalID)}
+	}
+
 	reason := "a human approved this call"
 	if req.ApprovalDecision == journal.DecisionRejected {
 		reason = "a human rejected this call"
@@ -285,8 +308,10 @@ func handleApprovalDecide(req Request, approvals *pendingRegistry, j *journal.Jo
 }
 
 func pendingInfo(p *pendingCall) PendingInfo {
+	arguments, known := p.getArguments()
 	return PendingInfo{
 		ID: p.id(), Tool: p.Tool, Agent: p.Agent, Connector: p.Connector,
-		Arguments: p.getArguments(), StartedAt: p.StartedAt.UTC().Format(time.RFC3339Nano),
+		Arguments: arguments, ArgumentsKnown: known,
+		StartedAt: p.StartedAt.UTC().Format(time.RFC3339Nano),
 	}
 }

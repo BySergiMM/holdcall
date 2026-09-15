@@ -146,3 +146,32 @@ Nim has no notion of a second identity to delegate to. Those would each need
 a subject this milestone does not have, the same argument
 `docs/decisions/0003`'s closing section makes about conditions, time bounds
 and budgets.
+
+## Addendum, 2026-09-15: nothing to approve until the arguments have arrived
+
+Review of the merged implementation found a gap between the design and the
+code. The daemon holds a call the moment an `ask` rule wins and answers
+`pending`; the relay's `call.arguments` event follows on the same
+connection a moment later. `nim approve <id>` reaches the daemon on a
+different connection, and nothing tied the two together: an approval sent in
+that moment was recorded, journaled and forwarded with the daemon never
+having held a byte of what was approved, and `nim approve` showed such a
+call exactly as it shows one that carries no arguments -- `(none)`.
+
+Two changes close it. A held call now records whether the relay has
+reported its arguments, separately from what they are, and an *approve* is
+refused until it has, in words that say to run `nim approve` again; a
+*reject* goes through regardless, because refusing what was not seen is the
+safe direction. And the first report is the one: a second `call.arguments`
+for the same call is ignored rather than replacing what a human may already
+have read, so the bytes shown are the bytes approved. `nim approve` says
+"not received from the relay yet" for the one state and "(none)" for the
+other.
+
+What this does not change: the window itself. The relay sends the report
+immediately after reading `pending`, so under a human's hands it is closed
+before `nim approve` can be typed. It mattered for anything scripted on top
+of `nim approve`, and for the guarantee's wording: the only text a human can
+trust is the bytes the server would receive, and now nothing can be approved
+before those bytes exist on the daemon's side.
+

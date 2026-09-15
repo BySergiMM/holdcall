@@ -65,6 +65,15 @@ type Event struct {
 	Arguments json.RawMessage `json:"arguments,omitempty"`
 }
 
+// String keeps a call's arguments out of anything that formats an Event --
+// the same guard Request and Response have for a secret, and for the same
+// reason: a future log line written with %v must not become the place the
+// real arguments of a held call reach a file. Only their size is shown.
+func (e Event) String() string {
+	return fmt.Sprintf("Event{Kind:%s Session:%s Seq:%d Tool:%s Decision:%s Anomaly:%s Arguments:%d bytes}",
+		e.Kind, e.SessionID, e.Seq, e.Tool, e.Decision, e.Anomaly, len(e.Arguments))
+}
+
 // A call is reported twice, as two immutable entries rather than one row that
 // gets updated: the chain cannot cover a row that changes after it is written.
 //

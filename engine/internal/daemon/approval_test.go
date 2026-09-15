@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/BySergiMM/nim/engine/internal/config"
 	"log"
 	"net"
 	"strings"
@@ -42,6 +43,7 @@ func TestTheDaemonAnswersPendingAndJournalsNothingUntilAHumanDecides(t *testing.
 	}
 
 	send(t, conn, Event{Kind: KindCallArguments, SessionID: "s1", Seq: 1, Arguments: json.RawMessage(`{"to":"ceo@example.com"}`)})
+	waitForArguments(t, cfg, d.Hold)
 
 	j := openJournal(t, dbPath)
 	// The rule.add entry is the only thing that should be here: a call held
@@ -109,6 +111,7 @@ func TestApprovingACallWritesApprovedBeforeTellingTheRelay(t *testing.T) {
 	send(t, conn, Event{Kind: KindSessionStart, SessionID: "s1", MachineID: "m", Connector: "github", OccurredAt: now()})
 	d := ask(t, conn, Event{Kind: KindCallRequest, SessionID: "s1", Seq: 1, Tool: "send_email", Digest: "d", OccurredAt: now()})
 	send(t, conn, Event{Kind: KindCallArguments, SessionID: "s1", Seq: 1, Arguments: json.RawMessage(`{}`)})
+	waitForArguments(t, cfg, d.Hold)
 
 	j := openJournal(t, dbPath)
 	waitFor(t, j, 2)
@@ -410,6 +413,7 @@ func TestTheRealArgumentsNeverReachTheJournalOrTheDaemonsLog(t *testing.T) {
 	d := ask(t, conn, Event{Kind: KindCallRequest, SessionID: "s1", Seq: 1, Tool: "send_email", Digest: "dg", OccurredAt: now()})
 	send(t, conn, Event{Kind: KindCallArguments, SessionID: "s1", Seq: 1,
 		Arguments: json.RawMessage(fmt.Sprintf(`{"body":"%s"}`, marker))})
+	waitForArguments(t, cfg, d.Hold)
 
 	j := openJournal(t, dbPath)
 	waitFor(t, j, 2)
@@ -459,5 +463,144 @@ func TestResponseStringNeverIncludesPendingArguments(t *testing.T) {
 		if strings.Contains(out, "ceo@example.com") {
 			t.Fatalf("format %q leaked pending arguments: %s", format, out)
 		}
+	}
+}
+
+// waitForArguments polls approval.list until the daemon reports that the
+// relay's call.arguments for hold has arrived. The report travels one way on
+// the events connection and a decision arrives on another, so a test that
+// approves right after sending the report would otherwise race the daemon's
+// own reading of it -- which is exactly the race the daemon now refuses to
+// approve through.
+func waitForArguments(t *testing.T, cfg config.Config, hold string) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		admin, err := net.Dial("unix", cfg.Daemon.Socket)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := SendRequest(admin, Request{ID: "l", Kind: KindApprovalList})
+		admin.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, p := range resp.Pending {
+			if p.ID == hold && p.ArgumentsKnown {
+				return
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("the arguments of %s never reached the daemon", hold)
+}
+
+// Found by review: an approve could be recorded, journaled and forwarded in
+// the moment between the daemon holding a call and the relay's report of
+// its arguments reaching it -- the human would have approved a tool name.
+// An approve now waits for the report; a reject does not need to.
+func TestAnApprovalBeforeTheArgumentsArriveIsRefusedButARejectionIsNot(t *testing.T) {
+	cfg, dbPath := start(t)
+	askRule(t, cfg, "send_email", "", "")
+
+	conn, err := net.Dial("unix", cfg.Daemon.Socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	send(t, conn, Event{Kind: KindSessionStart, SessionID: "s1", MachineID: "m", Connector: "github", OccurredAt: now()})
+	d := ask(t, conn, Event{Kind: KindCallRequest, SessionID: "s1", Seq: 1, Tool: "send_email", Digest: "d", OccurredAt: now()})
+	// No call.arguments: the relay's report is withheld.
+
+	admin, err := net.Dial("unix", cfg.Daemon.Socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	list, err := SendRequest(admin, Request{ID: "l", Kind: KindApprovalList})
+	if err != nil || len(list.Pending) != 1 {
+		t.Fatalf("approval.list: %v %+v", err, list)
+	}
+	if list.Pending[0].ArgumentsKnown {
+		t.Fatal("the daemon claims to know arguments it was never sent")
+	}
+
+	resp, err := SendRequest(admin, Request{
+		ID: "a1", Kind: KindApprovalDecide, ApprovalID: d.Hold, ApprovalDecision: journal.DecisionApproved,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Error == "" || !strings.Contains(resp.Error, "not reached the daemon") {
+		t.Fatalf("an approve before the arguments arrived was not refused in those words: %+v", resp)
+	}
+	j := openJournal(t, dbPath)
+	if length, _, _ := j.Head(); length != 2 { // rule.add, session.start
+		t.Fatalf("journal has %d entries after a refused approve, want 2: something was decided", length)
+	}
+
+	// A rejection needs nothing it has not seen.
+	resp, err = SendRequest(admin, Request{
+		ID: "r1", Kind: KindApprovalDecide, ApprovalID: d.Hold, ApprovalDecision: journal.DecisionRejected,
+	})
+	if err != nil || resp.Error != "" {
+		t.Fatalf("a reject before the arguments arrived was refused: %v %s", err, resp.Error)
+	}
+	waitFor(t, j, 3)
+	entries, err := j.EntriesSince(0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := entries[len(entries)-1]
+	if last.Kind != journal.KindCallRequest || last.Decision == nil || *last.Decision != journal.DecisionRejected {
+		t.Errorf("the last entry is %s/%v, want a rejected call.request", last.Kind, last.Decision)
+	}
+}
+
+// The first report is the one a human reads and approves; a second report
+// for the same call must not replace it under them.
+func TestASecondArgumentsReportDoesNotReplaceTheFirst(t *testing.T) {
+	cfg, _ := start(t)
+	askRule(t, cfg, "send_email", "", "")
+
+	conn, err := net.Dial("unix", cfg.Daemon.Socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	send(t, conn, Event{Kind: KindSessionStart, SessionID: "s1", MachineID: "m", Connector: "github", OccurredAt: now()})
+	d := ask(t, conn, Event{Kind: KindCallRequest, SessionID: "s1", Seq: 1, Tool: "send_email", Digest: "d", OccurredAt: now()})
+	send(t, conn, Event{Kind: KindCallArguments, SessionID: "s1", Seq: 1, Arguments: json.RawMessage(`{"to":"alice@example.com"}`)})
+	waitForArguments(t, cfg, d.Hold)
+	send(t, conn, Event{Kind: KindCallArguments, SessionID: "s1", Seq: 1, Arguments: json.RawMessage(`{"to":"mallory@example.com"}`)})
+	time.Sleep(100 * time.Millisecond) // long enough for the daemon to have read the second report
+
+	admin, err := net.Dial("unix", cfg.Daemon.Socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	list, err := SendRequest(admin, Request{ID: "l", Kind: KindApprovalList})
+	if err != nil || len(list.Pending) != 1 {
+		t.Fatalf("approval.list: %v %+v", err, list)
+	}
+	if got := string(list.Pending[0].Arguments); got != `{"to":"alice@example.com"}` {
+		t.Fatalf("the second report replaced the first: %s", got)
+	}
+}
+
+// Request and Response format without their secrets; an Event carries a
+// held call's arguments and must format without those, so a future log line
+// written with %v cannot become the place they reach a file.
+func TestEventStringNeverIncludesArguments(t *testing.T) {
+	ev := Event{Kind: KindCallArguments, SessionID: "s1", Seq: 1,
+		Arguments: json.RawMessage(`{"token":"ARGUMENT-MARKER-0xDEADBEEF"}`)}
+	for _, text := range []string{ev.String(), fmt.Sprint(ev), fmt.Sprintf("%v", ev), fmt.Sprintf("%+v", ev)} {
+		if strings.Contains(text, "ARGUMENT-MARKER") {
+			t.Fatalf("an Event formatted with its arguments: %s", text)
+		}
+	}
+	if !strings.Contains(ev.String(), "call.arguments") || !strings.Contains(ev.String(), "bytes") {
+		t.Errorf("String lost the fields that are safe to show: %s", ev.String())
 	}
 }

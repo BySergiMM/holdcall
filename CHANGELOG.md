@@ -24,6 +24,15 @@ the test names behind each claim live.
   for those sessions too, and writes a refusal with `resultType: "complete"`
   when the version requires it; older clients get the older shape unchanged.
   The relay rig runs its denial case under both handshakes.
+- **A held call cannot be approved before its arguments have arrived.** The
+  M6 review found that `nim approve <id>` could be recorded and the call
+  forwarded in the moment between the daemon holding a call and the relay's
+  report of its arguments reaching it, and that `nim approve` showed such a
+  call as one with no arguments. The daemon now refuses an approve until the
+  report has arrived (a reject goes through regardless), ignores a second
+  report for the same call, and `nim approve` says "not received yet" for the
+  one and "(none)" for the other. An `Event` formats without its arguments,
+  the guard `Request` and `Response` already had.
 - **Budgets are shown wherever the policy is shown.** The M5 review found
   that `nim policy list` showed budgets while `nim status` and the console's
   Policy tab, which read the same projection, did not, so an operator reading
