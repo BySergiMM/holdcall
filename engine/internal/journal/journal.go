@@ -59,16 +59,29 @@ const (
 // authorizing them; journals from that milestone are full of it, so everything
 // reading the record still has to understand it.
 //
-// From M2 a call.request carries what the daemon actually decided. Approved and
-// rejected belong to human approval and are not written yet -- they are here so
-// the vocabulary a reader must handle is stated in one place rather than
-// scattered as literals.
+// From M2 a call.request carries what the daemon actually decided. Approved
+// and rejected belong to human approval (M6) and are written now, once a
+// human decides a call an "ask" rule held -- see
+// docs/decisions/0005-human-approval.md. Nothing is written while a call is
+// still pending: the wire carries a "pending" value of its own
+// (daemon.DecisionPending) that never reaches this column, because there is
+// nothing to record yet.
 const (
 	DecisionObserved = "observed"
 	DecisionAllow    = "allow"
 	DecisionDeny     = "deny"
 	DecisionApproved = "approved"
 	DecisionRejected = "rejected"
+
+	// DecisionAsk is a rule's effect, never a call's own decision -- nothing
+	// is ever written to a call.request with this value. A call whose
+	// winning rule asks is held for a human, and its call.request entry is
+	// written only once they decide (DecisionApproved or DecisionRejected)
+	// or the wait runs out (DecisionRejected, same as an explicit refusal).
+	// It shares this column with DecisionDeny and DecisionAllow because
+	// rule.add and rule.remove record a rule's effect here, exactly as they
+	// always have -- see ruleEntry.
+	DecisionAsk = "ask"
 )
 
 // journalTableBody is everything after the table name in nim_journal's
@@ -94,7 +107,7 @@ const journalTableBody = `(
     tool             text,
     params_digest    text,
     decision         text    check (decision is null or decision in
-                       ('observed','allow','deny','approved','rejected')),
+                       ('observed','allow','deny','approved','rejected','ask')),
     ok               integer,
     duration_ms      integer,
     anomaly          text    check (anomaly is null or anomaly in
@@ -143,7 +156,7 @@ const rulesTableBody = `(
     agent       text,
     connector   text,
     tool        text    not null,
-    effect      text    not null check (effect in ('deny','allow')),
+    effect      text    not null check (effect in ('deny','allow','ask')),
     created_at  text    not null
 )`
 
@@ -204,9 +217,11 @@ create table if not exists nim_agents (
     enrolled_at text    not null
 );
 
--- Policy. A rule holds one effect -- deny or allow -- for one tool, for
+-- Policy. A rule holds one effect -- deny, allow or ask -- for one tool, for
 -- every session or for those of one enrolled agent, on every connector or on
--- one. tool is either an exact name or RuleToolDefault ("*"), which
+-- one. ask holds a call for a human rather than deciding it here; see
+-- docs/decisions/0005-human-approval.md. tool is either an exact name or
+-- RuleToolDefault ("*"), which
 -- expresses a default rather than a pattern: there is no other way for a
 -- rule to match more than one tool. This is the one table an authorization
 -- decision reads, which is the standing decision config.toml broke; and

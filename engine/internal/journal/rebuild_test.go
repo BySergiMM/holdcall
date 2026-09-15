@@ -445,3 +445,229 @@ func TestOpeningACurrentRulesTableRecreatesNothing(t *testing.T) {
 		t.Fatalf("a fresh rules table was rebuilt (rebuilt=%v, err=%v)", rebuilt, err)
 	}
 }
+
+// rulesTableM45 is nim_rules exactly as the M4.5 build created it: effect
+// may be 'deny' or 'allow', not yet 'ask'. Kept as text rather than derived
+// from anything current, because the point is to open a file that build left
+// behind.
+const rulesTableM45 = `create table nim_rules (
+    id          integer primary key autoincrement,
+    agent       text,
+    connector   text,
+    tool        text    not null,
+    effect      text    not null check (effect in ('deny','allow')),
+    created_at  text    not null
+)`
+
+// anM45RulesTable writes a database the way the M4.5 build would have left
+// it: the M4.5 table, its indexes, and one allow rule.
+func anM45RulesTable(t *testing.T, path string) Rule {
+	t.Helper()
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	defer db.Close()
+	for _, stmt := range []string{
+		rulesTableM45,
+		`create unique index nim_rules_scope_idx on nim_rules (ifnull(agent, ''), ifnull(connector, ''), tool)`,
+		`create index nim_rules_tool_idx on nim_rules (tool)`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("%s: %v", stmt, err)
+		}
+	}
+	r := Rule{Tool: "read_file", Connector: sp("github"), Effect: DecisionAllow, CreatedAt: time.Now().UTC()}
+	res, err := db.Exec(
+		`insert into nim_rules (agent, connector, tool, effect, created_at) values (?, ?, ?, ?, ?)`,
+		r.Agent, r.Connector, r.Tool, r.Effect, r.CreatedAt.Format(time.RFC3339Nano))
+	if err != nil {
+		t.Fatalf("seeding the old rule: %v", err)
+	}
+	if r.ID, err = res.LastInsertId(); err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+// A nim_rules table built under the M4.5 DDL has a CHECK constraint effect
+// could not satisfy beyond 'deny' and 'allow', and SQLite cannot widen a
+// CHECK in place -- the same problem TestANimRulesTableFromTheCurrentDDLIsWidenedForAllowRules
+// exercised for the M4 -> M4.5 step, exercised here for M4.5 -> M6.
+func TestANimRulesTableFromTheM45DDLIsWidenedForAskRules(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nim.db")
+	seeded := anM45RulesTable(t, path)
+
+	j, err := Open(path, "test-machine")
+	if err != nil {
+		t.Fatalf("Open on an M4.5 rules table: %v", err)
+	}
+	defer j.Close()
+
+	var stored string
+	if err := j.db.QueryRow(
+		`select sql from sqlite_master where type = 'table' and name = 'nim_rules'`).Scan(&stored); err != nil {
+		t.Fatalf("reading the definition: %v", err)
+	}
+	if stored != rulesTableStored {
+		t.Fatalf("the table was not rebuilt to this build's definition:\n%s", stored)
+	}
+
+	// The old rule survived, unchanged.
+	rules, err := j.ListRules()
+	if err != nil {
+		t.Fatalf("ListRules: %v", err)
+	}
+	if len(rules) != 1 {
+		t.Fatalf("%d rules after the rebuild, want 1", len(rules))
+	}
+	got := rules[0]
+	if got.ID != seeded.ID || got.Tool != seeded.Tool || got.Effect != seeded.Effect {
+		t.Errorf("the rule changed in the rebuild:\n got %+v\nwant %+v", got, seeded)
+	}
+
+	// The reason the rebuild exists: an effect the old constraint refused.
+	if _, err := j.AddRule(Rule{Tool: "delete_repository", Effect: DecisionAsk}); err != nil {
+		t.Errorf("adding an ask rule after the rebuild: %v", err)
+	}
+
+	// Once is enough: a second look finds nothing to do.
+	if rebuilt, err := rebuildRulesTable(j.db); err != nil || rebuilt {
+		t.Fatalf("a second rebuild ran (rebuilt=%v, err=%v)", rebuilt, err)
+	}
+}
+
+// journalTableM45 is nim_journal exactly as the M4.5 build (schema_version 3)
+// created it: decision may be 'observed', 'allow', 'deny', 'approved' or
+// 'rejected', not yet 'ask'. Copied verbatim from journalTableBody as it
+// stood before this milestone, because the point is to open a file that
+// build left behind -- rule.add and rule.remove share this column with
+// call.request, so an ask rule needs it widened exactly as an allow rule
+// needed the effect column on nim_rules widened.
+const journalTableM45 = `create table nim_journal (
+    chain_seq        integer primary key,
+    schema_version   integer not null,
+    kind             text    not null check (kind in
+                       ('session.start','call.request','call.outcome','session.end','anomaly',
+                        'rule.add','rule.remove','agent.add','agent.remove')),
+    session_id       text    not null,
+    seq              integer,
+    connector        text,
+    tool             text,
+    params_digest    text,
+    decision         text    check (decision is null or decision in
+                       ('observed','allow','deny','approved','rejected')),
+    ok               integer,
+    duration_ms      integer,
+    anomaly          text    check (anomaly is null or anomaly in
+                       ('batch','malformed_json','framing','duplicate_id','duplicate_key','unreadable_call')),
+    occurred_at      text    not null,
+    machine_id       text,
+    client           text,
+    protocol_version text,
+    agent            text,
+    exec_path        text,
+    exec_id          text,
+    prev_hash        text    not null,
+    hash             text    not null
+)`
+
+// anM45Journal writes a database the way the M4.5 build would have left it:
+// the M4.5 table, an M4.5-shaped view over it, and one v3 rule.add entry
+// denying a tool -- the kind whose decision column an ask rule needs
+// widened. It returns the entry as written, so what comes out of the
+// rebuild can be held to it byte for byte.
+func anM45Journal(t *testing.T, path string) []Entry {
+	t.Helper()
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	defer db.Close()
+	for _, stmt := range []string{
+		journalTableM45,
+		`create unique index nim_journal_entry_idx on nim_journal (session_id, seq, kind)`,
+		`create view nim_calls as select chain_seq from nim_journal where kind = 'call.request'`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("%s: %v", stmt, err)
+		}
+	}
+
+	entries := []Entry{
+		{ChainSeq: 1, SchemaVersion: SchemaVersion3, Kind: KindRuleAdd, SessionID: "",
+			Tool: sp("rm"), Decision: sp(DecisionDeny), OccurredAt: "2026-09-15T00:00:00Z",
+			PrevHash: genesisHash("test-machine")},
+	}
+	entries[0].Hash = chainHash(entries[0].PrevHash, canonicalEncodeV3(entries[0]))
+	for _, e := range entries {
+		if _, err := db.Exec(
+			`insert into nim_journal (chain_seq, schema_version, kind, session_id, tool, decision,
+			   occurred_at, prev_hash, hash) values (?,?,?,?,?,?,?,?,?)`,
+			e.ChainSeq, e.SchemaVersion, e.Kind, e.SessionID, e.Tool, e.Decision,
+			e.OccurredAt, e.PrevHash, e.Hash); err != nil {
+			t.Fatalf("seeding entry %d: %v", e.ChainSeq, err)
+		}
+	}
+	return entries
+}
+
+// A journal written before ask rules existed has a decision column an
+// ask rule's rule.add cannot satisfy, and SQLite cannot widen a CHECK in
+// place -- opening it must widen the column through the same rebuild that
+// has carried every earlier CHECK change, and the chain that comes out must
+// be the chain that went in.
+func TestAJournalTableFromBeforeAskRulesIsWidenedForAsk(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nim.db")
+	seeded := anM45Journal(t, path)
+
+	j, err := Open(path, "test-machine")
+	if err != nil {
+		t.Fatalf("Open on a pre-ask journal: %v", err)
+	}
+	defer j.Close()
+
+	var stored string
+	if err := j.db.QueryRow(
+		`select sql from sqlite_master where type = 'table' and name = 'nim_journal'`).Scan(&stored); err != nil {
+		t.Fatalf("reading the definition: %v", err)
+	}
+	if stored != journalTableStored {
+		t.Fatalf("the table was not rebuilt to this build's definition:\n%s", stored)
+	}
+
+	got, err := j.EntriesSince(0, 10)
+	if err != nil {
+		t.Fatalf("EntriesSince: %v", err)
+	}
+	if len(got) != len(seeded) {
+		t.Fatalf("%d entries after the rebuild, want %d", len(got), len(seeded))
+	}
+	for i, e := range got {
+		want := seeded[i]
+		if e.ChainSeq != want.ChainSeq || e.SchemaVersion != want.SchemaVersion ||
+			e.PrevHash != want.PrevHash || e.Hash != want.Hash || e.Kind != want.Kind {
+			t.Errorf("entry %d changed in the rebuild:\n got %+v\nwant %+v", i+1, e, want)
+		}
+	}
+	rep, err := j.Verify("")
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if !rep.OK || rep.Entries != int64(len(seeded)) {
+		t.Fatalf("the rebuilt chain does not verify: %+v", rep)
+	}
+
+	// The reason this rebuild exists: an entry the old CHECK refused.
+	if _, err := j.AddRule(Rule{Tool: "delete_repository", Effect: DecisionAsk}); err != nil {
+		t.Fatalf("adding an ask rule (and its rule.add entry) after the rebuild: %v", err)
+	}
+	if rep, _ := j.Verify(""); !rep.OK {
+		t.Fatalf("the chain broke across the old and new rows: %s", rep.Problem)
+	}
+
+	// Once is enough: a second look finds nothing to do.
+	if rebuilt, err := rebuildJournalTable(j.db); err != nil || rebuilt {
+		t.Fatalf("a second rebuild ran (rebuilt=%v, err=%v)", rebuilt, err)
+	}
+}
