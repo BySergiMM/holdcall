@@ -58,15 +58,99 @@ the test names behind each claim live.
   is still resolved through PATH, so a caller that already controls PATH can
   substitute its own binary for it.
 
-### Changed
-
-- **M4 reordered, and not yet built.** The milestone was "Grants (Cedar)"; it
-  is now agent identity, followed by moving the `config.toml` deny list into
-  SQLite -- a policy language has nothing to talk about while every decision
-  is still global per tool. Neither step exists in the engine yet: every
-  decision today is still `(connector, tool)`, with no notion of which agent
-  asked, and the deny list can still be emptied by anything able to write
-  `config.toml`.
+- **M4 -- agent identity, and policy in SQLite.** A decision is now
+  `(agent, connector, tool)`, not just `tool`. An agent is a client program,
+  identified by the executable the kernel reports for the process that
+  spawned the relay -- nothing on the wire names one, and two windows of
+  the same program are the same agent. `nim policy deny <tool> [--agent]
+  [--connector]` replaces the `config.toml` deny list: rules live in
+  `nim_rules`, `config.toml` is refused if it still carries a `[policy]`
+  section, and a `rule.add`/`rule.remove` entry is written in the same
+  SQLite transaction as the rule it describes. The acceptance test ran
+  with real processes: two client programs, enrolled under two names,
+  sending the same call to one connector, received different verdicts
+  (`TestTwoRealAgentsAgainstOneConnectorReceiveDifferentVerdicts`). D-002
+  -- what an unenrolled agent may do -- is answered in
+  `docs/decisions/0002-what-an-unknown-agent-may-do.md`: a session no
+  enrolment matched meets only the rules that name no agent, the same
+  ceiling every session had before agents existed, because a rule could
+  only deny.
+- **2026-09-14 audit: closed the decision-path bypasses it found.** A
+  repeated or case-variant JSON key could put a `tools/call` in front of a
+  connector with no decision, no journal entry and no anomaly (F-013):
+  objects are now read by exact key, a repeated key is refused, and a call
+  with no readable tool name is refused before the daemon is asked.
+  `nim connector set` trusted whatever had bound the socket rather than
+  verifying it (F-015) -- every management command now dials through the
+  same peer-verified path the relay does. A second connection could start
+  a session under another's live id (F-014); the console answered to any
+  `Host` header, not loopback names only (F-016); a connector could
+  outlive a relay asked to stop with SIGTERM or SIGINT (F-020). Smaller
+  fixes: `nim log --json` truncated at the read cap and looped on `-n 0`
+  (F-019), `nim verify --expect-head` answered nothing with no
+  `machine-id`, a `machine-id` with a trailing newline read as tampering,
+  and the daemon's own log was lost on a fresh install. Each has a
+  regression test that fails against the code as it was.
+- **M4.5 -- allow rules, and a stated precedence.** `effect` is now `deny`
+  or `allow`; `nim policy allow`, `nim policy default deny|allow`, `nim
+  policy remove --default` and `nim policy explain <tool> [--agent]
+  [--connector]` round out the CLI. `tool` may be `*`, meaning every tool,
+  only through `nim policy default` -- everywhere else it is refused as an
+  ordinary name, so there remains exactly one way to write a rule that
+  matches more than one tool. Precedence is one function, `journal.Decide`:
+  the most specific matching rule wins (an exact tool over a default,
+  naming the agent or the connector over not naming it), a tie at equal
+  specificity goes to deny, and no matching rule at all is allow -- the M4
+  baseline, restated. D-002 is answered again in
+  `docs/decisions/0003-allow-rules-and-precedence.md` for a model where a
+  rule can grant: `nim policy default deny` plus an agent-scoped `allow`
+  is now the allow-list M4's deny-only rules could not express, and an
+  unenrolled program is denied by the default rather than merely
+  unprivileged by an absent one.
+- **`nim init` and `nim doctor`.** `nim init` rewrites Claude Code's,
+  Cursor's and Claude Desktop's stdio `mcpServers` entries to route
+  through Nim, preserving every other key -- `env` included -- via an
+  order-preserving JSON rewrite (`internal/clientconfig`). Dry run by
+  default; `--write` backs up the original file before writing it
+  atomically, `--undo <backup>` restores one, and `--repoint` re-targets
+  an entry already wrapped by a `nim` binary at a different path. `nim
+  doctor` is a read-only health check across nine areas -- PATH,
+  `config.toml`, the daemon, `machine-id`, the journal, the credential
+  store, enrolments, rules and connectors, and every client config `nim
+  init` knows about -- exiting 1 only on a hard `FAIL`.
+- **Enrolment changes are entries in the chain (F-018, closed).**
+  `agent.add` and `agent.remove` are now written by `AddAgent` and
+  `RemoveAgent` in the same SQLite transaction as the change to
+  `nim_agents`, exactly as `rule.add`/`rule.remove` already were for a
+  rule -- closing the gap where re-enrolling a name moved every rule
+  scoped to it with nothing in the chain saying so. Schema version 3
+  (`canonical_encode_v3`) adds `exec_path` and `exec_id` to the fields a
+  journal entry can carry; `nim_journal` and `nim_rules` are each rebuilt
+  once, on open, to widen their `CHECK` constraints for the new kind and
+  the new `allow` effect, copying every row verbatim -- a test holds both
+  rebuilds to that.
+- **The console and `nim status` show policy, not just the journal.** A
+  Policy tab lists rules, enrolled agents (with `STALE` or `unknown`
+  marked per platform) and connectors, served from the same read-only
+  journal handle as everything else, over `GET /api/policy`. `nim status`
+  gained a policy block -- rule, agent and connector counts, and how many
+  enrolments are stale -- reading the same projection, so the CLI and the
+  console can never disagree about what they show.
+- **A way to get `nim` other than `go build`.** `install.sh` is a POSIX
+  `sh` script -- `curl -fsSL .../install.sh | sh` -- that resolves a
+  release (or `NIM_VERSION` to pin one), verifies the archive's SHA-256
+  against that release's `SHA256SUMS`, and refuses, nothing written, on
+  any mismatch; `tools/install-rig/test.sh` proves the refusal actually
+  bites, by running the script against both a correct and a deliberately
+  wrong checksum. `.github/workflows/release.yml` builds five
+  cross-compiled targets, runs the engine's test suite against them first
+  (the same checks `ci.yml` runs), and publishes a GitHub Release gated on
+  a human pushing a tag matching `v*`; `workflow_dispatch` runs an
+  identical dry run that stops short of publishing. `nim version` now
+  reports the commit, build time and platform a release binary was built
+  for, via `-ldflags -X`, rather than a bare `0.0.0-dev`. The MIT
+  `LICENSE` file the README has promised since before this now exists, and
+  is copied into every release archive.
 
 ### Security
 
