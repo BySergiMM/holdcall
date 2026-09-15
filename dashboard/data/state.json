@@ -20,7 +20,7 @@
     "name": "Nim",
     "tagline": "A local process between an MCP client and the MCP servers it uses.",
     "currentMilestone": "M4.5",
-    "currentPhase": "Allow rules with a stated precedence landed; enrolment changes are in the chain; budgets (M5) are next",
+    "currentPhase": "Budgets (M5) landed: per-session caps on allowed calls, decremented at authorization time; human approval (M6) is in progress",
     "overallStatus": "in_progress",
     "statusNote": "Nim decides per (agent, connector, tool) against allow and deny rules in SQLite -- most specific wins, deny beats allow at equal specificity, no rule means allow -- records every call, every rule change and every enrolment change in one hash chain, and configures Claude Code, Cursor and Claude Desktop to go through it with nim init. Nothing has ever been executed on Windows.",
     "provenance": "declared"
@@ -576,7 +576,7 @@
       "title": "One function decides, and explain shows its work",
       "status": "verified",
       "statement": "Among the rules matching a call, the most specific wins (an exact tool over a default, a named agent or connector over an unnamed one); at equal specificity deny beats allow; with no matching rule the call is allowed, which is the M4 baseline. journal.Decide is that function, table-tested with no database, reused verbatim by nim policy explain, so the CLI cannot say something a real call would not do.",
-      "notGuaranteed": "No conditions on arguments, no time bounds, no budgets: a rule is keyed on (agent, connector, tool) and nothing else. A client that genuinely names a tool `*` matches a default rule like any other exact name would.",
+      "notGuaranteed": "No conditions on arguments and no time bounds: a rule is keyed on (agent, connector, tool) and nothing else. A budget (M5) caps how many calls a session may make once the rules allow them; it is a separate cap, not a rule. A client that genuinely names a tool `*` matches a default rule like any other exact name would.",
       "implementation": [
         "engine/internal/journal/rules.go",
         "engine/internal/daemon/policy.go",
