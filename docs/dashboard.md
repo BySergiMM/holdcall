@@ -171,7 +171,7 @@ Two things remain true:
   own; deployment is by hand from `dashboard/`, with the project linked
   through `VERCEL_ORG_ID` and `VERCEL_PROJECT_ID`: `vercel build --prod` over
   the same `npm run build` the checks run, then `vercel deploy --prebuilt
-  --prod`. Last done on 2026-09-16 from 64121e4, and verified by fetching the
+  --prod`. Last done on 2026-09-16 from this branch, and verified by fetching the
   production domain anonymously afterwards.
 - Until 2026-09-16, historical deployment URLs and stale branch aliases also
   answered publicly (F-012), serving Vercel's failure page and an abandoned
