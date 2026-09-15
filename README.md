@@ -275,6 +275,23 @@ in this project has ever been run on Windows**, only cross-compiled, and two
 of its security properties are known not to hold there — see the *Known gaps*
 table in `docs/security.md`.
 
+### Running CI without GitHub's runners
+
+`.github/workflows/ci.yml` is the source of truth, and `tools/ci-local.sh`
+runs the same jobs with the same commands and assertions on the machine it
+is started on: format, vet, tidy, `go test -race -shuffle -v` with the
+evidence script, the five cross-compiles, govulncheck, the dashboard's
+check and build, and the relay rig. `tools/ci-linux.sh` runs the Linux leg
+inside a local [Lima](https://lima-vm.io) virtual machine, which is the only
+way `peer_linux.go` and the Linux credential store get executed when the
+hosted runners are not available. Neither can be Windows.
+
+```bash
+tools/ci-local.sh              # every job, here
+tools/ci-local.sh test vuln    # a subset
+tools/ci-linux.sh              # the same, in an Ubuntu VM (needs limactl)
+```
+
 ## Performance
 
 `docs/benchmarks.md`, with the commands that reproduce every figure. The
