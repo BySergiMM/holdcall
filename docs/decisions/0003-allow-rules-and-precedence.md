@@ -144,3 +144,49 @@ needed, that is the day a language is worth its cost, not before.
 
 Docs/milestones.md states this the same way for M4.5 as a milestone: what it
 delivers, and what would still need a language.
+
+## Addendum, 2026-09-15: a third effect, `ask` (M6)
+
+Human approval needed a rule that neither decides in advance nor is
+unreachable to write: "hold this one for a human" is a third answer to the
+same question deny and allow already answer, not a new kind of question. So
+`effect` gains a third value, `ask`, through exactly the mechanism this
+document set up for the second one -- `nim policy ask <tool> [--agent]
+[--connector]` and `nim policy default ask`, `nim_rules`'s `effect` CHECK
+widened from `('deny','allow')` to `('deny','allow','ask')` by the same
+rebuild-on-open `rebuildRulesTable` already used to grow it from `('deny')`,
+and the decision column on `rule.add`/`rule.remove` (which already had to
+hold whatever a rule's effect was) widened the same way. No new journal kind,
+no new schema version: `ask` is a value the existing `decision` column now
+accepts, exactly as `approved` and `rejected` already were reserved for
+there without ever having been written until this milestone actually wrote
+them.
+
+**Precedence, extended by one line.** Step 2 of `Decide` was "at equal
+specificity, deny beats allow"; it is now "deny beats ask beats allow" --
+`journal.effectRank` orders the three (`2`, `1`, `0`) and `outranks` compares
+by rank instead of a single equality check. Nothing about specificity itself
+changed: an exact-tool rule still beats a default naming the same scope
+regardless of which of the three effects either one holds, exactly as
+before. The ordering is not arbitrary -- it is the same "the safer rule
+wins" argument this document already makes for deny over allow, with `ask`
+placed where it actually sits: safer than letting a call through
+unconditionally, because a human gets to say no; not as safe as refusing it
+outright, because a human might say yes to something that should not have
+been asked about in the first place.
+
+**What `ask` does at decision time is different in kind from deny and
+allow, and that is out of `Decide`'s hands.** Deny and allow are both
+`journal.Decide` picking a winner and the daemon writing that winner's
+verdict to the `call.request` entry in the same breath. `ask` winning means
+the daemon writes nothing yet: the call is held in memory, and its entry is
+written once a human decides it or the wait runs out.
+`docs/decisions/0005-human-approval.md` is that design in full; this
+addendum is only the precedence's part of it, which is exactly as small as
+adding one more thing two rules can be compared on.
+
+**`nim policy explain` needed nothing changed.** It already calls the one
+`Decide` implementation on the real candidates and prints whichever effect
+wins, so a scope whose winning rule is `ask` explains itself the same way a
+deny or an allow does -- naming the rule and why it is the most specific
+match -- without a special case for the third value.

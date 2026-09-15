@@ -42,20 +42,21 @@ chain, not the content.
 `anomaly`, `rule.add`, `rule.remove`, `agent.add`, `agent.remove`.
 
 `rule.add` and `rule.remove` record a policy change: a rule with one effect
--- deny or allow -- for `tool`, for the sessions in its scope. They carry the
-scope in `agent` (null: every session) and `connector` (null: every
-connector), the tool in `tool`, and the effect in `decision`. `tool` is
+-- deny, allow or ask -- for `tool`, for the sessions in its scope. They
+carry the scope in `agent` (null: every session) and `connector` (null:
+every connector), the tool in `tool`, and the effect in `decision`. `tool` is
 either an exact name or `*`, which means a default set by `nim policy
-default deny|allow` -- see
-docs/decisions/0003-allow-rules-and-precedence.md -- never a pattern or a
-prefix. Before M4.5 `decision` on these two kinds was always `deny`; a
-journal written before then has only that value here, and a reader does not
-need to treat it specially -- it is exactly what an M4.5 build would have
-written for the same rule. They carry no session: `session_id` is the empty
-string, which the encoding keeps distinct from null, and `seq` is null. The
-rule and its entry are written in one SQLite transaction, so the chain never
-describes a rule that was not stored and no rule exists that the chain does
-not know about.
+default deny|allow|ask` -- see
+docs/decisions/0003-allow-rules-and-precedence.md and its 2026-09-15
+addendum -- never a pattern or a prefix. Before M4.5 `decision` on these two
+kinds was always `deny`, and before M6 it was never `ask`; a journal written
+before either milestone has only the values that build could write, and a
+reader does not need to treat that specially -- it is exactly what the
+later build would have written for the same rule. They carry no session:
+`session_id` is the empty string, which the encoding keeps distinct from
+null, and `seq` is null. The rule and its entry are written in one SQLite
+transaction, so the chain never describes a rule that was not stored and no
+rule exists that the chain does not know about.
 
 `agent.add` and `agent.remove` record an enrolment change: the binding of a
 name the operator chose to an executable, which is what a rule's `agent`
@@ -72,13 +73,25 @@ Re-enrolling a name writes a fresh `agent.add` carrying the new identity; it
 does not rewrite the old one, because entries are never modified after they
 are written.
 
-`decision` is one of `observed`, `allow`, `deny`, `approved`, `rejected`. M2
-writes `allow` and `deny` on `call.request`; M4.5 writes them on `rule.add`
-and `rule.remove` too, now that a rule can allow as well as deny.
+`decision` is one of `observed`, `allow`, `deny`, `approved`, `rejected`,
+`ask`. M2 writes `allow` and `deny` on `call.request`; M4.5 writes them on
+`rule.add` and `rule.remove` too, now that a rule can allow as well as deny.
 `observed` is what earlier milestones wrote, when nothing was authorized at
 all, and it is still what those entries hold — which is why enforcement
-needed no migration. `approved` and `rejected` belong to human approval and
-are not written yet. See *What a decision means* below.
+needed no migration.
+
+`approved` and `rejected` are written on `call.request` from M6, once a
+human decides a call an `ask` rule held, or once the approval wait runs out
+with nobody deciding (also `rejected` -- see
+docs/decisions/0005-human-approval.md for why a timeout and an explicit
+refusal write the same decision). `ask` itself is never a `call.request`'s
+own decision: it is one more value the column already had to hold for
+`rule.add` and `rule.remove`, alongside `deny` and `allow`, naming a rule's
+effect rather than anything a call was decided to be. While a call is held
+for a human, nothing is written for it at all -- the daemon's wire protocol
+has its own value, `pending`, for that in-flight state, and it never reaches
+this column, because there is nothing to record yet. See *What a decision
+means* below.
 
 `anomaly` is one of `batch`, `malformed_json`, `framing`, `duplicate_id`,
 `duplicate_key`, `unreadable_call`. Since M2 the relay refuses most of them
@@ -370,22 +383,30 @@ Do not read `gaps: none of the detectable kinds found` as `no calls were lost`.
 
 From M2 a `call.request` carries the decision the daemon reached: `allow` or
 `deny`. Entries written before then carry `observed`, which recorded that nothing
-had been decided at all.
+had been decided at all. From M6 a call an `ask` rule held gets its entry once a
+human decides it: `approved` behaves exactly as `allow` does below, and
+`rejected` exactly as `deny` does -- the distinction is about *who or what*
+reached the decision, never about what it means for the entry.
 
 One direction holds:
 
 > A call that reached a connector is a call this journal recorded, with the
 > decision that allowed it.
 
-The converse does not. **An `allow` is not evidence the call was made.** The
-relay gives up after two seconds and SQLite's busy timeout is five, so a heavily
-contended write can be committed after the relay has already denied the call and
-answered the client. Nothing distinguishes that entry from a call still running:
-both are an `allow` with no `call.outcome`, and both read as `pending`.
+The converse does not. **An `allow` or `approved` is not evidence the call was
+made.** The relay gives up after two seconds (or, while a call is held for a
+human, after `approval_timeout`) and SQLite's busy timeout is five, so a
+heavily contended write can be committed after the relay has already denied
+the call and answered the client. Nothing distinguishes that entry from a
+call still running: both are an `allow`/`approved` with no `call.outcome`, and
+both read as `readmodel.CallPending` -- a reader's *derived* state for "no
+outcome yet," unrelated to the daemon's wire-only `pending` value below,
+which never reaches this column at all.
 
-**A refusal produces one entry, not two.** There is no `call.outcome` for work
-that never happened, and its absence is not a gap. A reader deriving state from
-these entries should treat `deny` with no outcome as refused, and `deny` with an
+**A refusal produces one entry, not two, whether it is `deny` or
+`rejected`.** There is no `call.outcome` for work that never happened, and
+its absence is not a gap. A reader deriving state from these entries should
+treat `deny` or `rejected` with no outcome as refused, and either with an
 outcome as inconsistent — nothing should produce the latter.
 
 **Some refusals are not here at all.** When the daemon cannot be reached the
@@ -393,7 +414,21 @@ relay denies the call locally, and the only thing that can write to this journal
 is exactly what could not be reached. Those refusals are counted as lost events
 and printed on stderr by the relay; the journal never learns of them. So
 `decision = deny` in this file always means a policy refusal, never an inability
-to decide.
+to decide -- and the same now holds for `rejected`: it always means a human, or
+the approval timeout, actually reached that decision, never that the relay
+gave up waiting to hear one. A relay that gives up waiting on a held call
+denies locally and writes nothing, exactly as it always has for an
+unreachable daemon.
+
+**A call an `ask` rule is still holding has no entry yet, and is not a
+gap.** Between a `call.request` being asked and a human (or the timeout)
+deciding it, the daemon has recorded nothing: not the call, not that a
+decision is pending, nothing. The wire carries its own value for this state
+-- `pending`, distinct from `undecided` -- but it exists only in the message
+the daemon sends the relay while the call is held; it is never written here.
+A reader of this journal cannot see a call in this state at all, by
+construction, which is the same property `docs/decisions/0005-human-approval.md`
+states for why the real arguments never reach it either.
 
 ## What this does not protect against
 
