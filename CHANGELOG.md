@@ -11,6 +11,19 @@ the test names behind each claim live.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Four findings from the 2026-09-15 review of the merged M4.5 work, closed
+  before it shipped.** Two names could be enrolled against one executable and
+  the lookup between them had no order, so a same-user process that enrolled a
+  second name against the operator's client binary would have inherited that
+  name's rules after a routine re-enrolment; one executable is one agent now.
+  `nim init`'s dry run printed the `env` block where client configs keep their
+  tokens; values are hidden. Two `--write` runs in one second overwrote the
+  first backup; names carry nanoseconds and are created exclusively, and a
+  symlinked config is written through rather than replaced. The relay could
+  wait on its connector from two goroutines at once; it stops it once.
+
 ### Added
 
 - **M1 -- pass-through relay.** `nim serve` spawns one downstream MCP server
