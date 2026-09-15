@@ -18,23 +18,54 @@ defaults:
     working-directory: engine
 
 jobs:
-  # Both platforms, because they do not run the same code. peer_darwin.go and
-  # peer_linux.go are separate implementations of the check that keeps
-  # everything which is not Nim off the daemon socket, and until this existed
-  # only the darwin one had ever been executed -- the linux one was reasoned
-  # about and cross-compiled. The same is true of the credential store, which
-  # shells out to `security` on one and `secret-tool` on the other.
+  # Three platforms, because they do not run the same code. peer_darwin.go,
+  # peer_linux.go and peer_windows.go are separate implementations of the
+  # check that keeps everything which is not Nim off the daemon socket, and
+  # until darwin and linux existed here only the darwin one had ever been
+  # executed -- the linux one was reasoned about and cross-compiled. The same
+  # is true of the credential store, which shells out to `security` on one,
+  # `secret-tool` on another, and calls DPAPI directly through syscall on the
+  # third.
+  #
+  # windows-latest is not a full third leg of the same guarantee, and this
+  # job does not pretend otherwise. Peer identity has no kernel-verified
+  # answer on Windows at all (see engine/internal/peer/peer_windows.go) --
+  # not untested, unimplemented, on purpose, because an unverified identity
+  # mechanism would read as a working check to everything layered on top of
+  # it. Every test that exists to demonstrate a peer-identity-dependent
+  # property, or agent enrolment's file-identity lookup, t.Skips on this
+  # platform with a reason at the call site, and the platform-specific
+  # allow-list below is what keeps that skip from quietly stopping counting
+  # as evidence -- see .github/scripts/windows-skip-allowlist.txt. Nothing in
+  # engine/internal or engine/cmd changed to make this platform pass; it
+  # passes honestly, by skipping what it cannot do, or it fails.
   test:
     name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    defaults:
+      run:
+        # windows-latest's default shell for `run:` steps is pwsh; every step
+        # below is written in bash (git-bash ships on windows-latest runners
+        # too), and one bash script covers all three platforms instead of a
+        # parallel pwsh translation of each step.
+        shell: bash
     steps:
-      - uses: actions/checkout@v4
+      # Windows' git defaults to checking text files out with CRLF. Every .go
+      # file in this repo is written with LF, which is also what gofmt itself
+      # emits, so a CRLF checkout would make the whole tree look unformatted
+      # for a reason that has nothing to do with the code. Set before
+      # checkout, so checkout itself writes the bytes the repository has.
+      - name: Preserve LF line endings (windows)
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
 
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: engine/go.mod
           cache-dependency-path: engine/go.sum
@@ -52,6 +83,17 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libsecret-tools
 
+      # -race needs cgo, which needs a C compiler; windows-latest's own MinGW
+      # (installed by the runner image via chocolatey) exists but is not
+      # reliably on PATH by default -- a known, long-standing gap in the
+      # runner image itself (actions/runner-images#6103), not anything about
+      # this repository. Prepending it here is a no-op if some other PATH
+      # entry already resolves gcc, and the fix if none does; either way it
+      # runs before the first step that needs cgo.
+      - name: Ensure a C compiler is on PATH for -race (windows)
+        if: runner.os == 'Windows'
+        run: echo "C:\ProgramData\chocolatey\lib\mingw\tools\install\mingw64\bin" >> "$GITHUB_PATH"
+
       - name: gofmt
         run: |
           unformatted=$(gofmt -l .)
@@ -63,6 +105,21 @@ jobs:
 
       - name: go vet
         run: go vet ./...
+
+      # go.mod and go.sum are supposed to describe exactly what the module
+      # needs, not what someone forgot to prune after an import changed. This
+      # catches both directions -- a dependency added to code but never
+      # `go get`, and one still listed after its last use was removed -- by
+      # running the same command a contributor would and refusing to differ
+      # from what is committed. `go mod tidy` weighs every platform's
+      # build-tagged files when it resolves the graph, not just the one this
+      # job happens to run on, so go.mod and go.sum come out the same
+      # regardless of which matrix leg checks them; running it on all three is
+      # redundant insurance, not three different answers.
+      - name: go mod tidy is a no-op
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
 
       # -race is not optional here. Three real concurrency bugs have been
       # found in this codebase so far (a split-brain daemon start, a torn
@@ -86,8 +143,20 @@ jobs:
 
       # And having made skips visible, refuse to ignore them: any test the
       # dashboard cites as evidence for a verified guarantee must have run.
+      #
+      # Windows gets a second, explicit argument: a short, named allow-list of
+      # tests that platform cannot pass by design (peer identity, agent
+      # enrolment's file lookup -- see the comment on this job, above). Every
+      # other skip is exactly as fatal there as it is everywhere else; this
+      # does not loosen the check for linux or macOS, which keep calling the
+      # script with one argument, same as always.
       - name: adversarial tests must have run, not skipped
+        if: runner.os != 'Windows'
         run: ../.github/scripts/assert-evidence-ran.sh /tmp/gotest.log
+
+      - name: adversarial tests must have run, not skipped (windows allow-list)
+        if: runner.os == 'Windows'
+        run: ../.github/scripts/assert-evidence-ran.sh /tmp/gotest.log ../.github/scripts/windows-skip-allowlist.txt
 
   # The dashboard makes claims about this repository, so its build is a check
   # on those claims rather than a packaging step: scripts/generate.mjs exits
@@ -105,11 +174,11 @@ jobs:
     steps:
       # Full history: the generator reads git for the commit it describes, and
       # a shallow clone would make the commit count wrong rather than absent.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
           cache: npm
@@ -144,9 +213,9 @@ jobs:
           - goos: windows
             goarch: amd64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
         with:
           go-version-file: engine/go.mod
           cache-dependency-path: engine/go.sum
@@ -168,3 +237,89 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: go vet ./...
+
+  # golang.org/x/vuln's database, checked against this module's actual call
+  # graph rather than just its dependency list -- govulncheck only reports a
+  # known vulnerability if code that can reach it is actually in the build,
+  # which is why this is worth running in CI and not just glancing at
+  # `go list -m all` once in a while.
+  vuln:
+    name: vuln
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: engine/go.mod
+          cache-dependency-path: engine/go.sum
+
+      # Pinned with @v1.8.0 rather than @latest: a floating tool version means
+      # this job's pass/fail can change with no diff in this repository, on
+      # whatever day upstream cuts a release.
+      - name: govulncheck
+        working-directory: engine
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+
+  # tools/relay-rig/compare.py is the acceptance test for the one thing Nim
+  # must never get wrong: a real MCP client cannot tell it is going through
+  # Nim. F-007 (dashboard/data/state.json) existed because this had not been
+  # re-run since the M1.5 merge; running it here, on every push, is what
+  # closes it rather than merely re-running it once by hand.
+  #
+  # No `needs`: this does not gate on the test job, deliberately. It builds
+  # its own binary and answers its own question -- whether Nim relays a real
+  # MCP session byte for byte, and refuses in exactly the ways it should --
+  # which is independent of whether that binary's unit tests happened to run
+  # first in this workflow.
+  relay-rig:
+    name: relay-rig
+    runs-on: ubuntu-latest
+    # Overrides the workflow-level default of "engine": this job needs both
+    # engine/ (to build the binary) and the repository root (compare.py and
+    # its fastmcp install live under tools/relay-rig/), and the root is the
+    # more common case among its steps.
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: engine/go.mod
+          cache-dependency-path: engine/go.sum
+
+      - name: Build nim
+        working-directory: engine
+        run: go build -o bin/nim ./cmd/nim
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+
+      # fastmcp requires Python >=3.10 on every release back to 0.1.0, which
+      # is why this pins 3.12 above rather than whatever `python3` the image
+      # happens to default to. Pinned to the exact version this rig was
+      # proven against locally -- see tools/relay-rig/README.md for why
+      # Client(..., mode="legacy") matters with this SDK.
+      - name: Install fastmcp
+        run: pip install fastmcp==4.0.3
+
+      # Anything but "RESULT: IDENTICAL" on the last line is a failure: a
+      # MATCH case that differed, a DIFFERS case that did not differ in the
+      # required way, or the script exiting non-zero before printing a result
+      # line at all (its own exit code already covers that, but the line
+      # check catches a change that prints success text while returning 1, or
+      # vice-versa).
+      - name: Run the relay rig
+        env:
+          NIM_BINARY: ${{ github.workspace }}/engine/bin/nim
+        run: |
+          set -o pipefail
+          python tools/relay-rig/compare.py 2>&1 | tee /tmp/relay-rig.log
+          last="$(tail -n1 /tmp/relay-rig.log)"
+          if [ "$last" != "RESULT: IDENTICAL" ]; then
+            echo "expected the last line to be 'RESULT: IDENTICAL', got: $last" >&2
+            exit 1
+          fi
