@@ -1,19 +1,23 @@
 // Package daemon owns everything shared between shims.
 //
-// A client spawns one shim per configured MCP server, so decisions, the journal
-// and (later) budgets and human approval need a single writer. The shims report
-// here; this process is the only one that touches SQLite.
+// A client spawns one shim per configured MCP server, so decisions, the
+// journal, human approval and (later) budgets need a single writer. The
+// shims report here; this process is the only one that touches SQLite.
 //
 // One report is answered, and only one. A shim asks before it forwards a
-// tools/call and waits, because a call that has been sent cannot be recalled.
-// Everything else -- sessions, outcomes, anomalies -- is still one way and still
-// never stalls the relay.
+// tools/call and waits, because a call that has been sent cannot be recalled
+// -- longer, if the rule that decides it is ask, in which case the call is
+// held in memory (see approval.go) rather than decided at once, and the
+// wait is the same one extended to approval_timeout. Everything else --
+// sessions, outcomes, anomalies -- is still one way and still never stalls
+// the relay.
 //
 // The decision is written before it is sent. A shim is told "allow" only once
 // the entry recording that allowance is in the journal, which is what makes a
-// forwarded call a recorded call. The converse does not follow: an allow in the
-// journal does not mean the call was made, because the shim may have given up
-// waiting first. docs/milestones.md sets out that race.
+// forwarded call a recorded call -- and the same holds for "approved" once a
+// human decides a held call. The converse does not follow: an allow (or an
+// approved) in the journal does not mean the call was made, because the shim
+// may have given up waiting first. docs/milestones.md sets out that race.
 package daemon
 
 import (
@@ -51,6 +55,14 @@ type Event struct {
 	Anomaly         string `json:"anomaly,omitempty"`
 	ProtocolVersion string `json:"protocol_version,omitempty"`
 	OccurredAt      string `json:"occurred_at,omitempty"`
+
+	// Arguments belongs to KindCallArguments alone: the real params.arguments
+	// bytes of a call an "ask" rule is holding, sent only once the daemon has
+	// said it is holding that call (see answer), and never for any other
+	// kind. It never becomes part of a journal.Entry -- apply refuses this
+	// kind outright -- and handle must never log an Event carrying it; see
+	// docs/decisions/0005-human-approval.md.
+	Arguments json.RawMessage `json:"arguments,omitempty"`
 }
 
 // A call is reported twice, as two immutable entries rather than one row that
@@ -73,13 +85,32 @@ const (
 // recorded on the call.request entry, which is the thing the chain covers.
 const KindDecision = "decision"
 
+// KindCallArguments is the relay's one-way follow-up to a call.request the
+// daemon answered "pending": the raw params.arguments bytes of that same
+// call (session, seq), sent because the daemon needs the real bytes to hold
+// for a human and never asked for them up front -- most calls never need
+// them, and this keeps them off the wire for every call an ask rule does not
+// hold. Not a journal kind: nothing here is ever written to the journal, by
+// name or by content -- see apply and docs/decisions/0005-human-approval.md.
+const KindCallArguments = "call.arguments"
+
 // DecisionUndecided answers a call the daemon could not act on at all: the
 // attempt to record it failed, so nothing was journaled and nothing was
 // actually decided. It travels on the wire only -- journal.Decision* are the
 // values a row can hold, and this call never produced one.
 const DecisionUndecided = "undecided"
 
-// Decision is the only message the daemon sends back.
+// DecisionPending answers a call.request whose winning rule is ask: the
+// daemon is holding the call for a human and nothing is journaled yet.
+// Wire-only, exactly like DecisionUndecided -- a call.request never carries
+// this as its own recorded decision, only journal.DecisionApproved or
+// journal.DecisionRejected once a human (or the timeout) settles it.
+const DecisionPending = "pending"
+
+// Decision is the only message the daemon sends back on a call.request's
+// connection -- once immediately for allow, deny or undecided, or twice for
+// ask: first DecisionPending with Hold set, then the final answer once a
+// human decides or the wait runs out.
 //
 // It echoes the session and sequence it answers so the shim can check that the
 // reply belongs to the question. Without that, one lost or late message puts the
@@ -91,6 +122,12 @@ type Decision struct {
 	Seq       int    `json:"seq"`
 	Decision  string `json:"decision"`
 	Reason    string `json:"reason,omitempty"`
+	// Hold is set only on a DecisionPending reply: the id nim approve lists
+	// this call under. Session and seq already correlate the eventual
+	// answer, so nothing on the wire needs to echo it back; it travels here
+	// so the two names for one call -- what decides it and what lists it --
+	// are provably the same one.
+	Hold string `json:"hold,omitempty"`
 }
 
 // Run serves until the process is stopped. It returns nil when another daemon
@@ -158,6 +195,8 @@ func Run(cfg config.Config) error {
 
 	locks := newTargetLocks()
 	sessions := newSessionRegistry()
+	approvals := newPendingRegistry()
+	approvalTimeout := cfg.ApprovalTimeoutOrDefault()
 
 	log.Printf("nim daemon listening on %s (journal: %s)", cfg.Daemon.Socket, cfg.DatabasePath())
 	for {
@@ -165,7 +204,7 @@ func Run(cfg config.Config) error {
 		if err != nil {
 			return err
 		}
-		go handle(conn, j, store, locks, sessions)
+		go handle(conn, j, store, locks, sessions, approvals, approvalTimeout)
 	}
 }
 
@@ -275,7 +314,10 @@ func listen(path string) (net.Listener, error) {
 	return nil, fmt.Errorf("could not bind %s: %w", path, lastErr)
 }
 
-func handle(conn net.Conn, j *journal.Journal, store credential.Store, locks *targetLocks, sessions *sessionRegistry) {
+func handle(
+	conn net.Conn, j *journal.Journal, store credential.Store, locks *targetLocks,
+	sessions *sessionRegistry, approvals *pendingRegistry, approvalTimeout time.Duration,
+) {
 	defer conn.Close()
 	state := &requestState{}
 
@@ -304,6 +346,12 @@ func handle(conn net.Conn, j *journal.Journal, store credential.Store, locks *ta
 				log.Printf("closing session %s after its shim went away: %v", id, err)
 			}
 			sessions.release(id)
+			// A call this session left pending does not get to outlive it:
+			// there is no relay connection left to eventually answer, so it
+			// is rejected and journaled now rather than waiting out the
+			// approval timer for the same outcome. See
+			// docs/decisions/0005-human-approval.md.
+			approvals.rejectSession(id, j)
 		}
 	}()
 
@@ -370,7 +418,7 @@ func handle(conn net.Conn, j *journal.Journal, store credential.Store, locks *ta
 		}
 
 		if requestKinds[peek.Kind] {
-			if err := serveRequest(conn, raw, peek.ID, peek.Kind, state, j, store, locks); err != nil {
+			if err := serveRequest(conn, raw, peek.ID, peek.Kind, state, j, store, locks, approvals); err != nil {
 				log.Printf("writing response: %v", err)
 				return
 			}
@@ -418,11 +466,12 @@ func handle(conn net.Conn, j *journal.Journal, store credential.Store, locks *ta
 		}
 
 		// A call is numbered from 1 within its session; that number is what
-		// pairs it with its outcome and what gap detection counts. A report
-		// carrying no usable number is not a well-formed call and used to be
-		// journaled with a null seq, where it paired with nothing and could
-		// mask a real gap. A genuine relay never sends one.
-		if (ev.Kind == KindCallRequest || ev.Kind == KindCallOutcome) && ev.Seq <= 0 {
+		// pairs it with its outcome (and, for an ask rule, with the
+		// call.arguments that follows it) and what gap detection counts. A
+		// report carrying no usable number is not a well-formed call and used
+		// to be journaled with a null seq, where it paired with nothing and
+		// could mask a real gap. A genuine relay never sends one.
+		if (ev.Kind == KindCallRequest || ev.Kind == KindCallOutcome || ev.Kind == KindCallArguments) && ev.Seq <= 0 {
 			log.Printf("refusing %s for session %q with seq %d: a call is numbered from 1", ev.Kind, ev.SessionID, ev.Seq)
 			return
 		}
@@ -432,10 +481,22 @@ func handle(conn net.Conn, j *journal.Journal, store credential.Store, locks *ta
 		// where one question went unanswered can no longer be trusted to pair
 		// the next answer with the right call.
 		if ev.Kind == KindCallRequest {
-			if err := answer(conn, ev, j, agent, open[ev.SessionID]); err != nil {
+			if err := answer(conn, ev, j, agent, open[ev.SessionID], approvals, approvalTimeout); err != nil {
 				log.Printf("answering %s seq %d: %v", ev.SessionID, ev.Seq, err)
 				return
 			}
+			continue
+		}
+
+		// The relay's follow-up to a DecisionPending reply: the real bytes of
+		// a call an ask rule is holding. One-way, like every other Event, and
+		// deliberately never reaches apply -- it names no journal kind, and
+		// must not: see docs/decisions/0005-human-approval.md. A report for a
+		// call that is no longer held (already decided, or bogus) is
+		// silently dropped by setArguments; that is not a reason to break a
+		// connection that has not actually done anything wrong.
+		if ev.Kind == KindCallArguments {
+			approvals.setArguments(ev.SessionID, ev.Seq, ev.Arguments)
 			continue
 		}
 
@@ -452,11 +513,20 @@ func handle(conn net.Conn, j *journal.Journal, store credential.Store, locks *ta
 		case KindSessionEnd:
 			delete(open, ev.SessionID)
 			sessions.release(ev.SessionID)
+			// Explicit, graceful end: reject whatever this session left
+			// pending rather than let it wait out the approval timer for a
+			// human who is not coming, now that the session that would have
+			// used the answer is already gone.
+			approvals.rejectSession(ev.SessionID, j)
 		}
 	}
 }
 
-// answer decides one call, records the decision, and only then tells the shim.
+// answer decides one call, records the decision, and only then tells the
+// shim -- unless the winning rule is ask, in which case nothing is recorded
+// yet: the call is held in memory for a human, and its call.request entry is
+// written only once they decide, or the wait runs out. See
+// docs/decisions/0005-human-approval.md.
 //
 // The decision is (agent, connector, tool): the agent the daemon derived for
 // this connection, the connector the session was started for, and the tool
@@ -470,7 +540,10 @@ func handle(conn net.Conn, j *journal.Journal, store credential.Store, locks *ta
 // milestone guarantees: that a call which reached a connector is a call the
 // journal knows about. A rule lookup that fails is the same shape -- the
 // daemon could not decide -- and is answered as undecided, not as a verdict.
-func answer(conn net.Conn, ev Event, j *journal.Journal, agent, connector string) error {
+func answer(
+	conn net.Conn, ev Event, j *journal.Journal, agent, connector string,
+	approvals *pendingRegistry, approvalTimeout time.Duration,
+) error {
 	decision, reason := journal.DecisionAllow, ""
 	rule, found, err := j.RuleFor(agent, connector, ev.Tool)
 	if err != nil {
@@ -480,13 +553,31 @@ func answer(conn net.Conn, ev Event, j *journal.Journal, agent, connector string
 			Decision: DecisionUndecided, Reason: "the rules could not be read",
 		})
 	}
-	// found may carry either effect: an explicit allow can be the answer too,
-	// when it is the more specific rule -- docs/decisions/0003 has the
-	// precedence. No matching rule at all is the M4 baseline, decision's zero
-	// value above: allow, with nothing to name as the reason.
+	// found may carry any of the three effects: an explicit allow or ask can
+	// be the answer too, when it is the more specific rule -- docs/decisions/0003
+	// has the precedence. No matching rule at all is the M4 baseline,
+	// decision's zero value above: allow, with nothing to name as the reason.
 	if found {
 		decision = rule.Effect
 		reason = "by rule: " + rule.String()
+	}
+
+	if decision == journal.DecisionAsk {
+		// Nothing is journaled here. The call is held, in memory only, until
+		// a human decides it, the approval timer runs out, or its session
+		// ends first -- pendingRegistry.resolve is the one path that writes
+		// its call.request entry, whichever of those gets there.
+		p := &pendingCall{
+			SessionID: ev.SessionID, Seq: ev.Seq, Tool: ev.Tool,
+			Agent: agent, Connector: connector, Digest: ev.Digest,
+			StartedAt: time.Now(), conn: conn,
+		}
+		approvals.hold(p)
+		approvals.arm(p, approvalTimeout, j)
+		return json.NewEncoder(conn).Encode(Decision{
+			Kind: KindDecision, SessionID: ev.SessionID, Seq: ev.Seq,
+			Decision: DecisionPending, Reason: reason, Hold: p.id(),
+		})
 	}
 
 	ev.Decision = decision

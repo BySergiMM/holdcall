@@ -41,7 +41,7 @@ type Request struct {
 	// an enrolment exists rather than taking the name to mean anything on
 	// its own. An empty RuleAgent or RuleConnector means every.
 	//
-	// RuleDefault marks a request as `nim policy default deny|allow` or
+	// RuleDefault marks a request as `nim policy default deny|allow|ask` or
 	// `nim policy remove --default`: the rule's tool is
 	// journal.RuleToolDefault ("*") rather than RuleTool, which must be empty
 	// when this is set. A default has no tool of its own to send, and a
@@ -50,6 +50,18 @@ type Request struct {
 	RuleAgent     string `json:"rule_agent,omitempty"`
 	RuleConnector string `json:"rule_connector,omitempty"`
 	RuleDefault   bool   `json:"rule_default,omitempty"`
+
+	// ApprovalID, ApprovalDecision and ApprovalReason belong to
+	// approval.decide: the id an approval.list answer (or the daemon's own
+	// "pending" reply) named, journal.DecisionApproved or
+	// journal.DecisionRejected, and the human's reason for a rejection.
+	// ApprovalReason is never written to the journal and never reaches the
+	// client the call came from -- only the daemon's own log and the
+	// Response this request gets back see it. See
+	// docs/decisions/0005-human-approval.md.
+	ApprovalID       string `json:"approval_id,omitempty"`
+	ApprovalDecision string `json:"approval_decision,omitempty"`
+	ApprovalReason   string `json:"approval_reason,omitempty"`
 }
 
 const (
@@ -64,9 +76,18 @@ const (
 
 	KindPolicyDeny    = "policy.deny"
 	KindPolicyAllow   = "policy.allow"
+	KindPolicyAsk     = "policy.ask"
 	KindPolicyRemove  = "policy.remove"
 	KindPolicyList    = "policy.list"
 	KindPolicyExplain = "policy.explain"
+
+	// KindApprovalList and KindApprovalDecide are their own purpose (see
+	// requestState.kind): nim approve and nim reject dial the daemon under
+	// it, distinct from policy, and a connection that speaks one may not
+	// pivot to the other or to a credential -- purpose binding is what makes
+	// an approval connection unable to ask for a credential.
+	KindApprovalList   = "approval.list"
+	KindApprovalDecide = "approval.decide"
 )
 
 // String redacts Secret so that even a future fmt.Printf/log.Printf("%v", req)
@@ -110,6 +131,26 @@ type Response struct {
 
 	// policy.explain
 	Explain *ExplainInfo `json:"explain,omitempty"`
+
+	// approval.list: every call currently held for a human. approval.decide
+	// answers with the one call it just resolved, the same shape nim policy
+	// deny/allow/ask echoes the rule it just added.
+	Pending []PendingInfo `json:"pending,omitempty"`
+}
+
+// PendingInfo is one call on hold for a human, exactly as nim approve shows
+// it: the real arguments, never a summary -- docs/decisions/0005-human-approval.md
+// is why. Arguments is raw JSON, nil when the call carried none, and this is
+// the one place on the whole daemon socket where that is deliberate: nim
+// approve is the human's own inspection of the call, not a channel back to
+// the model that asked for it.
+type PendingInfo struct {
+	ID        string          `json:"id"`
+	Tool      string          `json:"tool"`
+	Agent     string          `json:"agent,omitempty"`
+	Connector string          `json:"connector,omitempty"`
+	Arguments json.RawMessage `json:"arguments,omitempty"`
+	StartedAt string          `json:"started_at"`
 }
 
 // RuleInfo is one rule as reported to the CLI. Agent and Connector are empty
@@ -168,13 +209,17 @@ type AgentInfo struct {
 	Current bool `json:"current"`
 }
 
+// String never prints Pending[].Arguments, for the same reason it redacts
+// Env: this is what a future fmt.Printf/log.Printf("%v", resp) mistake would
+// print, and a call's real arguments have no more business in a log line
+// than a credential does.
 func (r Response) String() string {
 	env := "<none>"
 	if len(r.Env) > 0 {
 		env = "<redacted>"
 	}
-	return fmt.Sprintf("Response{ID:%s Error:%q Found:%v Env:%s Connectors:%d Agents:%d Rules:%d}",
-		r.ID, r.Error, r.Found, env, len(r.Connectors), len(r.Agents), len(r.Rules))
+	return fmt.Sprintf("Response{ID:%s Error:%q Found:%v Env:%s Connectors:%d Agents:%d Rules:%d Pending:%d}",
+		r.ID, r.Error, r.Found, env, len(r.Connectors), len(r.Agents), len(r.Rules), len(r.Pending))
 }
 
 // SendRequest writes req and reads back its Response on conn. Used by the

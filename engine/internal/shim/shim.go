@@ -10,6 +10,13 @@
 // a different question -- is a denial. There is no path on which a tools/call
 // reaches a connector without a decision behind it.
 //
+// One answer takes longer than the rest: a rule that says "ask" holds the
+// call for a human, and the relay's wait extends from decisionTimeout to
+// approval_timeout for that one call, on the same connection -- see
+// reporter.awaitApproval and docs/decisions/0005-human-approval.md. Every
+// other rule in this paragraph still applies to it: a way of not getting a
+// final answer within that longer bound is still a denial.
+//
 // Everything else still flows without waiting. Other methods are relayed
 // untouched and never consult the daemon, and sessions, outcomes and anomalies
 // are still reported one way, so bookkeeping cannot stall the relay.
@@ -415,8 +422,10 @@ func (s *Shim) decide(env mcp.Envelope) bool {
 		s.noteAnomaly(anomalyDuplicateID)
 	}
 
-	// No decision field: the shim does not get to say what was decided. It asks,
-	// and the daemon records its own answer.
+	// No decision field: the shim does not get to say what was decided. It
+	// asks, and the daemon records its own answer. The real arguments travel
+	// with the question only as far as ask(), which sends them on only if
+	// the daemon says it is holding this call for a human -- see awaitApproval.
 	v := s.reporter.ask(daemon.Event{
 		Kind:       daemon.KindCallRequest,
 		SessionID:  s.sessionID,
@@ -424,9 +433,9 @@ func (s *Shim) decide(env mcp.Envelope) bool {
 		Tool:       p.tool,
 		Digest:     p.digest,
 		OccurredAt: p.started.UTC().Format(time.RFC3339Nano),
-	})
+	}, call.Arguments)
 
-	if v == verdictAllow {
+	if v == verdictAllow || v == verdictApproved {
 		// In flight only now. A refused call never gets an outcome, so it must
 		// not be left waiting for one -- that would look like a call that never
 		// came back.
@@ -442,8 +451,13 @@ func (s *Shim) decide(env mcp.Envelope) bool {
 	// but nothing here depends on that being true.
 	if !env.IsNotification() {
 		text := mcp.DeniedNoDecision
-		if v == verdictDeniedByPolicy {
+		switch v {
+		case verdictDeniedByPolicy:
 			text = mcp.DeniedByPolicy
+		case verdictRejectedByHuman:
+			text = mcp.DeniedByHuman
+		case verdictApprovalTimedOut:
+			text = mcp.DeniedApprovalTimedOut
 		}
 		s.toClient(mcp.DenyResponse(env.ID, text, s.negotiated()))
 	}
@@ -581,8 +595,8 @@ func (s *Shim) report(ev daemon.Event) { s.reporter.send(ev) }
 
 // verdict is what a tools/call gets back from the daemon.
 //
-// The zero value is the safe default: anything that is not an explicit allow
-// or an explicit policy denial is treated as no decision at all, so a
+// The zero value is the safe default: anything that is not an explicit
+// allow-shaped or deny-shaped answer is treated as no decision at all, so a
 // tools/call refused this way reads as retryable, not as ruled against.
 type verdict int
 
@@ -590,13 +604,27 @@ const (
 	verdictNoDecision verdict = iota
 	verdictAllow
 	verdictDeniedByPolicy
+	// verdictApproved and verdictRejectedByHuman are allow and deny's
+	// counterparts for a call an "ask" rule held: a human decided it,
+	// instead of a rule. See awaitApproval and
+	// docs/decisions/0005-human-approval.md.
+	verdictApproved
+	verdictRejectedByHuman
+	// verdictApprovalTimedOut is its own outcome, not verdictNoDecision:
+	// nobody deciding in time is not the daemon failing to answer, and the
+	// client is told so in its own words -- see mcp.DeniedApprovalTimedOut.
+	verdictApprovalTimedOut
 )
 
-// item is one thing to send. reply is nil for the reports that expect no answer.
+// item is one thing to send. reply is nil for the reports that expect no
+// answer. arguments is the call's real params.arguments bytes, carried
+// alongside the call.request event but sent on the wire only if the daemon
+// answers that it is holding this call for a human -- see awaitApproval.
 type item struct {
-	ev       daemon.Event
-	reply    chan verdict
-	deadline time.Time
+	ev        daemon.Event
+	arguments json.RawMessage
+	reply     chan verdict
+	deadline  time.Time
 }
 
 // reporter carries events to the daemon and brings decisions back.
@@ -609,6 +637,12 @@ type reporter struct {
 	conn net.Conn
 	enc  *json.Encoder
 	dec  *mcp.Reader
+
+	// approvalTimeout bounds the second, longer wait a call an "ask" rule
+	// holds gets -- read once, from the same config the daemon reads its own
+	// copy from, rather than hardcoded like decisionTimeout: unlike the 2 s
+	// bound, an operator is expected to tune this one.
+	approvalTimeout time.Duration
 
 	ch   chan item
 	done chan struct{}
@@ -631,7 +665,10 @@ type reporter struct {
 }
 
 func dialDaemon(cfg config.Config) *reporter {
-	r := &reporter{ch: make(chan item, 256), done: make(chan struct{})}
+	r := &reporter{
+		ch: make(chan item, 256), done: make(chan struct{}),
+		approvalTimeout: cfg.ApprovalTimeoutOrDefault(),
+	}
 	conn, err := net.DialTimeout("unix", cfg.Daemon.Socket, 300*time.Millisecond)
 	if err != nil {
 		if StartDaemon() {
@@ -735,7 +772,9 @@ func (r *reporter) post(ev daemon.Event) {
 //
 // Every failure returns the zero verdict, which is a denial. The queue, the
 // socket, the clock and the daemon all get to say no; only one specific reply
-// says yes.
+// says yes -- or, for a call an ask rule holds, says pending, in which case
+// this hands off to awaitApproval for the longer, second wait rather than
+// deciding here.
 func (r *reporter) exchange(it item) verdict {
 	if r.conn == nil {
 		r.miss("there was no daemon to decide a call, so it was denied")
@@ -755,31 +794,98 @@ func (r *reporter) exchange(it item) verdict {
 		return verdictNoDecision
 	}
 
+	d, ok := r.readDecision(raw, it.ev)
+	if !ok {
+		return verdictNoDecision
+	}
+	if d.Decision == daemon.DecisionPending {
+		return r.awaitApproval(it)
+	}
+	v, ok := verdictFor(d.Decision)
+	if !ok {
+		r.drop("the daemon sent a decision Nim does not understand")
+		return verdictNoDecision
+	}
+	return v
+}
+
+// readDecision unmarshals one reply and checks it answers the question that
+// was actually asked. A reply that does not match means the two are out of
+// step, and the next answer would be read as belonging to a different call
+// -- which is how a refusal turns into an allowance -- so this drops the
+// connection exactly as exchange always has for that case.
+func (r *reporter) readDecision(raw []byte, question daemon.Event) (daemon.Decision, bool) {
 	var d daemon.Decision
 	if err := json.Unmarshal(raw, &d); err != nil {
 		r.drop("the daemon sent something that was not a decision")
-		return verdictNoDecision
+		return daemon.Decision{}, false
 	}
-
-	// The answer has to be to the question that was asked. A reply that does not
-	// match means the two are out of step, and the next answer would be read as
-	// belonging to a different call -- which is how a refusal turns into an
-	// allowance.
-	if d.Kind != daemon.KindDecision || d.SessionID != it.ev.SessionID || d.Seq != it.ev.Seq {
+	if d.Kind != daemon.KindDecision || d.SessionID != question.SessionID || d.Seq != question.Seq {
 		r.drop("the daemon answered a different call")
+		return daemon.Decision{}, false
+	}
+	return d, true
+}
+
+// verdictFor maps the daemon's wire vocabulary to what the shim acts on. ok
+// is false for a decision value this build does not know, which the caller
+// treats as a protocol break rather than any kind of verdict.
+func verdictFor(decision string) (verdict, bool) {
+	switch decision {
+	case journal.DecisionAllow:
+		return verdictAllow, true
+	case journal.DecisionDeny:
+		return verdictDeniedByPolicy, true
+	case journal.DecisionApproved:
+		return verdictApproved, true
+	case journal.DecisionRejected:
+		return verdictRejectedByHuman, true
+	case daemon.DecisionUndecided:
+		return verdictNoDecision, true
+	}
+	return verdictNoDecision, false
+}
+
+// awaitApproval sends the call's real arguments once the daemon has said it
+// is holding the call for a human, then waits up to approvalTimeout for the
+// final answer on the same connection -- the same exchange decisionTimeout
+// already bounds, only longer, because deciding this one needs a human
+// rather than a rule lookup. See docs/decisions/0005-human-approval.md.
+//
+// A failure here denies the call, exactly as every other path through
+// exchange does, and drops the connection: the daemon has its own timer at
+// the same bound, armed the moment it started holding the call, so reaching
+// this without an answer means even that did not arrive, which is the
+// daemon being unreachable, not merely undecided.
+func (r *reporter) awaitApproval(it item) verdict {
+	deadline := time.Now().Add(r.approvalTimeout)
+
+	r.conn.SetWriteDeadline(deadline)
+	if err := r.enc.Encode(daemon.Event{
+		Kind: daemon.KindCallArguments, SessionID: it.ev.SessionID, Seq: it.ev.Seq,
+		Arguments: it.arguments,
+	}); err != nil {
+		r.drop("the daemon stopped accepting events mid-session")
 		return verdictNoDecision
 	}
 
-	switch d.Decision {
-	case journal.DecisionAllow:
-		return verdictAllow
-	case journal.DecisionDeny:
-		return verdictDeniedByPolicy
-	case daemon.DecisionUndecided:
+	r.conn.SetReadDeadline(deadline)
+	raw, err := r.dec.ReadRaw()
+	if err != nil {
+		r.drop("nobody decided a pending call within " + r.approvalTimeout.String())
+		return verdictApprovalTimedOut
+	}
+
+	d, ok := r.readDecision(raw, it.ev)
+	if !ok {
 		return verdictNoDecision
 	}
-	r.drop("the daemon sent a decision Nim does not understand")
-	return verdictNoDecision
+	v, ok := verdictFor(d.Decision)
+	if !ok {
+		r.drop("the daemon sent a decision Nim does not understand")
+		return verdictNoDecision
+	}
+	return v
 }
 
 // drop closes the connection for good and counts what it cost.
@@ -796,16 +902,21 @@ func (r *reporter) drop(reason string) {
 	r.miss(reason)
 }
 
-// ask sends a call.request and waits for the daemon's decision.
+// ask sends a call.request and waits for the daemon's decision. arguments is
+// the call's real params.arguments bytes -- see item and awaitApproval; most
+// calls never need it, and it is a no-op to carry for those.
 //
 // The clock starts here rather than at the write, so time spent queued behind
-// other reports counts against the same budget. A caller cannot wait longer than
-// decisionTimeout whatever the reporter is doing.
-func (r *reporter) ask(ev daemon.Event) verdict {
+// other reports counts against the same budget. A caller cannot wait longer
+// than decisionTimeout for an ordinary verdict, or decisionTimeout plus
+// approvalTimeout for a call an ask rule ends up holding -- the outer bound
+// below covers both, because ask does not yet know which this call will be.
+func (r *reporter) ask(ev daemon.Event, arguments json.RawMessage) verdict {
 	reply := make(chan verdict, 1)
 	deadline := time.Now().Add(decisionTimeout)
+	outer := deadline.Add(r.approvalTimeout)
 
-	if !r.offer(item{ev: ev, reply: reply, deadline: deadline}) {
+	if !r.offer(item{ev: ev, arguments: arguments, reply: reply, deadline: deadline}) {
 		// A full queue is not a reason to let a call through, and waiting for
 		// room would stall behind whatever filled it. Denying is the only answer
 		// that is both bounded and safe.
@@ -816,9 +927,11 @@ func (r *reporter) ask(ev daemon.Event) verdict {
 	select {
 	case v := <-reply:
 		return v
-	case <-time.After(time.Until(deadline)):
-		// The loop sets its own deadlines, so this should be unreachable. It is
-		// here because "should be" is not a bound.
+	case <-time.After(time.Until(outer)):
+		// The loop sets its own deadlines -- decisionTimeout for the first
+		// reply, then its own approvalTimeout-based one if that reply was
+		// pending -- so this should be unreachable. It is here because
+		// "should be" is not a bound.
 		return verdictNoDecision
 	}
 }

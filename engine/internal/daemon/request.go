@@ -24,9 +24,12 @@ var requestKinds = map[string]bool{
 	KindAgentRemove:     true,
 	KindPolicyDeny:      true,
 	KindPolicyAllow:     true,
+	KindPolicyAsk:       true,
 	KindPolicyRemove:    true,
 	KindPolicyList:      true,
 	KindPolicyExplain:   true,
+	KindApprovalList:    true,
+	KindApprovalDecide:  true,
 }
 
 // requestState is the per-connection authorization state the Request family
@@ -34,20 +37,22 @@ var requestKinds = map[string]bool{
 //
 // kind and boundTarget are a second layer, independent of peer identity: a
 // connection commits to exactly one purpose on its first request -- asking for
-// its own target's credential, managing connectors, or managing agents -- and
-// to exactly one target if that purpose is credential.get. A real shim only ever does one or
-// the other. Anything that mixes them, or pivots to a second target on one
-// connection, gets "unauthorized" rather than a more specific reason: specific
-// reasons are exactly the oracle an attacker iterating on this protocol wants.
+// its own target's credential, managing connectors, managing agents, managing
+// policy, or deciding held calls -- and to exactly one target if that purpose
+// is credential.get. A real shim, or a real nim command, only ever does one.
+// Anything that mixes them, or pivots to a second target on one connection,
+// gets "unauthorized" rather than a more specific reason: specific reasons
+// are exactly the oracle an attacker iterating on this protocol wants. This
+// is what makes an approval connection unable to ask for a credential.
 type requestState struct {
-	kind        string // "" | "credential" | "connector" | "agent" | "policy"
+	kind        string // "" | "credential" | "connector" | "agent" | "policy" | "approval"
 	boundTarget string // meaningful only once kind == "credential"
 }
 
 // serveRequest decodes, dispatches and answers one Request.
 func serveRequest(
 	conn net.Conn, raw []byte, id, kind string,
-	state *requestState, j *journal.Journal, store credential.Store, locks *targetLocks,
+	state *requestState, j *journal.Journal, store credential.Store, locks *targetLocks, approvals *pendingRegistry,
 ) error {
 	if len(raw) > MaxRequestBytes {
 		return json.NewEncoder(conn).Encode(Response{
@@ -61,7 +66,7 @@ func serveRequest(
 		return json.NewEncoder(conn).Encode(Response{
 			ID: id, Error: fmt.Sprintf("malformed %s request", kind)})
 	}
-	return json.NewEncoder(conn).Encode(handleRequest(req, state, j, store, locks))
+	return json.NewEncoder(conn).Encode(handleRequest(req, state, j, store, locks, approvals))
 }
 
 // handleRequest enforces the purpose binding, then routes. None of the handlers
@@ -70,7 +75,7 @@ func serveRequest(
 // ever including a credential value.
 func handleRequest(
 	req Request, state *requestState,
-	j *journal.Journal, store credential.Store, locks *targetLocks,
+	j *journal.Journal, store credential.Store, locks *targetLocks, approvals *pendingRegistry,
 ) Response {
 	var thisKind string
 	switch req.Kind {
@@ -80,8 +85,10 @@ func handleRequest(
 		thisKind = "connector"
 	case KindAgentAdd, KindAgentList, KindAgentRemove:
 		thisKind = "agent"
-	case KindPolicyDeny, KindPolicyAllow, KindPolicyRemove, KindPolicyList, KindPolicyExplain:
+	case KindPolicyDeny, KindPolicyAllow, KindPolicyAsk, KindPolicyRemove, KindPolicyList, KindPolicyExplain:
 		thisKind = "policy"
+	case KindApprovalList, KindApprovalDecide:
+		thisKind = "approval"
 	default:
 		return Response{ID: req.ID, Error: fmt.Sprintf("unknown request kind %q", req.Kind)}
 	}
@@ -110,12 +117,18 @@ func handleRequest(
 		return handlePolicyDeny(req, j)
 	case KindPolicyAllow:
 		return handlePolicyAllow(req, j)
+	case KindPolicyAsk:
+		return handlePolicyAsk(req, j)
 	case KindPolicyRemove:
 		return handlePolicyRemove(req, j)
 	case KindPolicyList:
 		return handlePolicyList(req, j)
 	case KindPolicyExplain:
 		return handlePolicyExplain(req, j)
+	case KindApprovalList:
+		return handleApprovalList(req, approvals)
+	case KindApprovalDecide:
+		return handleApprovalDecide(req, approvals, j)
 	default:
 		panic("unreachable: the switch above is exhaustive for req.Kind")
 	}

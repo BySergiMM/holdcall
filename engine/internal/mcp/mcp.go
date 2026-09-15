@@ -432,6 +432,14 @@ type ToolCall struct {
 	// are stated in docs/journal-format.md, because a reader comparing digests
 	// has to know that "no arguments" has a fixed value.
 	Digest string
+	// Arguments is the raw params.arguments bytes, exactly as they arrived --
+	// the same bytes Digest is taken over, kept rather than discarded. Nil
+	// when the key was absent. Ordinary calls never look at this field: it
+	// exists for the one path that needs the real bytes rather than a
+	// digest, a call an "ask" rule holds for a human -- see
+	// docs/decisions/0005-human-approval.md. It never reaches the journal or
+	// a log line; the digest is what those get, as for every other call.
+	Arguments json.RawMessage
 }
 
 // Call reads the tools/call out of a request Nim has already recognised as
@@ -468,5 +476,5 @@ func (e Envelope) Call() (ToolCall, error) {
 		return ToolCall{}, ErrUnreadableCall
 	}
 	sum := sha256.Sum256(fields["arguments"])
-	return ToolCall{Name: name, Digest: hex.EncodeToString(sum[:])}, nil
+	return ToolCall{Name: name, Digest: hex.EncodeToString(sum[:]), Arguments: fields["arguments"]}, nil
 }

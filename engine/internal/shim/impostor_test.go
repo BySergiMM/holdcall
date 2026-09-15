@@ -141,7 +141,7 @@ func TestAnImpostorCannotDecideCalls(t *testing.T) {
 	if r.conn != nil {
 		t.Fatal("the reporter kept a connection to a process that is not Nim")
 	}
-	v := r.ask(daemon.Event{Kind: daemon.KindCallRequest, SessionID: "s1", Seq: 1, Tool: "dangerous_tool"})
+	v := r.ask(daemon.Event{Kind: daemon.KindCallRequest, SessionID: "s1", Seq: 1, Tool: "dangerous_tool"}, nil)
 	if v == verdictAllow {
 		t.Fatal("an impostor was allowed to authorize a call")
 	}

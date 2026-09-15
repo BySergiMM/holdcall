@@ -40,10 +40,18 @@ func handlePolicyAllow(req Request, j *journal.Journal) Response {
 	return handlePolicyAdd(req, journal.DecisionAllow, j)
 }
 
-// handlePolicyAdd is shared by policy.deny and policy.allow: everything but
-// the effect they store -- validating the scope, resolving the tool,
-// checking a named agent is enrolled, refusing a duplicate -- is one piece of
-// logic that must not drift between the two.
+// handlePolicyAsk is deny and allow's third counterpart, added for M6: a
+// call the rule matches is held for a human rather than decided here -- see
+// docs/decisions/0005-human-approval.md and the 2026-09-15 addendum to
+// docs/decisions/0003.
+func handlePolicyAsk(req Request, j *journal.Journal) Response {
+	return handlePolicyAdd(req, journal.DecisionAsk, j)
+}
+
+// handlePolicyAdd is shared by policy.deny, policy.allow and policy.ask:
+// everything but the effect they store -- validating the scope, resolving
+// the tool, checking a named agent is enrolled, refusing a duplicate -- is
+// one piece of logic that must not drift between the three.
 func handlePolicyAdd(req Request, effect string, j *journal.Journal) Response {
 	agent, connector, err := ruleScope(req)
 	if err != nil {
