@@ -197,6 +197,14 @@ having to work out the precedence by hand:
 nim policy explain <tool-name> --agent cursor
 ```
 
+To have a human decide a call instead of a rule, hold it:
+
+```bash
+nim policy ask <tool-name>           # the call waits, up to [daemon] approval_timeout (2m by default)
+nim approve                          # every held call, with its real arguments
+nim approve <id>                     # or: nim reject <id> --reason "why"
+```
+
 ## Reading the record
 
 ```bash

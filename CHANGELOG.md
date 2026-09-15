@@ -161,6 +161,23 @@ the test names behind each claim live.
   `budget.remove` entry, which needed schema version 4 (`canonical_encode_v4`,
   field 20 `budget_calls`); existing databases are rebuilt on open.
   `docs/decisions/0004-budgets.md` argues what counts and why.
+- **M6 -- human approval.** A third rule effect, `ask` (`nim policy ask`,
+  `nim policy default ask`; deny beats ask beats allow at equal specificity),
+  holds a call for a human instead of deciding it from a rule alone. The
+  daemon answers `pending` and keeps the call -- tool, agent, connector,
+  digest and its real arguments -- in memory only; the relay sends the real
+  bytes once, only when told the call is held, and waits up to
+  `[daemon] approval_timeout` (default `2m`). `nim approve` lists what is held
+  with those arguments, pretty-printed with every byte shown as itself, never
+  a summary; `nim approve <id>` and `nim reject <id> [--reason]` decide one,
+  writing `approved` or `rejected` to the journal before the relay is told,
+  the ordering allow and deny already keep; on approval the relay forwards
+  the original frame byte for byte. Nobody deciding in time, a session
+  ending, or its connection dropping all reject and journal the call, so none
+  is left neither approved nor rejected. The human's reason is never
+  journaled. `docs/decisions/0005-human-approval.md` says plainly that this
+  defends against the model driving the client, not against the operator:
+  anyone who can run `nim` as this user can approve a call.
 - **`nim init` and `nim doctor`.** `nim init` rewrites Claude Code's,
   Cursor's and Claude Desktop's stdio `mcpServers` entries to route
   through Nim, preserving every other key -- `env` included -- via an

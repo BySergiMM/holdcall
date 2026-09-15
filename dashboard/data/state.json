@@ -20,7 +20,7 @@
     "name": "Nim",
     "tagline": "A local process between an MCP client and the MCP servers it uses.",
     "currentMilestone": "M4.5",
-    "currentPhase": "Budgets (M5) landed: per-session caps on allowed calls, decremented at authorization time; human approval (M6) is in progress",
+    "currentPhase": "Budgets (M5) and human approval (M6) landed: per-session caps on allowed calls, and ask rules that hold a call for nim approve with its real arguments",
     "overallStatus": "in_progress",
     "statusNote": "Nim decides per (agent, connector, tool) against allow and deny rules in SQLite -- most specific wins, deny beats allow at equal specificity, no rule means allow -- records every call, every rule change and every enrolment change in one hash chain, and configures Claude Code, Cursor and Claude Desktop to go through it with nim init. Nothing has ever been executed on Windows.",
     "provenance": "declared"
@@ -575,7 +575,7 @@
       "id": "policy-precedence",
       "title": "One function decides, and explain shows its work",
       "status": "verified",
-      "statement": "Among the rules matching a call, the most specific wins (an exact tool over a default, a named agent or connector over an unnamed one); at equal specificity deny beats allow; with no matching rule the call is allowed, which is the M4 baseline. journal.Decide is that function, table-tested with no database, reused verbatim by nim policy explain, so the CLI cannot say something a real call would not do.",
+      "statement": "Among the rules matching a call, the most specific wins (an exact tool over a default, a named agent or connector over an unnamed one); at equal specificity deny beats ask beats allow (ask holds the call for a human, M6); with no matching rule the call is allowed, which is the M4 baseline. journal.Decide is that function, table-tested with no database, reused verbatim by nim policy explain, so the CLI cannot say something a real call would not do.",
       "notGuaranteed": "No conditions on arguments and no time bounds: a rule is keyed on (agent, connector, tool) and nothing else. A budget (M5) caps how many calls a session may make once the rules allow them; it is a separate cap, not a rule. A client that genuinely names a tool `*` matches a default rule like any other exact name would.",
       "implementation": [
         "engine/internal/journal/rules.go",
@@ -698,6 +698,40 @@
         "TestTakePolicyProjectsBudgets",
         "TestPolicyReturnsRulesBudgetsAgentsAndConnectors",
         "TestPolicyListShowsBudgets"
+      ],
+      "platforms": {
+        "darwin": "verified",
+        "linux": "unverified",
+        "windows": "unverified"
+      },
+      "lastVerified": "2026-09-15",
+      "provenance": "declared"
+    },
+    {
+      "id": "approval-shows-real-parameters",
+      "title": "A held call is shown to the human as its real parameters, and decided before the relay acts",
+      "status": "verified",
+      "statement": "A call an ask rule wins is held in the daemon's memory and answered pending; nim approve prints the exact params.arguments bytes the relay read, pretty-printed with every byte shown as itself, never a summary and never text a model wrote about the call. The decision -- approved or rejected -- is written to the journal before the relay is told, and on approval the relay forwards the original frame byte for byte.",
+      "notGuaranteed": "Who approves is anyone who can run nim as this user; the socket cannot tell an operator from a model that has been given a shell. The arguments are the model's to write: what is shown is what was sent, which may itself be misleading. A held call does not survive a daemon killed outright.",
+      "implementation": [
+        "engine/internal/daemon/approval.go",
+        "engine/internal/shim/shim.go",
+        "engine/cmd/nim/approve.go",
+        "engine/internal/mcp/deny.go"
+      ],
+      "tests": [
+        "TestTheDaemonAnswersPendingAndJournalsNothingUntilAHumanDecides",
+        "TestApprovingACallWritesApprovedBeforeTellingTheRelay",
+        "TestRejectingACallWritesRejectedBeforeTellingTheRelay",
+        "TestAnApprovalTimeoutRejectsAndJournalsTheCall",
+        "TestASessionThatEndsWhilePendingIsRejected",
+        "TestAConnectionThatDropsWhilePendingRejectsWhatItLeftPending",
+        "TestApprovalListShowsTheRealArguments",
+        "TestAnApprovedCallForwardsTheExactBytes",
+        "TestARejectedApprovalAnswersTheClientWithTheHumanRefusalText",
+        "TestAnApprovalTimeoutAnswersTheClientWithItsOwnRefusalText",
+        "TestApproveShowsEveryByteOfTheArgumentsAsItself",
+        "TestRealApprovalHoldsACallForAHumanWhoDecidesItThroughTheCLI"
       ],
       "platforms": {
         "darwin": "verified",
@@ -1308,6 +1342,31 @@
         "TestABudgetCannotMakeADeniedCallPass",
         "TestABudgetOfTwoRefusesTheThirdCallAndANewRelayStartsFresh"
       ]
+    },
+    {
+      "id": "approve-own-call-from-model",
+      "name": "Approve your own call from the model",
+      "category": "policy",
+      "status": "pass",
+      "wasLive": false,
+      "evidence": "Blocked only by circumstance, and stated as such rather than claimed further: the daemon's approval purpose is reachable only through the nim binary, which peer identity verifies at accept, so a model with no way to execute commands cannot reach nim approve at all; the relay's own connection is bound to the events purpose and refused an approval.decide. A model that has been given a shell runs nim approve exactly as the operator would, and nothing on the socket tells the two apart. docs/decisions/0005-human-approval.md and the threat model say so.",
+      "tests": [
+        "TestAnApprovalConnectionCannotAskForACredential",
+        "TestANonNimProcessCannotObtainADecision"
+      ]
+    },
+    {
+      "id": "leak-arguments-through-approval",
+      "name": "Leak a held call's real arguments into the journal, a log line, or the operator's terminal",
+      "category": "policy",
+      "status": "pass",
+      "wasLive": false,
+      "evidence": "A held call's arguments live only in the daemon's pending registry. Checked directly: with a distinctive marker in the arguments, the database and the daemon's captured log output never contain it, and the Response type's String never prints it. nim approve shows every byte as itself: an escape sequence or a bidirectional override in an argument is printed as its escape, so a terminal cannot be made to hide or reorder what the human is approving.",
+      "tests": [
+        "TestTheRealArgumentsNeverReachTheJournalOrTheDaemonsLog",
+        "TestResponseStringNeverIncludesPendingArguments",
+        "TestApproveShowsEveryByteOfTheArgumentsAsItself"
+      ]
     }
   ],
   "findings": [
@@ -1819,14 +1878,27 @@
     {
       "id": "M6",
       "name": "Human approval",
-      "status": "planned",
-      "objective": "Out-of-band prompt showing real parameters.",
-      "deliverables": [],
-      "guarantees": [],
-      "limitations": [],
-      "pending": [
-        "Out-of-band approval showing real parameters, never a model-generated summary."
-      ]
+      "status": "done",
+      "objective": "Out-of-band prompt showing real parameters, never a model-generated summary.",
+      "deliverables": [
+        "a third rule effect, ask: nim policy ask <tool> [--agent] [--connector] and nim policy default ask; precedence deny > ask > allow at equal specificity, in journal.Decide",
+        "the daemon answers a held call pending with a hold id and keeps it in memory only: tool, agent, connector, digest, the real arguments, the time",
+        "the relay sends the real params.arguments bytes once, in a call.arguments event, and waits on the same connection up to [daemon] approval_timeout (default 2m)",
+        "nim approve lists held calls with their real arguments, pretty-printed, every byte shown as itself; nim approve <id> and nim reject <id> [--reason] decide one",
+        "the decision is written to the journal as approved or rejected before the relay is told; on approval the relay forwards the exact original bytes",
+        "a session ending, its connection dropping, or the timer running out all reject and journal the call, so none is left neither approved nor rejected",
+        "the human's reason is returned to the CLI and logged by the daemon, never journaled; the arguments never reach the journal or a log line",
+        "docs/decisions/0005-human-approval.md"
+      ],
+      "guarantees": [
+        "approval-shows-real-parameters"
+      ],
+      "limitations": [
+        "Anyone who can run nim as this user can approve a call: the approval defends against the model driving the client, not against the operator, and a model that has been given a shell is indistinguishable from the operator on the socket.",
+        "Held calls live in the daemon's memory; a daemon killed outright loses them with no journal trace, and the relay then denies them locally.",
+        "No notification: an operator learns of a held call by running nim approve. No delegation, no queueing beyond the timeout, no conditions on arguments that would ask automatically."
+      ],
+      "pending": []
     },
     {
       "id": "M7",

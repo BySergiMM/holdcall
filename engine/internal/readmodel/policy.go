@@ -7,16 +7,17 @@ import (
 	"github.com/BySergiMM/nim/engine/internal/peer"
 )
 
-// Rule is one denial as a reader sees it. It and journal.Rule agree on
-// scope -- an agent and a connector, both nilable meaning "every" -- and on
-// effect, which is always deny because there is no other kind yet. See
-// docs/decisions/0002-what-an-unknown-agent-may-do.md.
+// Rule is one rule as a reader sees it. It and journal.Rule agree on scope
+// -- an agent and a connector, both nilable meaning "every" -- and on
+// effect: deny, allow, or ask, which holds the call for a human. See
+// docs/decisions/0002, 0003 and 0005.
 type Rule struct {
 	Agent     *string `json:"agent,omitempty"`
 	Connector *string `json:"connector,omitempty"`
 	Tool      string  `json:"tool"`
-	// Effect is deny or allow. Since M4.5 a rule can grant as well as
-	// refuse, and a list that did not say which would be worse than no list.
+	// Effect is deny, allow or ask. Since M4.5 a rule can grant as well as
+	// refuse, and since M6 it can hold a call for a human; a list that did
+	// not say which would be worse than no list.
 	Effect    string `json:"effect"`
 	CreatedAt string `json:"created_at"`
 }

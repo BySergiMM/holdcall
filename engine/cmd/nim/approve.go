@@ -8,6 +8,7 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+	"unicode"
 
 	"github.com/BySergiMM/nim/engine/internal/config"
 	"github.com/BySergiMM/nim/engine/internal/daemon"
@@ -133,9 +134,33 @@ func prettyArguments(raw json.RawMessage) string {
 		// by the same strict object reader that decided this was a call at
 		// all -- but showing the raw bytes is still showing the real
 		// arguments, which is the guarantee that matters here.
-		return "  " + string(raw)
+		return "  " + visible(string(raw))
 	}
-	return "  " + buf.String()
+	return "  " + visible(buf.String())
+}
+
+// visible makes every byte of what a human is about to approve show up as
+// itself. The arguments are the model's to write, and a terminal obeys
+// escape sequences and bidirectional overrides wherever they appear: an
+// ESC in a string could erase the line that names the tool, a U+202E could
+// reverse the path that follows it, and the human would approve what they
+// saw rather than what was there. JSON keeps control characters escaped,
+// so a well-formed argument is unchanged; anything that is not printable
+// -- a raw control byte on the fallback path, a format character in an
+// otherwise valid string -- is written as its escape instead.
+func visible(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r == '\n' || r == '\t' || unicode.IsPrint(r):
+			b.WriteRune(r)
+		case r > 0xFFFF:
+			fmt.Fprintf(&b, "\\U%08X", r)
+		default:
+			fmt.Fprintf(&b, "\\u%04X", r)
+		}
+	}
+	return b.String()
 }
 
 func ageSince(startedAt string) string {

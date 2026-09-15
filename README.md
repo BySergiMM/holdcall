@@ -44,6 +44,11 @@ Pre-alpha, and honest about it. What works:
   a budget narrows, never grants. Decremented at authorization time: a call
   the relay gave up on still spent its share, a refusal never does, and a
   restarted relay is a new session with a fresh count.
+- **Human approval.** A third rule effect, `ask`, holds a call in the
+  daemon's memory until `nim approve` or `nim reject` decides it, or nobody
+  does and it is rejected. `nim approve` shows the call's real parameters,
+  every byte as itself, never a model-written summary; the decision is in
+  the journal before the relay acts on it.
 - **`nim init` and `nim doctor`** — pointing a client at Nim, and checking
   the result, without hand-editing JSON.
 
@@ -132,8 +137,8 @@ and `/#policy` open a tab directly.
 
 ## Policy
 
-A rule is `deny` or `allow`, scoped to a tool and, optionally, one enrolled
-agent and one connector:
+A rule is `deny`, `allow` or `ask`, scoped to a tool and, optionally, one
+enrolled agent and one connector:
 
 ```bash
 nim policy deny delete_repository                        # for everyone
@@ -143,6 +148,9 @@ nim policy default deny                                  # every tool, unless so
 nim policy remove delete_repository                       # or --default
 nim policy list
 nim policy explain force_push --agent claude-code --connector github
+nim policy ask delete_branch --connector github               # hold it for a human
+nim approve                                                    # what is held, with its real arguments
+nim approve <id>                                               # or: nim reject <id> --reason "not that branch"
 nim policy budget 20 --tool list_repos --agent claude-code    # at most 20 allowed calls per session
 nim policy budget 100 --all-tools --connector github          # every tool on one connector, per session
 nim policy budget remove --tool list_repos --agent claude-code
@@ -150,8 +158,8 @@ nim policy budget remove --tool list_repos --agent claude-code
 
 **Precedence, in one sentence:** the most specific matching rule wins — an
 exact tool beats a default, naming the agent or the connector beats not
-naming it — a tie at equal specificity goes to deny, and no matching rule at
-all is allow.
+naming it — a tie at equal specificity goes to deny, then ask, then allow,
+and no matching rule at all is allow.
 
 **What an unenrolled program may do, in one sentence:** a session no
 enrolment matched is bound only by the rules that name no agent, so a plain
@@ -224,8 +232,6 @@ the calls do.
 
 ## What does not exist yet
 
-- **Human approval.** An out-of-band prompt showing a call's real
-  parameters before it runs, never a model-generated summary — M6.
 - **A hosted journal viewer.** M8: syncing a record whose authenticity
   rests on an unkeyed chain would export a liability rather than evidence,
   and that has to be decided first (D-004 on the dashboard).

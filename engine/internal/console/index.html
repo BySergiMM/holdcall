@@ -123,7 +123,7 @@ tbody tr.sel{background:#1d2836}
       <div class="grid" id="ov-policy"></div>
       <div class="bd">
         <p class="note">What may happen, not what did: a rule allows or denies one tool,
-        the most specific rule wins and deny beats allow at equal specificity, an enrolment
+        the most specific rule wins and deny beats ask beats allow at equal specificity, an enrolment
         is as privileged as running Nim, and a connector's command is the argv authorized to
         receive its credential. See the Policy tab for the full listing.</p>
       </div>
@@ -183,16 +183,18 @@ tbody tr.sel{background:#1d2836}
   <!-- POLICY -->
   <section class="view" id="v-policy">
     <div class="panel">
-      <div class="hd">Rules — what is allowed and denied</div>
+      <div class="hd">Rules — what is allowed, held for a human, and denied</div>
       <div class="scroll"><table>
         <thead><tr><th>effect</th><th>agent</th><th>connector</th><th>tool</th><th>created</th></tr></thead>
         <tbody id="policy-rules"></tbody>
       </table></div>
       <div class="bd">
-        <p class="note">What may happen, not what did. A rule allows or denies one tool for every
-        session, for one enrolled agent, or on one connector; <code>*</code> is a default. The
-        most specific rule wins, deny beats allow at equal specificity, and a call no rule names
-        is allowed. <code>nim policy explain</code> shows which rule decides a call.</p>
+        <p class="note">What may happen, not what did. A rule allows, denies, or holds one tool
+        for a human (<code>ask</code>) for every session, for one enrolled agent, or on one
+        connector; <code>*</code> is a default. The most specific rule wins, deny beats ask beats
+        allow at equal specificity, and a call no rule names is allowed. A held call is decided
+        with <code>nim approve</code>, which shows its real arguments. <code>nim policy
+        explain</code> shows which rule decides a call.</p>
       </div>
     </div>
 
@@ -379,7 +381,7 @@ function renderOverview() {
   } else {
     const agents = policy.agents || [];
     const stale = agents.filter((a) => a.current === false).length;
-    pr.appendChild(cell((policy.rules || []).length, "rules", "allow and deny, in effect"));
+    pr.appendChild(cell((policy.rules || []).length, "rules", "allow, ask and deny, in effect"));
     pr.appendChild(cell((policy.budgets || []).length, "budgets", "caps on allowed calls, per session"));
     pr.appendChild(cell(agents.length, "agents enrolled",
       stale ? stale + " stale" : "", stale ? "warn" : ""));
@@ -462,7 +464,7 @@ function renderPolicy() {
     for (const r of p.rules) {
       const tr = el("tr");
       const add = (v, c) => { const td = el("td", c); td.textContent = v || ""; tr.appendChild(td); };
-      add(r.effect, r.effect === "allow" ? "ok" : "bad");
+      add(r.effect, r.effect === "allow" ? "ok" : r.effect === "ask" ? "warn" : "bad");
       add(r.agent || "every", r.agent ? "" : "dim");
       add(r.connector || "every", r.connector ? "" : "dim");
       add(r.tool);
