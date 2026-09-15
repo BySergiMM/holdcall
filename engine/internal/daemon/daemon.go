@@ -29,8 +29,10 @@ import (
 	"log"
 	"net"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/BySergiMM/nim/engine/internal/config"
@@ -160,6 +162,27 @@ func Run(cfg config.Config) error {
 	defer ln.Close()
 	defer os.Remove(cfg.Daemon.Socket)
 
+	// A daemon another shim starts detaches from every terminal and process
+	// group precisely so a client's own signal does not take it down (see
+	// shim.StartDaemon) -- but `nim daemon restart` still needs a way to ask
+	// this exact process to stop, and the socket is exactly what an older
+	// build refuses to answer a new client on (F-001), so it cannot be a
+	// request sent there. SIGTERM is that way instead: closing ln unblocks
+	// Accept with net.ErrClosed, which the loop below reads as "asked to
+	// stop" rather than as a failure, so the deferred journal close and
+	// socket removal above still run before the process actually exits --
+	// without this, the OS's default disposition for SIGTERM is to kill the
+	// process outright, running no defers at all.
+	stopping := make(chan os.Signal, 1)
+	signal.Notify(stopping, syscall.SIGTERM)
+	shuttingDown := make(chan struct{})
+	go func() {
+		<-stopping
+		log.Printf("received SIGTERM: closing the journal and removing %s", cfg.Daemon.Socket)
+		close(shuttingDown)
+		ln.Close()
+	}()
+
 	// The daemon is the only thing that may create an install identifier, and
 	// only when no entries depend on the previous one. Replacing a lost one
 	// would reseed the chain and make every existing entry look forged.
@@ -211,7 +234,16 @@ func Run(cfg config.Config) error {
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
-			return err
+			select {
+			case <-shuttingDown:
+				// Our own SIGTERM handler closed ln; this is `nim daemon
+				// restart` doing its job, not a failure. Returning nil lets
+				// the caller (main.go's runDaemon) exit 0, and the defers
+				// above still close the journal and remove the socket file.
+				return nil
+			default:
+				return err
+			}
 		}
 		go handle(conn, j, store, locks, sessions, approvals, approvalTimeout)
 	}
@@ -378,8 +410,28 @@ func handle(
 	// keeps delivering buffered bytes after the writer has exited, so a
 	// client that writes and leaves could otherwise be read from after its
 	// pid was gone and denied for being fast.
-	if supported, isSelf := peer.IsSelf(conn); supported && !isSelf {
-		log.Printf("refusing a connection from an unverified peer")
+	if supported, isSelf, pid := peer.IsSelfPID(conn); supported && !isSelf {
+		// Told apart from an ordinary impostor for F-001: a peer at our own
+		// executable path running a different file is not an attacker, it is
+		// the new build of Nim an operator just installed over this running
+		// process. The trust boundary does not move either way -- this
+		// connection is refused exactly as it always was -- but the log line
+		// now says which case it was, and names the remedy for the one that
+		// has one.
+		//
+		// Diagnosed from pid, the one IsSelfPID already read conn's peer
+		// credentials for, rather than by touching conn again: a peer that
+		// has just been refused is, in practice, already closing its end,
+		// and a second connection-based read was observed to race that
+		// close and misreport a genuine upgrade as a plain impostor. See
+		// peer.IsSelfPID's doc comment.
+		if peer.DiagnosePID(pid) == peer.SameLaunchPathOlderBuild {
+			self, _ := os.Executable()
+			log.Printf("refusing a connection from a different build of Nim at %s; "+
+				"this daemon is the older one, restart it with nim daemon restart", self)
+		} else {
+			log.Printf("refusing a connection from an unverified peer")
+		}
 		return
 	}
 

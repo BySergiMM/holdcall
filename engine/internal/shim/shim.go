@@ -684,13 +684,14 @@ func dialDaemon(cfg config.Config) *reporter {
 	// list refuses, and read every tool name and argument digest as they went
 	// past. Verified before a single byte is sent, so it never learns what
 	// this session was going to ask.
-	if conn != nil && !daemonIsGenuine(conn) {
-		fmt.Fprintf(os.Stderr,
-			"nim: the process listening on %s is not Nim\n"+
-				"nim: refusing to take decisions from it; every tool call in this session will be denied\n",
-			cfg.Daemon.Socket)
-		conn.Close()
-		conn = nil
+	if conn != nil {
+		if genuine, pid := daemonIsGenuine(conn); !genuine {
+			fmt.Fprintf(os.Stderr,
+				"nim: %s\nnim: refusing to take decisions from it; every tool call in this session will be denied\n",
+				peerRefusalReason(cfg, peer.DiagnosePID(pid)))
+			conn.Close()
+			conn = nil
+		}
 	}
 
 	if conn != nil {
@@ -730,9 +731,91 @@ func dialDaemon(cfg config.Config) *reporter {
 // true, exactly as the daemon's own check treats unsupported as not-a-denial.
 // It cannot invent a guarantee the OS does not offer, and pretending otherwise
 // would only move the gap somewhere less visible.
-func daemonIsGenuine(conn net.Conn) bool {
-	supported, isSelf := peer.IsSelf(conn)
-	return !supported || isSelf
+//
+// pid is the peer's, read once via peer.IsSelfPID -- exactly the value a
+// caller that gets false back needs to diagnose the refusal with
+// peer.DiagnosePID, without touching conn a second time to get it. See
+// peer.IsSelfPID's doc comment for why a second, separate read is unsafe
+// here: the peer on the other end of a refused conn is, in every real
+// caller, already closing its side.
+func daemonIsGenuine(conn net.Conn) (genuine bool, pid int) {
+	supported, isSelf, pid := peer.IsSelfPID(conn)
+	return !supported || isSelf, pid
+}
+
+// ErrDaemonOlderBuild means the peer on the socket is provably an older
+// build of this same binary: peer.Diagnose found it running a different
+// file at exactly our own executable path, which is what an in-place
+// upgrade or a `go build` over a running daemon leaves behind (F-001). It
+// is reported apart from a peer that is simply not Nim, because the remedy
+// is different -- `nim daemon restart`, not investigating an impostor --
+// and apart from ErrDaemonNotReachable, because something IS listening and
+// answering as a daemon, just an old one. Wrapped into the errors DialDaemon
+// and DialRunningDaemon return, so a caller like nim doctor or nim status
+// can tell the two apart with errors.Is instead of matching text.
+var ErrDaemonOlderBuild = errors.New("the daemon on the socket is an older build of Nim")
+
+// peerRefusalReason is the sentence every caller that refuses a peer builds
+// its message from -- an error return or a line on stderr -- so an upgrade
+// gets one diagnosis, written once: the specific remedy when diag is
+// peer.SameLaunchPathOlderBuild, the unchanged "is not Nim" wording
+// otherwise. diag is computed by the caller with a single peer.Diagnose (or
+// peer.DiagnosePID) call, never recomputed here -- see peer.Diagnose's doc
+// comment on why calling it twice on the same connection is unsafe.
+func peerRefusalReason(cfg config.Config, diag peer.Diagnosis) string {
+	if diag == peer.SameLaunchPathOlderBuild {
+		return fmt.Sprintf("the daemon on %s is an older build of Nim at the same path; run `nim daemon restart`",
+			cfg.Daemon.Socket)
+	}
+	return fmt.Sprintf("the process listening on %s is not Nim", cfg.Daemon.Socket)
+}
+
+// peerRefusalError is peerRefusalReason for a caller that returns an error
+// rather than printing to stderr: the SameLaunchPathOlderBuild case wraps
+// ErrDaemonOlderBuild so it can be matched with errors.Is; every other case
+// keeps the "is not Nim; <suffix>" wording callers used before Diagnose
+// existed, with suffix naming what that particular caller was about to do.
+func peerRefusalError(cfg config.Config, diag peer.Diagnosis, suffix string) error {
+	if diag == peer.SameLaunchPathOlderBuild {
+		return fmt.Errorf("%w: %s", ErrDaemonOlderBuild, peerRefusalReason(cfg, diag))
+	}
+	return fmt.Errorf("the process listening on %s is not Nim; %s", cfg.Daemon.Socket, suffix)
+}
+
+// PeerPID connects to the daemon socket and reports the pid of whatever is
+// listening, together with whether it is confirmably Nim: either this exact
+// build, or an older build at this binary's own path (peer.Diagnose's
+// SameLaunchPathOlderBuild). Exported for `nim daemon restart`, which needs
+// the pid to signal but must never signal a process it cannot tell is Nim
+// at all -- unlike DialDaemon and DialRunningDaemon, which only need to
+// refuse to talk to such a peer, this hands the caller the one fact it
+// needs to act on it instead.
+//
+// The pid is read once, before daemonIsGenuine's own peer.IsSelf call, and
+// the diagnosis (if needed) runs against that pid via peer.DiagnosePID
+// rather than touching conn again -- see peer.Diagnose's doc comment on why
+// a second conn-based check can catch a peer mid-close and disagree with
+// the first.
+func PeerPID(cfg config.Config, timeout time.Duration) (pid int, confirmedNim bool, err error) {
+	conn, err := net.DialTimeout("unix", cfg.Daemon.Socket, timeout)
+	if err != nil {
+		return 0, false, fmt.Errorf("%w: %v", ErrDaemonNotReachable, err)
+	}
+	defer conn.Close()
+
+	// One conn touch, via peer.IsSelfPID -- not PIDOf followed separately by
+	// daemonIsGenuine, which would be two -- for the same reason
+	// daemonIsGenuine's own doc comment gives: this pid belongs to a peer
+	// this call is about to decide about, and a second read risks racing
+	// whatever that peer does next.
+	supported, isSelf, p := peer.IsSelfPID(conn)
+	if !supported {
+		return 0, false, fmt.Errorf("the pid of the process listening on %s could not be determined", cfg.Daemon.Socket)
+	}
+	if isSelf || peer.DiagnosePID(p) == peer.SameLaunchPathOlderBuild {
+		return p, true, nil
+	}
+	return p, false, nil
 }
 
 // attach binds the connection and the codecs that read and write it, so they
@@ -1057,10 +1140,10 @@ func DialDaemon(cfg config.Config) (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !daemonIsGenuine(conn) {
+	if genuine, pid := daemonIsGenuine(conn); !genuine {
+		err := peerRefusalError(cfg, peer.DiagnosePID(pid), "refusing to talk to it")
 		conn.Close()
-		return nil, fmt.Errorf(
-			"the process listening on %s is not Nim; refusing to talk to it", cfg.Daemon.Socket)
+		return nil, err
 	}
 	return conn, nil
 }
@@ -1087,9 +1170,10 @@ func DialRunningDaemon(cfg config.Config, timeout time.Duration) (net.Conn, erro
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrDaemonNotReachable, err)
 	}
-	if !daemonIsGenuine(conn) {
+	if genuine, pid := daemonIsGenuine(conn); !genuine {
+		err := peerRefusalError(cfg, peer.DiagnosePID(pid), "refusing to talk to it")
 		conn.Close()
-		return nil, fmt.Errorf("the process listening on %s is not Nim; refusing to talk to it", cfg.Daemon.Socket)
+		return nil, err
 	}
 	return conn, nil
 }
@@ -1164,10 +1248,8 @@ func fetchConnector(cfg config.Config, connector string) (injection, error) {
 	// Whoever is on the other end of this decides what command receives a
 	// credential, so it has to be Nim. Refusing to spawn is the only safe
 	// answer here: an impostor's answer is worse than no answer.
-	if !daemonIsGenuine(conn) {
-		return injection{}, fmt.Errorf(
-			"the process listening on %s is not Nim; refusing to ask it for a credential or a command",
-			cfg.Daemon.Socket)
+	if genuine, pid := daemonIsGenuine(conn); !genuine {
+		return injection{}, peerRefusalError(cfg, peer.DiagnosePID(pid), "refusing to ask it for a credential or a command")
 	}
 
 	conn.SetDeadline(time.Now().Add(2 * time.Second))
