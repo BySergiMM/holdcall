@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -72,6 +73,13 @@ func handleAgentAdd(req Request, j *journal.Journal) Response {
 		ExecPath:   req.AgentPath,
 		EnrolledAt: time.Now(),
 	}); err != nil {
+		if errors.Is(err, journal.ErrImageEnrolled) {
+			other, _, _ := j.AgentByImage(dev, ino)
+			return Response{ID: req.ID, Error: fmt.Sprintf(
+				"%s is already enrolled as %q, and one executable is one agent. "+
+					"Reuse that name, or remove it first with nim agent remove %s",
+				req.AgentPath, other, other)}
+		}
 		return Response{ID: req.ID, Error: fmt.Sprintf("recording the enrolment: %v", err)}
 	}
 	return Response{ID: req.ID}

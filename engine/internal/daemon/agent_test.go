@@ -355,3 +355,27 @@ func TestEnrolmentEntersTheChain(t *testing.T) {
 		t.Fatalf("the chain does not show one agent.add followed by one agent.remove: %+v", entries)
 	}
 }
+
+// The daemon says whose enrolment is in the way, so the operator can decide
+// between reusing that name and removing it -- rather than being told a row
+// could not be inserted.
+func TestASecondNameForOneExecutableIsRefusedNamingTheFirst(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("agent enrolment resolves identity via peer.ImageOfFile, which is unsupported on windows by design")
+	}
+	j := freshJournal(t)
+	path := anExecutable(t, "claude")
+	if resp := handleAgentAdd(Request{ID: "1", Kind: KindAgentAdd, AgentName: "claude-code", AgentPath: path}, j); resp.Error != "" {
+		t.Fatalf("enrolling: %s", resp.Error)
+	}
+	resp := handleAgentAdd(Request{ID: "2", Kind: KindAgentAdd, AgentName: "evil", AgentPath: path}, j)
+	if resp.Error == "" {
+		t.Fatal("a second name for the same executable was accepted")
+	}
+	if !strings.Contains(resp.Error, "claude-code") || !strings.Contains(resp.Error, "nim agent remove") {
+		t.Fatalf("the refusal does not say whose enrolment is in the way or what to do: %q", resp.Error)
+	}
+	if agents, _ := j.ListAgents(); len(agents) != 1 || agents[0].Name != "claude-code" {
+		t.Fatalf("enrolments after the refusal: %+v", agents)
+	}
+}

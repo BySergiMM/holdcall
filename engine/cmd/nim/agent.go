@@ -80,8 +80,9 @@ func runAgentAdd(args []string) error {
 		return fmt.Errorf("%s", resp.Error)
 	}
 	fmt.Printf("agent %q enrolled (%s)\n", name, path)
-	fmt.Println("Nothing is decided by this yet: enrolment records which program an agent is,")
-	fmt.Println("and grants are a later milestone.")
+	fmt.Printf("Rules can be scoped to it now: nim policy deny|allow <tool> --agent %s\n", name)
+	fmt.Println("Every window of this program is this agent, and enrolling is as privileged as")
+	fmt.Println("running Nim; the enrolment is recorded in the journal.")
 	return nil
 }
 

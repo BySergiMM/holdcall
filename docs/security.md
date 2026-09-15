@@ -109,6 +109,9 @@ needed: the vnode check answers the question actually being asked.
 | 25 | Change the rules without a journal entry | **blocked** (one transaction) | `rules_test.go` |
 | 26 | Read the console from another site through DNS rebinding | **blocked** (loopback Host only) | `console_test.go` |
 | 27 | Leave a connector running after the relay is asked to stop | **blocked** for SIGTERM/SIGINT; SIGKILL still open | `e2e_test.go` |
+| 28 | Enrol a second name against the operator's client binary, then wait for a re-enrolment | **blocked** (one executable is one agent) | `agents_test.go`, `agent_test.go` |
+| 29 | Read a secret from `nim init`'s own output | **blocked** (env values never shown) | `rewrite_test.go` |
+| 30 | Read a connector's secret through the console | **blocked** (none is there to read) | `console_test.go` |
 
 Live vulnerabilities found by audit rather than hypotheticals: **1** (any local
 process could read every credential), **3** (the journal was writable by
@@ -122,6 +125,10 @@ another) and **22** (a second connection could start a session under a live
 id). Each has a regression test that fails against the code as it was. **23**
 was found by reading rather than running: the relay verified the daemon, the
 management commands did not, and one of them carries the plaintext secret.
+**28** and **29** were found by the 2026-09-15 review of the merged M4.5 work
+and reproduced in scratch tests before the code shipped: two names could be
+enrolled against one executable with an unordered lookup between them, and
+`nim init`'s dry run printed the env block where client configs keep tokens.
 
 The table above is the attacks someone thought of, and `dashboard/data/state.json`
 is the copy the build checks -- every test named there must exist. When the two

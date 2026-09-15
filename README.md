@@ -21,9 +21,10 @@ Pre-alpha, and honest about it. What works:
 
 - **A relay a real client cannot distinguish from a direct connection.** Tool
   list, schemas, unicode, a 512 KiB payload, error propagation and ping all
-  pass through unchanged (`tools/relay-rig`, last run before enforcement and
-  credentials existed — F-007 on the dashboard; byte-exactness since then
-  rests on the unit tests).
+  pass through unchanged, and the two things that must differ — a refused
+  call, a frame Nim will not read — differ exactly as documented
+  (`tools/relay-rig`, re-run against the current binary on 2026-09-15 and
+  now a CI job).
 - **Refusal.** A `tools/call` is decided before it is forwarded, and the
   decision is written to the journal before the relay acts on it. A refused
   call never leaves Nim.
@@ -242,8 +243,9 @@ not exist.
 cd engine && go build -o bin/nim ./cmd/nim
 ```
 
-Go 1.25 or newer. No C toolchain: the SQLite driver is pure Go, so the engine
-cross-compiles for darwin, linux and windows with `CGO_ENABLED=0`.
+Go 1.26.6 or newer, which the `go` directive fetches on demand. No C
+toolchain: the SQLite driver is pure Go, so the engine cross-compiles for
+darwin, linux and windows with `CGO_ENABLED=0`.
 
 Everything has been run on darwin/arm64. Linux is exercised in CI; **no code
 in this project has ever been run on Windows**, only cross-compiled, and two

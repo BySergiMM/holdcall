@@ -189,9 +189,10 @@ tbody tr.sel{background:#1d2836}
         <tbody id="policy-rules"></tbody>
       </table></div>
       <div class="bd">
-        <p class="note">Rules only ever deny. A call no rule names is allowed, exactly as
-        when the list lived in config.toml — there is no allow rule and no precedence to
-        reason about yet. An empty <b>agent</b> or <b>connector</b> means every one.</p>
+        <p class="note">What may happen, not what did. A rule allows or denies one tool for every
+        session, for one enrolled agent, or on one connector; <code>*</code> is a default. The
+        most specific rule wins, deny beats allow at equal specificity, and a call no rule names
+        is allowed. <code>nim policy explain</code> shows which rule decides a call.</p>
       </div>
     </div>
 

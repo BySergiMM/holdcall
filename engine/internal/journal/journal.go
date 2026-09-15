@@ -1051,6 +1051,24 @@ func (j *Journal) AddAgent(a Agent) error {
 	}
 	defer tx.Rollback()
 
+	// One executable is one agent. Two names for one image would make the
+	// derivation a coin toss, and a coin toss that a same-user process can
+	// weight: enrol a second name against the operator's client binary and
+	// wait for the operator to re-enrol theirs after an update, and whichever
+	// row the lookup happened to return would decide whose rules applied.
+	// Found by review before it shipped; refused here, inside the transaction,
+	// so two enrolments racing for one image cannot both win.
+	var other string
+	err = tx.QueryRow(
+		`select name from nim_agents where exec_dev = ? and exec_ino = ? and name != ?`,
+		a.ExecDev, a.ExecIno, a.Name).Scan(&other)
+	if err == nil {
+		return fmt.Errorf("%w: %q", ErrImageEnrolled, other)
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+
 	if _, err := tx.Exec(
 		`insert into nim_agents (name, exec_dev, exec_ino, exec_path, enrolled_at)
 		 values (?, ?, ?, ?, ?)
@@ -1158,6 +1176,10 @@ func (j *Journal) AgentNamed(name string) (Agent, bool, error) {
 	return a, true, nil
 }
 
+// ErrImageEnrolled is returned by AddAgent when the executable is already
+// enrolled under another name; the error wraps that name.
+var ErrImageEnrolled = errors.New("that executable is already enrolled under another name")
+
 // AgentByImage finds the enrolment matching an executable identity.
 //
 // found is false, with no error, when nothing matches -- the ordinary state
@@ -1172,8 +1194,13 @@ func (j *Journal) AgentByImage(dev, ino uint64) (name string, found bool, err er
 	if dev == 0 && ino == 0 {
 		return "", false, nil
 	}
+	// AddAgent refuses a second name for one image, so at most one row
+	// matches. The order is stated anyway: a journal edited by hand could
+	// hold two, and a lookup whose answer depended on insertion order would be
+	// the bug this guards against, back again.
 	err = j.db.QueryRow(
-		`select name from nim_agents where exec_dev = ? and exec_ino = ?`, dev, ino).Scan(&name)
+		`select name from nim_agents where exec_dev = ? and exec_ino = ?
+		  order by enrolled_at desc, name limit 1`, dev, ino).Scan(&name)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", false, nil
 	}

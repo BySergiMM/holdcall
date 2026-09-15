@@ -197,7 +197,7 @@ func rewriteGroup(raw json.RawMessage, label, nimPath, clientLabel string, repoi
 // the reason recorded in EntryPlan.Detail, rather than aborting the whole
 // run over one entry it does not understand.
 func rewriteEntry(key string, raw json.RawMessage, nimPath, clientLabel string, repoint bool) (json.RawMessage, EntryPlan, bool, error) {
-	before := prettyOrRaw(raw)
+	before := preview(raw)
 	unchanged := func(status EntryStatus, detail string) (json.RawMessage, EntryPlan, bool, error) {
 		return raw, EntryPlan{Key: key, Status: status, Detail: detail, Before: before, After: before}, false, nil
 	}
@@ -241,7 +241,7 @@ func rewriteEntry(key string, raw json.RawMessage, nimPath, clientLabel string, 
 		return newRaw, EntryPlan{
 			Key: key, Status: StatusRepointed,
 			Detail: fmt.Sprintf("repointed from %s", command),
-			Before: before, After: prettyOrRaw(newRaw),
+			Before: before, After: preview(newRaw),
 		}, true, nil
 	}
 
@@ -258,7 +258,7 @@ func rewriteEntry(key string, raw json.RawMessage, nimPath, clientLabel string, 
 	}
 	return newRaw, EntryPlan{
 		Key: key, Status: StatusWrapped,
-		Before: before, After: prettyOrRaw(newRaw),
+		Before: before, After: preview(newRaw),
 	}, true, nil
 }
 
@@ -278,4 +278,37 @@ func isNimCommand(command string) bool {
 // exists.
 func pathsEquivalent(a, b string) bool {
 	return filepath.Clean(a) == filepath.Clean(b)
+}
+
+// preview renders an entry for the before/after a dry run prints, with every
+// env value hidden. An env block is where a client config keeps its API
+// tokens -- the reason nim init tells the operator to leave it exactly as it
+// is -- and a diff that printed it put real secrets into terminal scrollback
+// and whatever a run was piped into. Found by review. The keys stay, so the
+// operator can see the block survives the rewrite untouched.
+func preview(raw json.RawMessage) string {
+	entry, err := decodeOrderedObject(raw)
+	if err != nil {
+		return prettyOrRaw(raw)
+	}
+	envRaw, ok := entry.values["env"]
+	if !ok {
+		return prettyOrRaw(raw)
+	}
+	env, err := decodeOrderedObject(envRaw)
+	if err != nil {
+		return prettyOrRaw(raw)
+	}
+	for _, k := range env.keys {
+		env = env.set(k, rawString("(value not shown)"))
+	}
+	redactedEnv, err := env.marshalIndent()
+	if err != nil {
+		return prettyOrRaw(raw)
+	}
+	redacted, err := entry.set("env", redactedEnv).marshalIndent()
+	if err != nil {
+		return prettyOrRaw(raw)
+	}
+	return prettyOrRaw(redacted)
 }

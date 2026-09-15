@@ -94,6 +94,19 @@ type Shim struct {
 
 	finished sync.Once
 	refused  sync.Once
+
+	// stopped guards stopDownstream the way finished guards finish: the
+	// signal handler and the normal exit can both reach it, and two
+	// concurrent Waits on one Cmd are a data race the race detector found.
+	stopped sync.Once
+	stopErr error
+}
+
+// stop terminates the connector once, whichever path gets there first, and
+// hands every caller the same result.
+func (s *Shim) stop(cmd *exec.Cmd) error {
+	s.stopped.Do(func() { s.stopErr = stopDownstream(cmd) })
+	return s.stopErr
 }
 
 // clientOut serialises everything Nim writes to the client.
@@ -205,7 +218,7 @@ func Run(opts Options) error {
 		// stdin notices; one that does not -- mid-call, or on its own event
 		// loop -- used to be left running, still holding whatever credential
 		// it was given, after the journal had recorded the session as over.
-		stopDownstream(cmd)
+		s.stop(cmd)
 		// Exiting zero after being asked to stop: the relay did what it was
 		// told. Re-raising the signal to reproduce the original exit status
 		// would need per-platform code for a status nothing reads.
@@ -236,7 +249,7 @@ func Run(opts Options) error {
 	// The client has gone (its stdin closed) or the connector has. Either way
 	// the connector's stdin is closed by now; a connector that does not act on
 	// that is told, then made to.
-	err = stopDownstream(cmd)
+	err = s.stop(cmd)
 	s.finish()
 	return err
 }

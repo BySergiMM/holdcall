@@ -1,6 +1,8 @@
 package journal
 
 import (
+	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -210,5 +212,59 @@ func TestAReadOnlyJournalCannotChangeEnrolments(t *testing.T) {
 	}
 	if _, _, err := j.RemoveAgent("claude-code"); err == nil {
 		t.Error("a read-only journal removed an enrolment")
+	}
+}
+
+// One executable is one agent. A second name for an image that is already
+// enrolled is refused, and the refusal names the enrolment that holds it.
+// The scenario this closes, found by review: enrol `evil` against the
+// operator's client binary ahead of time, wait for the operator to re-enrol
+// `claude-code` after an update, and let an unordered lookup hand the
+// operator's sessions to `evil`.
+func TestAnExecutableIsEnrolledUnderOneNameOnly(t *testing.T) {
+	j, _ := openTemp(t)
+	client := Agent{Name: "claude-code", ExecDev: 111, ExecIno: 222, ExecPath: "/apps/claude", EnrolledAt: time.Now()}
+	if err := j.AddAgent(client); err != nil {
+		t.Fatalf("AddAgent: %v", err)
+	}
+
+	evil := client
+	evil.Name = "evil"
+	err := j.AddAgent(evil)
+	if !errors.Is(err, ErrImageEnrolled) || !strings.Contains(err.Error(), "claude-code") {
+		t.Fatalf("a second name for one image was accepted or badly refused: %v", err)
+	}
+	if got := chainLength(t, j); got != 1 {
+		t.Fatalf("the refused enrolment left %d entries in the chain", got-1)
+	}
+
+	// The same name may re-enrol the same image (a no-op repair), and the
+	// lookup keeps answering with it.
+	if err := j.AddAgent(client); err != nil {
+		t.Fatalf("re-enrolling the same name: %v", err)
+	}
+	if name, found, _ := j.AgentByImage(111, 222); !found || name != "claude-code" {
+		t.Fatalf("AgentByImage = %q, %v", name, found)
+	}
+
+	// Ownership moves only when the holder lets go: once claude-code is
+	// removed, the image is free and the record shows who took it.
+	if _, _, err := j.RemoveAgent("claude-code"); err != nil {
+		t.Fatal(err)
+	}
+	if err := j.AddAgent(evil); err != nil {
+		t.Fatalf("enrolling a freed image: %v", err)
+	}
+	if name, _, _ := j.AgentByImage(111, 222); name != "evil" {
+		t.Fatalf("AgentByImage = %q after the transfer", name)
+	}
+	entries, _ := j.EntriesSince(0, 10)
+	var kinds []string
+	for _, e := range entries {
+		kinds = append(kinds, e.Kind+":"+*e.Agent)
+	}
+	want := "agent.add:claude-code,agent.add:claude-code,agent.remove:claude-code,agent.add:evil"
+	if strings.Join(kinds, ",") != want {
+		t.Fatalf("the chain reads %v, want %s", kinds, want)
 	}
 }

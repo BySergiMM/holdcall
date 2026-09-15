@@ -392,7 +392,7 @@
       "id": "agent-not-claimable",
       "title": "An agent identity cannot be claimed by the agent",
       "status": "verified",
-      "statement": "The daemon derives the agent from the kernel: socket peer, its parent, the file that parent executes. There is no agent field on the wire.",
+      "statement": "The daemon derives the agent from the kernel: socket peer, its parent, the file that parent executes. There is no agent field on the wire, and one executable is enrolled under one name only, so the derivation has exactly one answer.",
       "notGuaranteed": "Two windows of one program are the same agent. Enrolment is as privileged as running Nim; since 2026-09-15 every enrolment change is an entry in the chain, so it is visible afterwards, not prevented.",
       "implementation": [
         "engine/internal/daemon/derive.go",
@@ -402,7 +402,9 @@
         "TestNoWireFieldCanSetTheAgent",
         "TestTheClientLabelIsNotTheAgent",
         "TestDeriveAgentMatchesTheEnrolledParent",
-        "TestTheDerivedAgentIsRecordedOnSessionStart"
+        "TestTheDerivedAgentIsRecordedOnSessionStart",
+        "TestAnExecutableIsEnrolledUnderOneNameOnly",
+        "TestASecondNameForOneExecutableIsRefusedNamingTheFirst"
       ],
       "platforms": {
         "darwin": "verified",
@@ -597,7 +599,7 @@
       "id": "init-preserves-unrelated-config",
       "title": "nim init rewrites only the servers it wraps",
       "status": "verified",
-      "statement": "Unrelated top-level keys, an entry's other fields, env values and the file's own key order survive nim init untouched; only a wrapped or repointed entry's command and args change. Nothing is written without --write, --write copies the file to a 0600 backup first and writes atomically, and --undo restores the backup the same way.",
+      "statement": "Unrelated top-level keys, an entry's other fields, env values and the file's own key order survive nim init untouched; only a wrapped or repointed entry's command and args change. Nothing is written without --write, --write copies the file to a 0600 backup first and writes atomically, and --undo restores the backup the same way. A config that is a symlink is written through, so a dotfiles-managed file stays managed, and no two backups ever share a name.",
       "notGuaranteed": "Untouched values are re-indented to match the rest of the file, so byte-for-byte whitespace is not preserved -- only content, position and key order are. Only stdio servers are wrapped; entries with a url are left alone and said so.",
       "implementation": [
         "engine/internal/clientconfig/rewrite.go",
@@ -614,7 +616,10 @@
         "TestInitUndoRestoresABackup",
         "TestInitLeavesAnEntryAlreadyThroughNimAlone",
         "TestInitLeavesHTTPServersAlone",
-        "TestInitThenDoctorSeeTheSameWrappedServer"
+        "TestInitThenDoctorSeeTheSameWrappedServer",
+        "TestTwoWritesInQuickSuccessionKeepBothBackups",
+        "TestWritingThroughASymlinkKeepsTheSymlink",
+        "TestInitNeverShowsAnEnvValue"
       ],
       "platforms": {
         "darwin": "verified",
@@ -1217,9 +1222,77 @@
         "TestInitUndoRestoresABackup",
         "TestInitUndoRefusesAPathThatIsNotABackup"
       ]
+    },
+    {
+      "id": "agent-image-collision",
+      "name": "Enrol a second name against the operator's client binary",
+      "category": "identity",
+      "status": "pass",
+      "wasLive": true,
+      "evidence": "Found by the 2026-09-15 review, reproduced in a scratch test: nothing stopped two names from enrolling one executable, and the lookup that derives a session's agent had no order, so after the operator re-enrolled their own client the other name's rules -- allow rules included -- could apply to it. One executable is now one agent: a second name is refused naming the first, the lookup is ordered, and ownership moves only when the holder removes its enrolment, which the chain records.",
+      "tests": [
+        "TestAnExecutableIsEnrolledUnderOneNameOnly",
+        "TestASecondNameForOneExecutableIsRefusedNamingTheFirst"
+      ]
+    },
+    {
+      "id": "init-output-secret",
+      "name": "Read a secret from nim init's own output",
+      "category": "credential",
+      "status": "pass",
+      "wasLive": true,
+      "evidence": "Found by the 2026-09-15 review, reproduced with the built binary: the before/after a dry run printed included the entry's env block, where client configs keep their API tokens, so a plain nim init put real secrets into terminal scrollback. The preview now shows env keys with every value hidden; the file that is written keeps them untouched.",
+      "tests": [
+        "TestInitNeverShowsAnEnvValue",
+        "TestInitPreservesEnvVerbatim"
+      ]
     }
   ],
   "findings": [
+    {
+      "id": "F-022",
+      "severity": "high",
+      "title": "Two enrolments could share one executable, and the lookup between them had no order",
+      "problem": "nim_agents was unique on name only, and the query that derives a session's agent from the relay's parent image had no ORDER BY. A same-user process could enrol a second name against the operator's client binary; a routine re-enrolment by the operator then changed which row the lookup returned.",
+      "impact": "Every rule scoped to the operator's agent, allow rules included, could silently apply to the wrong name, with a chain that verified perfectly. Found by review on 2026-09-15 before anything shipped.",
+      "evidence": "Reproduced in a scratch test by the reviewer: after remove-and-re-add of the operator's name, the lookup answered with the intruder's. Fixed: AddAgent refuses a second name for an enrolled image inside its transaction, the lookup is ordered, and the daemon's refusal names the enrolment in the way.",
+      "status": "fixed",
+      "nextAction": "None. Ownership of an image moves only when its holder removes the enrolment, and that is an agent.remove entry.",
+      "provenance": "declared"
+    },
+    {
+      "id": "F-023",
+      "severity": "medium",
+      "title": "nim init printed env values in its dry-run diff",
+      "problem": "The before/after preview rendered the whole entry, env block included, though env never changes. Client configs keep API tokens there.",
+      "impact": "A plain nim init, the command an operator runs first and pipes or shares, wrote real secrets to stdout.",
+      "evidence": "Reproduced by the reviewer with fake tokens in a fixture config. Fixed: the preview shows env keys with values hidden.",
+      "status": "fixed",
+      "nextAction": "None. The preview hides every env value and a test holds it to that; the file written keeps the values untouched, which a second test holds it to.",
+      "provenance": "declared"
+    },
+    {
+      "id": "F-024",
+      "severity": "medium",
+      "title": "Two nim init --write runs in one second shared a backup name",
+      "problem": "Backup names carried a second-resolution timestamp and were written with os.WriteFile, so the second run overwrote the first run's backup of the true original.",
+      "impact": "nim init --undo could no longer reach the original file after a quick retry or a setup script wrapping two clients back to back.",
+      "evidence": "Reproduced by the reviewer with the built binary. Fixed: nanosecond names, created exclusively, with a numbered suffix if a name is somehow taken; the path returned is the one written.",
+      "status": "fixed",
+      "nextAction": "None. Backup names now carry nanoseconds and are created exclusively; a taken name gets a numbered suffix and the path reported is the one written.",
+      "provenance": "declared"
+    },
+    {
+      "id": "F-025",
+      "severity": "medium",
+      "title": "The relay could wait on its connector from two goroutines at once",
+      "problem": "stopDownstream was reachable from the signal handler and from the normal exit path with no guard, and two concurrent Waits on one exec.Cmd are a data race.",
+      "impact": "A Ctrl-C that closes the pipes and delivers the signal together could hit it; the race detector reported it under a scratch test. The connector was still terminated correctly in every run.",
+      "evidence": "Found by the reviewer with go test -race. Fixed: the stop runs once, guarded like finish already was, and hands both callers the same result.",
+      "status": "fixed",
+      "nextAction": "None. The stop runs under a sync.Once like finish already did; the regression test drives it from two goroutines under the race detector.",
+      "provenance": "declared"
+    },
     {
       "id": "F-021",
       "severity": "medium",

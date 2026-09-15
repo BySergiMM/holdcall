@@ -161,3 +161,83 @@ func TestInitUndoRefusesAPathThatIsNotABackup(t *testing.T) {
 		t.Fatal("expected an error for a path with no .nim-backup- marker")
 	}
 }
+
+// Two --write runs in one second used to share a backup name, and the second
+// silently replaced the backup of the true original with a backup of its own
+// input. Backups are never overwritten now, whatever the clock says.
+func TestTwoWritesInQuickSuccessionKeepBothBackups(t *testing.T) {
+	path := writeFixture(t, "claude.json", stdioFixture)
+	original, _ := os.ReadFile(path)
+
+	first, err := Apply(mustBuildResult(t, path, nimPathFor(t)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A different nim path makes the second run a change (a repoint), so a
+	// second backup is due.
+	other := filepath.Join(t.TempDir(), "nim")
+	if err := os.WriteFile(other, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	second, err := Apply(mustBuildResultWithRepoint(t, path, other, true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second {
+		t.Fatalf("both runs backed up to %s", first)
+	}
+	got, _ := os.ReadFile(first)
+	if string(got) != string(original) {
+		t.Fatal("the first backup no longer holds the original file")
+	}
+	// And a name that is somehow taken is not overwritten either.
+	if err := os.WriteFile(BackupPath(path)+"-1", []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	taken := BackupPath(path)
+	if err := os.WriteFile(taken, []byte("keep me"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	written, err := writeNewFile(taken, []byte("new"), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if written == taken {
+		t.Fatal("an existing backup was overwritten")
+	}
+	kept, _ := os.ReadFile(taken)
+	if string(kept) != "keep me" {
+		t.Fatal("the existing backup was changed")
+	}
+}
+
+// A config kept in a dotfiles repository is a symlink at the path the client
+// reads. Writing through it keeps the link and updates the file it points
+// at; replacing the link with a plain file would silently detach the config
+// from the repository that manages it.
+func TestWritingThroughASymlinkKeepsTheSymlink(t *testing.T) {
+	realDir := t.TempDir()
+	real := filepath.Join(realDir, "mcp.json")
+	if err := os.WriteFile(real, []byte(stdioFixture), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "mcp.json")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("cannot create a symlink here: %v", err)
+	}
+
+	if _, err := Apply(mustBuildResult(t, link, nimPathFor(t))); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Lstat(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("the symlink was replaced by a plain file")
+	}
+	updated, _ := os.ReadFile(real)
+	if !strings.Contains(string(updated), `"serve"`) {
+		t.Fatal("the file behind the symlink was not rewritten")
+	}
+}

@@ -469,3 +469,30 @@ func jsonEscape(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b[1 : len(b)-1]) // strip the surrounding quotes json.Marshal adds
 }
+
+// The before/after a dry run prints must never show an env value: that block
+// is where a client config keeps its API tokens, and a dry run is exactly the
+// command an operator runs first, pipes into a file, or shares on a screen.
+// The keys stay visible so the operator can see the block survives.
+func TestInitNeverShowsAnEnvValue(t *testing.T) {
+	path := writeFixture(t, "mcp.json", `{
+	"mcpServers": {
+		"github": {"command": "npx", "args": ["-y", "server-github"],
+		           "env": {"GITHUB_TOKEN": "ghp_SUPERSECRET0000000000000", "OTHER": 42}}
+	}
+}`)
+	res := mustBuildResult(t, path, nimPathFor(t))
+	e := entryByKey(t, res, "github")
+	for _, text := range []string{e.Before, e.After} {
+		if strings.Contains(text, "ghp_SUPERSECRET") || strings.Contains(text, "42") {
+			t.Fatalf("an env value was printed:\n%s", text)
+		}
+		if !strings.Contains(text, "GITHUB_TOKEN") || !strings.Contains(text, "(value not shown)") {
+			t.Fatalf("the env keys were not shown:\n%s", text)
+		}
+	}
+	// What is written keeps the real values, untouched.
+	if !strings.Contains(string(res.Rewritten), "ghp_SUPERSECRET0000000000000") {
+		t.Fatal("the rewritten file lost the env value")
+	}
+}
