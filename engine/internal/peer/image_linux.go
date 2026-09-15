@@ -33,6 +33,33 @@ func ImageOf(pid int) (Image, error) {
 	return Image{dev: uint64(st.Dev), ino: st.Ino}, nil
 }
 
+// ExecPathOf returns the launch path the kernel records for pid: what
+// /proc/<pid>/exe resolves to as a name, with the " (deleted)" suffix the
+// kernel appends once the directory entry has been replaced -- exactly the
+// shape `go build -o <path>` (write a new file, rename over the old one)
+// leaves the *old* process in, which is why it is stripped here.
+//
+// This is a launch path, not a running image: unlike ImageOf, nothing about
+// it is read from the kernel's record of what pid is actually executing, so
+// it must never be used to decide identity -- see Diagnose's doc comment,
+// which is the one place this is used, only to tell an in-place upgrade
+// apart from an impostor after IsSelf has already decided the connection.
+//
+// ok is false wherever the pid cannot be inspected at all (it has already
+// exited, or belongs to a user this process may not) -- never a path a
+// caller might compare against as if it meant something.
+func ExecPathOf(pid int) (path string, ok bool) {
+	link, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", pid))
+	if err != nil {
+		return "", false
+	}
+	link = strings.TrimSuffix(link, " (deleted)")
+	if link == "" {
+		return "", false
+	}
+	return link, true
+}
+
 // ParentOf returns the pid that spawned pid.
 //
 // This is what makes an agent identity possible without asking anyone to

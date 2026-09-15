@@ -58,6 +58,6 @@ import "net"
 // load-bearing gap, not a theoretical one -- see docs/milestones.md and the
 // M3 final audit report for the READY-WITH-KNOWN-LIMITATION reasoning this
 // feeds into.
-func isSelfImpl(conn net.Conn) (supported, same bool) {
-	return false, false
+func isSelfImpl(conn net.Conn) (supported, same bool, pid int) {
+	return false, false, 0
 }

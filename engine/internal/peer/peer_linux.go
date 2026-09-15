@@ -21,10 +21,10 @@ import (
 // are long-standing, widely-relied-on kernel interfaces (used by systemd,
 // sudo, and most local IPC authentication on Linux), so this is high
 // confidence by inspection, not empirical verification here.
-func isSelfImpl(conn net.Conn) (supported, same bool) {
+func isSelfImpl(conn net.Conn) (supported, same bool, pid int) {
 	uc, ok := conn.(*net.UnixConn)
 	if !ok {
-		return false, false
+		return false, false, 0
 	}
 	// A *net.UnixConn whose SyscallConn() itself errors is not "this platform
 	// cannot check" (that is the type-assertion failure above) -- it is a
@@ -34,7 +34,7 @@ func isSelfImpl(conn net.Conn) (supported, same bool) {
 	// checked-and-failed instead, the same as every other error below.
 	raw, err := uc.SyscallConn()
 	if err != nil {
-		return true, false
+		return true, false, 0
 	}
 
 	var ucred *syscall.Ucred
@@ -43,8 +43,9 @@ func isSelfImpl(conn net.Conn) (supported, same bool) {
 		ucred, sockErr = syscall.GetsockoptUcred(int(fd), syscall.SOL_SOCKET, syscall.SO_PEERCRED)
 	})
 	if ctrlErr != nil || sockErr != nil {
-		return true, false
+		return true, false, 0
 	}
+	pid = int(ucred.Pid)
 
 	// Both sides go through ImageOf, which stats /proc/<pid>/exe itself rather
 	// than reading it and stat-ing the string it yields. That is the whole
@@ -53,15 +54,15 @@ func isSelfImpl(conn net.Conn) (supported, same bool) {
 	// readlink-then-stat was defeated with no race at all -- launch from a
 	// path you control, replace the file there with a link to nim, connect.
 	// Demonstrated in pathswap_test.go, which runs on both unix platforms.
-	peerImage, err := ImageOf(int(ucred.Pid))
+	peerImage, err := ImageOf(pid)
 	if err != nil {
-		return true, false
+		return true, false, pid
 	}
 	selfImage, err := ImageOf(os.Getpid())
 	if err != nil {
-		return true, false
+		return true, false, pid
 	}
-	return true, peerImage.Equal(selfImage)
+	return true, peerImage.Equal(selfImage), pid
 }
 
 // pidOfImpl reads the peer's pid from the kernel's own record of the
