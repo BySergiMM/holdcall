@@ -77,6 +77,19 @@ rebuild of Nim is a different inode and therefore a different program as far as
 this is concerned. It also does not distinguish two processes running the same
 file, which is why session ownership exists.
 
+**What an upgrade looks like (F-001).** Replacing the binary at its own path
+while a daemon runs — a `go build -o` or an install over a running process —
+leaves the old daemon executing an inode the directory entry no longer names,
+so the daemon and every new client compare as different images and refuse
+each other by the same check as any other mismatch. The trust boundary does
+not move: this is still "not the same file", decided the same way. What
+changes is the diagnosis. `peer.Diagnose` tells that specific shape — the
+peer's launch path is exactly our own, only the file differs — apart from an
+unrelated impostor at a different path, so the daemon's log and every
+client's refusal can say "older build, restart it" instead of the generic
+"not Nim". `nim daemon restart` is that restart, sent by signal because the
+socket itself is exactly what an older build cannot answer for a new client.
+
 **Darwin specifics.** `PROC_PIDREGIONPATHINFO` at address 0 returns the
 process's lowest mapped region, which is its main image: `__PAGEZERO` sits
 below it and an attempt to place a file-backed executable mapping underneath

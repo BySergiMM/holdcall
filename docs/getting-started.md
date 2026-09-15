@@ -229,6 +229,21 @@ rebuilt since.
 — it starts on demand the next time a client spawns `nim serve`, or run
 `nim daemon` yourself to start it now.
 
+**`nim status` says `daemon   OLDER BUILD`, or `nim doctor` fails `daemon
+build`.** You (or an installer) replaced the `nim` binary while its daemon
+was still running from the old one — a `go build -o` or a fresh install over
+it. The old daemon and the new binary are different images at the same path,
+so they refuse each other exactly as they would refuse anything else that
+isn't a byte-for-byte match; this is not an impostor, and no rule changed.
+Fix it with:
+
+```bash
+nim daemon restart
+```
+
+This asks the old daemon to exit, starts a new one from the binary now on
+disk, and confirms it answers before returning.
+
 **An enrolment is `STALE`.** `nim agent list` marks it and names the path;
 this means the file there is no longer the one that was enrolled, which
 happens whenever a self-updating client replaces its own binary or a

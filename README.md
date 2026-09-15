@@ -98,6 +98,12 @@ go build -trimpath -ldflags "-s -w -X main.version=$TAG \
     -o bin/nim ./cmd/nim
 ```
 
+**After upgrading**, if a daemon from the old binary is still running: a
+replaced binary and a running daemon become different images, so they refuse
+each other (`nim status` says `daemon   OLDER BUILD`). Run `nim daemon
+restart` — it asks the old daemon to exit and starts a new one from the
+binary now on disk, then confirms the new one answers before returning.
+
 ## Five minutes to a first decision
 
 The full walkthrough, with before/after config examples per client, is
