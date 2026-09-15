@@ -232,9 +232,11 @@ the calls do.
 
 ## What does not exist yet
 
-- **A hosted journal viewer.** M8: syncing a record whose authenticity
-  rests on an unkeyed chain would export a liability rather than evidence,
-  and that has to be decided first (D-004 on the dashboard).
+- **A hosted journal viewer.** M8, now planned rather than blocked: D-004
+  decided on 2026-09-16 that the mirror presents what this machine
+  reported, labelled as such on every row, and holds pinned heads apart from
+  synced rows (`docs/decisions/0006-what-the-mirror-may-claim.md`). It needs
+  a hosting account, which is the operator's to provide.
 - **Conditions on a call's arguments, or on time.** A rule matches `(agent,
   connector, tool)` and nothing else.
 - **Anything run on Windows.** DPAPI credential storage and all five

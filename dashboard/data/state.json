@@ -20,7 +20,7 @@
     "name": "Nim",
     "tagline": "A local process between an MCP client and the MCP servers it uses.",
     "currentMilestone": "M4.5",
-    "currentPhase": "Budgets (M5) and human approval (M6) landed: per-session caps on allowed calls, and ask rules that hold a call for nim approve with its real arguments",
+    "currentPhase": "M1 to M7 done; D-004 decided on 2026-09-16 and M8 planned as an opt-in mirror of what the machine reported; CI on GitHub blocked by account billing, so linux and windows remain unexecuted",
     "overallStatus": "in_progress",
     "statusNote": "Nim decides per (agent, connector, tool) against allow and deny rules in SQLite -- most specific wins, deny beats allow at equal specificity, no rule means allow -- records every call, every rule change and every enrolment change in one hash chain, and configures Claude Code, Cursor and Claude Desktop to go through it with nim init. Nothing has ever been executed on Windows.",
     "provenance": "declared"
@@ -1543,9 +1543,9 @@
       "title": "Old deployments became public along with the intended one",
       "problem": "Turning deployment protection off applies to every deployment the project has ever made, not only the current one. Sixteen historical deployment URLs answer anonymously, plus a stale branch alias nim-git-m1-bootstrap-seergiiim.vercel.app left over from when the repository was connected to Vercel.",
       "impact": "Fourteen serve Vercel's generic 'Deployment has failed' page, which carries a deployment id and nothing else. One serves the abandoned v0 placeholder that predates this dashboard. No secret, source, build log or local path was found in any of them -- so this is untidy rather than dangerous, and it means the promise 'only the dashboard is public' is not literally true.",
-      "evidence": "Enumerated all 16 deployment URLs and fetched each anonymously. 14 returned the 20331-byte failure page, 1 returned the 12888-byte v0 stub titled 'v0 App', 1 is the current dashboard. Greps for local paths, build errors, npm output and tokens across those bodies returned nothing.",
+      "evidence": "Enumerated all 16 deployment URLs and fetched each anonymously. 14 returned the 20331-byte failure page, 1 returned the 12888-byte v0 stub titled 'v0 App', 1 is the current dashboard. Greps for local paths, build errors, npm output and tokens across those bodies returned nothing. Re-listed on 2026-09-16: eleven deployments exist, eight of them in ERROR from the 2026-08-11 git connection with branch aliases nim-git-m1-bootstrap and nim-git-integration-trunk; fetched anonymously, both aliases still answer 200 with an 18 KB Vercel page rather than this project's, and the production domain serves the intended page.",
       "status": "open",
-      "nextAction": "Delete the historical deployments and the stale branch alias in the Vercel dashboard, so that the only thing this project serves is the page intended to be served. Needs a human: deleting deployments is destructive and is not this repository's call.",
+      "nextAction": "Delete the eight ERROR deployments and the two branch aliases in the Vercel dashboard (Deployments, then each deployment's menu). Still a human action: the Vercel tools available to this repository list and inspect deployments but cannot delete one.",
       "provenance": "declared"
     },
     {
@@ -1554,9 +1554,9 @@
       "title": "A protected Vercel project served this page publicly anyway",
       "problem": "Vercel Authentication was enabled on the project, but scoped all_except_custom_domains. Vercel treats the project's own assigned production domain (nim-blush.vercel.app) as a custom domain, so that hostname was exempt while every other URL for the same deployment was protected.",
       "impact": "The full page -- every known weakness, undefended attack path and architectural limitation -- was readable by anyone at that URL, with no login, for roughly two minutes on 2026-08-12. Two of the three hostnames behaved correctly, which is what made it easy to believe the whole thing was protected.",
-      "evidence": "Reading the protection settings was not enough and produced a confident wrong conclusion. Fetching every hostname anonymously was: nim-seergiiim.vercel.app and the deployment URL returned 302 to vercel.com/sso-api with a 15-byte body, while nim-blush.vercel.app returned HTTP 200 with 211 KB containing 'Break Nim' and 'journal chain is unkeyed'. The deployment was removed immediately; all hostnames now return 404 with no content.",
-      "status": "open",
-      "nextAction": "Do not deploy again until deployment protection covers all deployments rather than all_except_custom_domains. More generally: verify access control by fetching every hostname anonymously, never by reading the configuration that is supposed to provide it.",
+      "evidence": "Reading the protection settings was not enough and produced a confident wrong conclusion. Fetching every hostname anonymously was: nim-seergiiim.vercel.app and the deployment URL returned 302 to vercel.com/sso-api with a 15-byte body, while nim-blush.vercel.app returned HTTP 200 with 211 KB containing 'Break Nim' and 'journal chain is unkeyed'. The deployment was removed immediately; all hostnames now return 404 with no content. Re-checked on 2026-09-16 through Vercel's own project settings: password protection, Vercel Authentication and trusted IPs are all disabled, so there is no longer a protected scope for a hostname to fall outside of; the page is public by decision (D-003). Fetched anonymously the same day: the production domain answers 200 with the page and X-Robots-Tag noindex.",
+      "status": "accepted",
+      "nextAction": "None while D-003 stands: the project is public on purpose and its protection is off everywhere, which is the consistent state this finding asked for. If protection is ever turned back on, verify by fetching every hostname anonymously, never by reading the setting.",
       "provenance": "declared"
     },
     {
@@ -1589,7 +1589,7 @@
       "impact": "A local attacker can rewrite history and the result verifies cleanly. This is integrity, not authenticity.",
       "evidence": "docs/journal-format.md states it. --expect-head is the only cover, and only for what was committed before the head you recorded.",
       "status": "accepted",
-      "nextAction": "Decide before M8: a key the agent cannot reach, or a dashboard that presents the record as 'what this machine reported'.",
+      "nextAction": "Decided (D-004, 2026-09-16): no key before M8; the mirror presents the record as what this machine reported and holds pinned heads apart from synced rows. A key still needs a second principal on the machine, which is a deployment decision, not a change here.",
       "provenance": "declared"
     },
     {
@@ -1702,17 +1702,19 @@
       "id": "D-004",
       "title": "Does the journal get a key before M8?",
       "question": "Syncing an unkeyed record to a dashboard exports a liability rather than evidence.",
-      "status": "open",
-      "resolution": "Undecided. Either the journal gains a key the agent cannot reach, or M8 presents the record as 'what this machine reported'.",
-      "provenance": "declared"
+      "status": "resolved",
+      "resolution": "The mirror presents what this machine reported, and says so on every row; the journal does not get a key before M8. A key the agent cannot reach needs a principal the agent is not, which a single-user machine does not offer, and a key the agent could mint would look like authenticity without being it. Heads pinned with nim verify --expect-head are the one strong claim the mirror may hold, stored apart from the synced rows. docs/decisions/0006-what-the-mirror-may-claim.md.",
+      "provenance": "declared",
+      "decidedOn": "2026-09-16"
     },
     {
       "id": "D-005",
       "title": "Should the public page be search-indexed?",
       "question": "Public and indexed are different things. The build still sends X-Robots-Tag: noindex, nofollow, noarchive, nosnippet, so the page is readable by anyone given the link but will not appear in search results.",
-      "status": "open",
-      "resolution": "Left as noindex, which is the reversible direction: a page can be indexed later, but it cannot be reliably un-indexed once crawled and archived. Worth a deliberate answer rather than a default, given the page is a list of this project's weaknesses.",
-      "provenance": "declared"
+      "status": "resolved",
+      "resolution": "noindex stays, deliberately: readable by anyone given the link, absent from search. The reversible direction -- a page can be indexed later, it cannot be reliably un-indexed once crawled and archived -- chosen for a page that lists this project's weaknesses. docs/decisions/0006.",
+      "provenance": "declared",
+      "decidedOn": "2026-09-16"
     }
   ],
   "milestones": [
@@ -1938,15 +1940,17 @@
     {
       "id": "M8",
       "name": "Dashboard",
-      "status": "blocked",
-      "objective": "A hosted view of the journal.",
+      "status": "planned",
+      "objective": "A hosted view of what this machine reported, labelled as such on every row.",
       "deliverables": [],
       "guarantees": [],
       "limitations": [
-        "Blocked on the journal being unkeyed (F-003): syncing it exports a liability rather than evidence."
+        "The chain is unkeyed (F-003): the mirror may say what the machine reported and where it agrees with a pinned head, never that the record is evidence on its own (D-004, docs/decisions/0006)."
       ],
       "pending": [
-        "Resolve D-004."
+        "An opt-in nim sync command, off by default, that copies the sync-contract fields plus machine id and reported head; the daemon never depends on it.",
+        "Heads pinned from nim verify --expect-head stored apart from synced rows, with a viewer that shows agreement or divergence.",
+        "A hosting project and account, which are the operator's to provide; the Supabase schema in supabase/migrations is the prepared target."
       ]
     }
   ]

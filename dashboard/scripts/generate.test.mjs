@@ -225,10 +225,17 @@ test("a milestone cannot be marked done while listing outstanding work", () => {
   assert.match(r.out, /still listing/);
 });
 
+// Synthesised rather than found: since D-004 was decided no milestone in
+// the data is blocked, and a test that only works while one is would
+// silently stop guarding the rule the day the roadmap clears.
 test("a blocked milestone cannot be relabelled done", () => {
-  const r = runWith((s) => {
-    s.milestones.find((m) => m.status === "blocked").status = "done";
-  });
+  const blocked = {
+    id: "M99", name: "Synthetic", status: "blocked", objective: "A thing that waits on a decision.",
+    deliverables: [], guarantees: [], limitations: [], pending: ["decide something first"],
+  };
+  const legitimate = runWith((s) => { s.milestones.push({ ...blocked }); });
+  assert.equal(legitimate.ok, true, `a blocked milestone with outstanding work is a legitimate state:\n${legitimate.out}`);
+  const r = runWith((s) => { s.milestones.push({ ...blocked, status: "done" }); });
   assert.equal(r.ok, false);
   assert.match(r.out, /still listing/);
 });
@@ -245,9 +252,13 @@ test("a forged decision status is refused", () => {
 // problem leaves the count. A decision that was really taken was taken on a
 // day, so naming the day is the price of claiming it.
 test("an open decision cannot be marked resolved without a date", () => {
-  const r = runWith((s) => {
-    s.decisions.find((d) => d.status === "open").status = "resolved";
-  });
+  const open = {
+    id: "D-099", title: "A synthetic question", question: "Is this still open?",
+    status: "open", resolution: "Undecided.", provenance: "declared",
+  };
+  const legitimate = runWith((s) => { s.decisions.push({ ...open }); });
+  assert.equal(legitimate.ok, true, `an open decision is a legitimate state:\n${legitimate.out}`);
+  const r = runWith((s) => { s.decisions.push({ ...open, status: "resolved" }); });
   assert.equal(r.ok, false, "an open question was silently closed");
   assert.match(r.out, /decidedOn/);
 });

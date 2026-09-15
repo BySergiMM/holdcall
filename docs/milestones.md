@@ -637,13 +637,18 @@ record inputs for. Folded into M4.
 
 ## M8 — Dashboard
 
-**Blocked on something more basic than itself.** Syncing a record whose
+**Status: planned, unblocked on 2026-09-16.** Syncing a record whose
 authenticity rests on an unkeyed chain exports a liability rather than
 evidence: anything able to write `nim.db` can rewrite history and the mirror
-would faithfully copy it. Either the journal gains a key the agent cannot
-reach, or the dashboard has to present what it shows as "what this machine
-reported", which is a much weaker claim than the sync contract below implies.
-Decide that before building the viewer.
+would faithfully copy it. D-004 chose the honest side of that: the mirror
+presents what it shows as "what this machine reported", on every row, and
+the one strong claim it may hold is a head the operator pinned from
+`nim verify --expect-head`, stored apart from the synced rows.
+`docs/decisions/0006-what-the-mirror-may-claim.md` is the argument, and
+adds three requirements to the contract below: provenance on every row, heads
+under a separate write path, and a sync that is an opt-in command the daemon
+never depends on. What it still needs is a hosting project and account,
+which are the operator's.
 
 
 Next.js + Supabase. The engine pushes a copy of the journal; the cloud never
