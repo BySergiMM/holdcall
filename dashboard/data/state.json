@@ -438,23 +438,24 @@
     {
       "id": "relay-byte-exact",
       "title": "A client cannot tell it is going through Nim",
-      "status": "partial",
-      "statement": "Everything that is not a tools/call is forwarded as the exact bytes that arrived. Unit tests cover the framing and the relay.",
-      "notGuaranteed": "The end-to-end proof is tools/relay-rig, which needs fastmcp and HAS NOT BEEN RE-RUN since the M1.5 merge. The claim currently rests on unit tests plus an older run.",
+      "status": "verified",
+      "statement": "Everything that is not a tools/call is forwarded as the exact bytes that arrived, and a real MCP client run direct and through Nim observes the same tool list, schemas, unicode, a 512 KiB payload, error propagation and ping. Unit tests cover the framing; tools/relay-rig proves it with a real client, re-run on 2026-09-15 against the current binary, including the two cases that must differ through Nim.",
+      "notGuaranteed": "The rig pins fastmcp to its legacy client mode: in its default mode Nim's own refusals do not parse (F-021). The rig has run locally and on darwin only; the relay-rig CI job exists but has not yet run on GitHub's runners, so linux stays partial and windows unverified.",
       "implementation": [
         "engine/internal/mcp/mcp.go",
         "engine/internal/shim/shim.go"
       ],
       "tests": [
         "TestResponsesAreRelayedByteForByte",
-        "TestAnAllowedCallReachesTheConnectorByteForByte"
+        "TestAnAllowedCallReachesTheConnectorByteForByte",
+        "TestRealRelayStillPassesEverythingElse"
       ],
       "platforms": {
-        "darwin": "partial",
+        "darwin": "verified",
         "linux": "partial",
         "windows": "unverified"
       },
-      "lastVerified": "2026-08-08",
+      "lastVerified": "2026-09-15",
       "provenance": "declared"
     },
     {
@@ -1220,6 +1221,17 @@
   ],
   "findings": [
     {
+      "id": "F-021",
+      "severity": "medium",
+      "title": "Nim's own refusals predate the result shape a newer client negotiates",
+      "problem": "fastmcp 4's default client mode negotiates a server/discover handshake under which every result carries a resultType field. Nim relays that traffic byte for byte, but the responses Nim writes itself -- the tool error that refuses a call (engine/internal/mcp/deny.go) -- do not carry the field, so a client in that mode fails to parse Nim's refusal instead of reading it as a tool error.",
+      "impact": "A refused call reaches such a client as a local validation error rather than the clear 'Nim denied this call' text, which defeats the point of answering in the shape MCP uses for tool failures. Clients on the standard MCP handshake, including the Go end-to-end tests and the rig pinned to legacy mode, are unaffected.",
+      "evidence": "Found on 2026-09-15 while bringing the relay rig back: fastmcp 4.0.3 in its default mode raised a ValidationError on Nim's denial; pinned to mode=legacy the rig passes. Not fixed: the wire format Nim answers in is a protocol decision, and Nim would have to observe the negotiated dialect to answer in it.",
+      "status": "open",
+      "nextAction": "Decide whether Nim mirrors the negotiated handshake in its own responses (it already watches initialize for the protocol version) or documents the standard handshake as the one it speaks. tools/relay-rig/README.md records the pin.",
+      "provenance": "declared"
+    },
+    {
       "id": "F-013",
       "severity": "high",
       "title": "A repeated or case-variant JSON key smuggled a tools/call past the decision",
@@ -1401,9 +1413,9 @@
       "title": "The relay rig has not been re-run since M1.5",
       "problem": "The end-to-end proof that a real client cannot tell it is going through Nim requires fastmcp, which is not installed here.",
       "impact": "Byte-exactness currently rests on unit tests plus a run from before the merge.",
-      "evidence": "tools/relay-rig/README.md; no run recorded since 2026-08-08.",
-      "status": "open",
-      "nextAction": "Install fastmcp and re-run, or add it to CI.",
+      "evidence": "Re-run on 2026-09-15 against the current binary with fastmcp 4.0.3 in the rig's own venv: RESULT: IDENTICAL on every case that must not differ, and two cases that must differ through Nim asserted precisely -- a call a rule denies comes back as Nim's tool error, and a frame with a repeated method key is refused. A relay-rig CI job now runs it on every push; that job has not yet run on GitHub's runners, only locally.",
+      "status": "fixed",
+      "nextAction": "Watch the first relay-rig job on GitHub go green. Until then the CI part of this is reasoned, not observed.",
       "provenance": "declared"
     },
     {
