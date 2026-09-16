@@ -250,14 +250,16 @@ the calls do.
   real Windows machine — see *Building* and `docs/security.md`'s *Known
   gaps* table.
 
-`docs/milestones.md` has the test names behind every claim above.
+`docs/milestones.md` has the test names behind every claim above, and
+`docs/architecture.md` says where each layer lives and what one call goes
+through.
 
 ## Shape
 
 ```
 engine/      Go. The daemon, the shim, the journal and the console.
 dashboard/   A static page of what is true about this repository, built from it.
-docs/        Design, security posture, decisions, and the journal's format.
+docs/        Architecture, security posture, decisions, and the journal's format.
 supabase/    The schema a journal mirror would land in. Nothing writes to it.
 tools/       The relay rig: a real MCP client, run direct and through Nim.
 ```
