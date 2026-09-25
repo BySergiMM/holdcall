@@ -11,6 +11,14 @@ test names behind each claim live.
 
 ## [Unreleased]
 
+### Changed
+
+- **Linux is executed, not just compiled.** The repository went public on
+  2026-09-26, GitHub's runners started, and the whole suite, end-to-end
+  relay tests included, passes on ubuntu-latest and macos-latest. Windows
+  ran for the first time the same day and fails 52 tests (F-029); its job
+  no longer decides the run until those are fixed.
+
 ### Fixed
 
 - **A daemon upgraded before its first peer check no longer accepts the

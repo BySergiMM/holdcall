@@ -306,12 +306,11 @@ Go 1.26.6 or newer, which the `go` directive fetches on demand. No C
 toolchain: the SQLite driver is pure Go, so the engine cross-compiles for
 darwin, linux and windows with `CGO_ENABLED=0`.
 
-Everything has been run on darwin/arm64. The CI workflow runs the suite on
-Linux and Windows too, but as of 2026-09-25 it has not executed: GitHub
-Actions is unavailable on this account until October. Until it runs, Linux
-is compiled and vetted here, not executed, and **no code in this project has
-ever been run on Windows**, where two of its security properties are known not
-to hold — see the *Known gaps* table in `docs/security.md`.
+The whole suite runs on real Linux and macOS runners in CI and passes on
+both, since 2026-09-26. Windows executes the same suite and fails 52 tests
+(F-029 on the status page says which and why); its job does not decide the
+run until that is fixed, and two of the security properties are known not
+to hold there regardless — see the *Known gaps* table in `docs/security.md`.
 
 ### Running CI without GitHub's runners
 

@@ -199,10 +199,12 @@ window needs machinery this milestone does not buy.
   no `call.request` is written and no sequence number is spent on it. Batch
   elements are not decided one by one. JSON-RPC batching was removed from MCP in
   2025-06-18, so this closes a bypass rather than dropping a feature.
-- **Nothing is claimed about Linux or Windows.** The relay's lifetime behaviour
-  was measured on darwin/arm64 only. The connector is still a child of the shim,
-  so nothing in M2 depends on the answer; the inversion that would is a later
-  milestone, and the spike belongs with it.
+- **Linux since 2026-09-26; nothing is claimed about Windows.** The relay's
+  lifetime behaviour was measured on darwin/arm64 by hand; the same end-to-end
+  tests pass on ubuntu-latest in CI since the repository went public and its
+  runners could start. On Windows the suite executes and fails (F-029). The
+  connector is still a child of the shim, so nothing in M2 depends on the
+  answer; the inversion that would is a later milestone.
 - **Anything that can write `config.toml` can empty the deny list.** See the
   standing decision above. Closed in M4: the rules live in SQLite and the
   file is refused if it still carries them.

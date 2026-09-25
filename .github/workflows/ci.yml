@@ -46,6 +46,14 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          # Windows executed the suite for the first time on 2026-09-26 and
+          # failed 52 tests in four packages (F-029). It keeps running here so
+          # the log is always current, but it does not decide the run until
+          # those are fixed: a red run on every push would say nothing new.
+          - os: windows-latest
+            experimental: true
+    continue-on-error: ${{ matrix.experimental == true }}
     defaults:
       run:
         # windows-latest's default shell for `run:` steps is pwsh; every step

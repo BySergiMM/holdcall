@@ -20,19 +20,19 @@
     "name": "Holdcall",
     "tagline": "A local process between an MCP client and the MCP servers it uses.",
     "currentMilestone": "M4.5",
-    "currentPhase": "M1 to M7 done and F-001 closed (an in-place upgrade is diagnosed, holdcall daemon restart is the remedy); M8 planned as an opt-in mirror of what the machine reported; CI on GitHub blocked by account billing, so linux and windows remain unexecuted",
+    "currentPhase": "M1 to M7 done and F-001 closed (an in-place upgrade is diagnosed, holdcall daemon restart is the remedy); M8 planned as an opt-in mirror of what the machine reported; the whole suite passes on real Linux and macOS runners since 2026-09-26; Windows executes and fails 52 tests (F-029)",
     "overallStatus": "in_progress",
-    "statusNote": "Holdcall decides per (agent, connector, tool) against allow and deny rules in SQLite -- most specific wins, deny beats allow at equal specificity, no rule means allow -- records every call, every rule change and every enrolment change in one hash chain, and configures Claude Code, Cursor and Claude Desktop to go through it with holdcall init. Nothing has ever been executed on Windows.",
+    "statusNote": "Holdcall decides per (agent, connector, tool) against allow and deny rules in SQLite -- most specific wins, deny beats allow at equal specificity, no rule means allow -- records every call, every rule change and every enrolment change in one hash chain, and configures Claude Code, Cursor and Claude Desktop to go through it with holdcall init. The suite passes on Linux and macOS in CI; on Windows it executes and fails, see F-029.",
     "provenance": "declared"
   },
   "ciSnapshot": {
     "$comment": "Snapshot, not live. Staleness is computed against the commit being built.",
     "provenance": "ci",
     "workflow": "CI",
-    "conclusion": "success",
-    "commit": "ca868d9",
-    "runId": "31579165816",
-    "takenAt": "2026-08-12T09:05:00Z",
+    "conclusion": "failure",
+    "commit": "9347fa4",
+    "runId": "36201309087",
+    "takenAt": "2026-09-25T23:37:32Z",
     "jobs": [
       {
         "name": "test (ubuntu-latest)",
@@ -43,11 +43,27 @@
         "conclusion": "success"
       },
       {
+        "name": "test (windows-latest)",
+        "conclusion": "failure"
+      },
+      {
         "name": "dashboard",
         "conclusion": "success"
       },
       {
+        "name": "vuln",
+        "conclusion": "success"
+      },
+      {
+        "name": "relay-rig",
+        "conclusion": "success"
+      },
+      {
         "name": "cross-compile (darwin, arm64)",
+        "conclusion": "success"
+      },
+      {
+        "name": "cross-compile (darwin, amd64)",
         "conclusion": "success"
       },
       {
@@ -60,10 +76,6 @@
       },
       {
         "name": "cross-compile (windows, amd64)",
-        "conclusion": "success"
-      },
-      {
-        "name": "cross-compile (darwin, amd64)",
         "conclusion": "success"
       }
     ]
@@ -1732,6 +1744,17 @@
       "evidence": "Fixed: install.sh now copies to holdcall.new beside the target and renames over it, which gives the new binary its own inode while the running daemon keeps the old one, and it tells the operator to run holdcall daemon restart. Reproduced by hand (cp in place, exit 137) and resolved by the rename on the same machine, after which holdcall daemon restart took the real daemon from the dev build to v0.1.0 as F-001 designed. tools/install-rig/test.sh still passes.",
       "status": "fixed",
       "nextAction": "The same rule for anything else that ever writes the binary: a package manager formula, a self-update if one is added.",
+      "provenance": "declared"
+    },
+    {
+      "id": "F-029",
+      "severity": "medium",
+      "title": "Windows executed the suite for the first time and failed 52 tests",
+      "problem": "Until 2026-09-26 no code in this project had run on Windows: the CI job existed but the account could not start runners. The first execution, run 36201309087 on windows-latest, failed 52 tests in four packages (cmd/holdcall, internal/clientconfig, internal/daemon, internal/journal) while six packages passed. The failures read as a few causes rather than fifty: the end-to-end tests build the binary without the .exe suffix Windows needs to execute it; tests that leave a SQLite journal open cannot remove their temporary directory, because Windows refuses to delete open files; enrolment and stale-detection tests assume an executable identity Windows does not provide by design; and doctor and policy output is compared against paths written the Unix way.",
+      "impact": "Windows is still not a platform Holdcall can claim, and now that is a measured fact rather than an absence. Nothing about macOS or Linux changes: both pass the whole suite on real runners as of the same run.",
+      "evidence": "Run 36201309087 on commit 9347fa4: test (ubuntu-latest) and test (macos-latest) succeeded, test (windows-latest) failed. The Windows job now runs as continue-on-error so the run reports the two platforms that are claimed, while every push still produces a current Windows log.",
+      "status": "open",
+      "nextAction": "Fix by cause, not by test: the .exe suffix in the end-to-end build helper; close journals before temp-dir cleanup or leak the directory on Windows; skip identity-dependent tests on Windows through the allow-list the CI already has; compare paths with filepath, not string literals. Then remove continue-on-error and let Windows decide the run.",
       "provenance": "declared"
     }
   ],
