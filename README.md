@@ -72,9 +72,7 @@ why those are different questions.
 
 ## Install
 
-**From source**, which is the only way today — no version has been tagged
-yet, so there is no release to download (see `CHANGELOG.md`). Go 1.26.6 or
-newer; see *Building* for the rest:
+**From source.** Go 1.26.6 or newer; see *Building* for the rest:
 
 ```bash
 git clone https://github.com/BySergiMM/holdcall.git && cd holdcall/engine
@@ -89,7 +87,11 @@ to `data/holdcall.db` inside it to keep the journal, rules and enrolments, run
 connector's credential again, since the keychain items were stored under the
 old name. `CHANGELOG.md` has the full list.
 
-**From a release**, once one exists:
+**From a release.** `v0.1.0` exists, built by hand on macOS on 2026-09-26;
+`CHANGELOG.md` says which archive was actually executed. While the repository
+is private the installer cannot fetch it anonymously, so take the archive from
+the release page with your GitHub session; once the repository is public this
+is the line:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/BySergiMM/holdcall/m1-bootstrap/install.sh | sh

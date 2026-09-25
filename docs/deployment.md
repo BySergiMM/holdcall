@@ -36,6 +36,12 @@ root downloads a release archive, verifies its checksum against `SHA256SUMS`,
 and refuses on any mismatch; `tools/install-rig/test.sh` proves the refusal
 bites.
 
+`v0.1.0` (2026-09-26) did not go through that workflow: GitHub Actions could
+not run on the account, so the five archives and `SHA256SUMS` were built by
+hand on macOS with the workflow's own flags and layout, from the tagged
+commit, and published with `gh release create`. Only darwin/arm64 was
+executed; the release notes and `CHANGELOG.md` say so.
+
 ## History worth keeping
 
 Between 2026-08-11 11:39 and 14:13 the Vercel project `holdcall` was connected to

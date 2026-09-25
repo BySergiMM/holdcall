@@ -3,13 +3,26 @@
 All notable changes to this project are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-No version has ever been tagged. `[Unreleased]` describes everything built so
-far on `m1-bootstrap`; there is no prior release for it to diff against, so
-read it as a status report rather than a list of deltas. `docs/milestones.md`
-is the source of truth this section summarizes, and is where the detail and
-the test names behind each claim live.
+`0.1.0` is the first tagged version and describes everything built so far on
+`m1-bootstrap`; there is no prior release for it to diff against, so read it
+as a status report rather than a list of deltas. `docs/milestones.md` is the
+source of truth this section summarizes, and is where the detail and the
+test names behind each claim live.
 
 ## [Unreleased]
+
+Nothing since 0.1.0.
+
+## [0.1.0] - 2026-09-26
+
+Built and published by hand on macOS, because GitHub Actions could not run
+on this account that week; `.github/workflows/release.yml` is the intended
+path and was not used. The darwin/arm64 binary is the one the whole suite
+ran against. The other four archives (darwin/amd64, linux/amd64, linux/arm64
+and the windows/amd64 zip) are cross-compiled from the same commit and were
+never executed: the platform claims in `docs/milestones.md` stand as they
+are. The repository is private, so `install.sh` cannot fetch this release
+anonymously yet.
 
 ### Changed
 
