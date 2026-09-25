@@ -1,7 +1,7 @@
 #!/bin/sh
 # install.sh -- download, verify and install a nim release binary.
 #
-#   curl -fsSL https://raw.githubusercontent.com/BySergiMM/nim/m1-bootstrap/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/BySergiMM/holdcall/m1-bootstrap/install.sh | sh
 #
 # POSIX sh on purpose: this runs as `sh` regardless of what shell piped it
 # in, so it avoids bashisms rather than assuming bash is what is reading it.
@@ -23,7 +23,7 @@ set -eu
 
 # The repository this script downloads from. A variable, not a literal baked
 # into every curl call below, so a fork only has to change this one line.
-REPO="${NIM_REPO:-BySergiMM/nim}"
+REPO="${NIM_REPO:-BySergiMM/holdcall}"
 
 VERSION="${NIM_VERSION:-}"
 INSTALL_DIR="${NIM_INSTALL_DIR:-$HOME/.local/bin}"

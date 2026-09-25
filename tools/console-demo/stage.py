@@ -130,7 +130,7 @@ s2.close()
 # Session 3: stays open, holding a call with a bidirectional override in it.
 s3 = Session("github", "claude-code")
 s3.call("echo", {"text": "git status"}); s3.call("add", {"a": 3, "b": 4})
-s3.call_nowait("dangerous_tool", {"repository": "BySergiMM/nim", "branch": "main", "force": True,
+s3.call_nowait("dangerous_tool", {"repository": "BySergiMM/holdcall", "branch": "main", "force": True,
                                   "message": "chore: rewrite history ‮force‬"})
 time.sleep(1.5); print("held now:", held_ids())
 print(f"READY  NIM_HOME={HOME} HOME={FAKEHOME}"); sys.stdout.flush()

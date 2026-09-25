@@ -77,14 +77,14 @@ yet, so there is no release to download (see `CHANGELOG.md`). Go 1.26.6 or
 newer; see *Building* for the rest:
 
 ```bash
-git clone https://github.com/BySergiMM/nim.git && cd nim/engine
+git clone https://github.com/BySergiMM/holdcall.git && cd nim/engine
 go build -o bin/nim ./cmd/nim && ./bin/nim version
 ```
 
 **From a release**, once one exists:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/BySergiMM/nim/m1-bootstrap/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/BySergiMM/holdcall/m1-bootstrap/install.sh | sh
 ```
 
 POSIX `sh`, never `sudo`, writes only inside `NIM_INSTALL_DIR` (default

@@ -38,3 +38,4 @@ tools/relay-rig/nim-home/
 .idea/
 .vscode/
 .DS_Store
+.env*
