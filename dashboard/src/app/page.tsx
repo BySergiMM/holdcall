@@ -34,7 +34,7 @@ const JSON_LD = {
   operatingSystem: "macOS",
   description:
     "A local relay that decides every MCP tool call on your machine, holds the dangerous ones for a human who sees the real arguments, and keeps a record you can verify offline.",
-  url: "https://nim-blush.vercel.app/",
+  url: "https://holdcall.vercel.app/",
   offers: { "@type": "Offer", price: "0", priceCurrency: "EUR", description: "Free for one person and one machine" },
 };
 

@@ -5,7 +5,7 @@ tools it can reach. A weakness in Nim is therefore worth more to us than a
 feature, and the project already publishes the ones it knows about:
 `docs/security.md` lists every attack that has been run against a real build
 with its result, and the *Known gaps* table lists what is open and why;
-the status page at https://nim-blush.vercel.app/status/ shows the same,
+the status page at https://holdcall.vercel.app/status/ shows the same,
 generated from this repository.
 
 ## Reporting

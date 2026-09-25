@@ -152,8 +152,17 @@ any path resolving outside `out/`, and needs no network.
 Deployed, publicly, by a deliberate decision (D-003 on the page, 2026-08-12):
 the page is written to be public, states its own limits, and carries no
 runtime data, no secrets and no local paths -- enforced at build time, not
-promised. Deployment protection on the Vercel project is off. That decision is
-about this page only and extends to nothing else the project publishes.
+promised. That decision is about this page only and extends to nothing else the
+project publishes. Since 2026-09-25 the site is served by a new Vercel
+project, `holdcall`, at https://holdcall.vercel.app, after the repository
+was renamed. On that project Vercel Authentication is on with its default
+scope, and what that means was verified by fetching, not by reading the
+setting: the production domain answers anyone, while the deployment URL and
+the branch alias redirect to Vercel's sign-in. Nothing but the production
+domain is meant to be read, so that is the right shape, and it is the
+opposite of what the earlier project had (protection off, every hostname
+public). The previous project, `nim`, and its URL still answer; retiring
+them is a separate step.
 
 Since 2026-09-25 the same deployment serves two pages. The product page at
 `/` is the public face of Nim: a real session's `nim log`, the `nim approve`
@@ -189,8 +198,10 @@ Two things remain true:
   own; deployment is by hand from `dashboard/`, with the project linked
   through `VERCEL_ORG_ID` and `VERCEL_PROJECT_ID`: `vercel build --prod` over
   the same `npm run build` the checks run, then `vercel deploy --prebuilt
-  --prod`. Last done on 2026-09-16 from this branch, and verified by fetching the
-  production domain anonymously afterwards.
+  --prod`. Last done on 2026-09-25, the first deployment of the `holdcall`
+  project, and verified by fetching every hostname anonymously afterwards,
+  including the waitlist function with one probe address that was then
+  deleted.
 - Until 2026-09-16, historical deployment URLs and stale branch aliases also
   answered publicly (F-012), serving Vercel's failure page and an abandoned
   placeholder. They were removed that day; every one of them answers 404 now,

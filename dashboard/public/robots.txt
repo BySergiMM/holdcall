@@ -3,4 +3,4 @@
 User-agent: *
 Allow: /
 Disallow: /status
-Sitemap: https://nim-blush.vercel.app/sitemap.xml
+Sitemap: https://holdcall.vercel.app/sitemap.xml

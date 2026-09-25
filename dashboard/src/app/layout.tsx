@@ -5,7 +5,7 @@ const description =
   "Nim sits between your agent and its MCP tools. It decides every call on your machine, shows you the real arguments before anything dangerous runs, and keeps a record you can verify offline.";
 
 export const metadata: Metadata = {
-  metadataBase: new URL("https://nim-blush.vercel.app"),
+  metadataBase: new URL("https://holdcall.vercel.app"),
   title: "Nim — the control that stays on your machine",
   description,
   alternates: { canonical: "/" },

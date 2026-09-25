@@ -1,7 +1,7 @@
 # Nim
 
-**[nim-blush.vercel.app](https://nim-blush.vercel.app)** — the product page,
-and [/status](https://nim-blush.vercel.app/status/) for what is verified.
+**[holdcall.vercel.app](https://holdcall.vercel.app)** — the product page,
+and [/status](https://holdcall.vercel.app/status/) for what is verified.
 
 Nim is a local process that sits between an MCP client — Claude Code, Cursor,
 Claude Desktop — and the MCP servers it spawns. It holds each server's
