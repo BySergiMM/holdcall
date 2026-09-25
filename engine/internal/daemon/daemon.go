@@ -151,6 +151,9 @@ func Run(cfg config.Config) error {
 	if err := cfg.EnsureDirs(); err != nil {
 		return err
 	}
+	// Our own identity, resolved while the path still names the image we
+	// run: see peer.PrimeSelf (F-026).
+	peer.PrimeSelf()
 	ln, err := listen(cfg.Daemon.Socket)
 	if err != nil {
 		if errors.Is(err, errAlreadyRunning) {

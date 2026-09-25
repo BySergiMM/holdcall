@@ -1703,13 +1703,13 @@
     },
     {
       "id": "F-026",
-      "severity": "low",
-      "title": "The in-place upgrade test is flaky under load",
-      "problem": "TestAnInPlaceUpgradeIsDiagnosedAndDaemonRestartFixesIt, the end-to-end proof of F-001, waits up to ten seconds for the old daemon to log the specific line naming a newer build at its own path. Under load (the race detector with the other CI jobs running, or several test runs at once) the daemon sometimes logs only the generic refusal for the whole window, and the test fails. Run alone on a quiet machine it passes; run four times on a loaded one it failed three of them, on the tree before the rename as well as after, so the rename did not cause it.",
-      "impact": "A red test job that is not telling the truth about the product: the diagnosis itself works, as holdcall status and holdcall doctor show by hand, and the daemon's own unit tests of the path pass. The cost is trust in the suite, and time spent re-running it.",
-      "evidence": "Observed on 2026-09-26 in tools/ci-local.sh (job test) and reproduced by running the test alone with -race, four times, in both trees. Not yet diagnosed: the daemon diagnoses the peer synchronously, before closing the connection, so the peer should still be alive; the leading suspicion is the probe relay giving up on its handshake before a loaded daemon reaches the diagnosis, which would make the probe's process gone when the daemon looks. That is a hypothesis, not a finding.",
-      "status": "open",
-      "nextAction": "Reproduce with timing logged on both sides, then either lengthen the probe's handshake wait in the test or make the probe a process that stays alive after being refused. Until then a failure of this one test on a loaded machine is not evidence against F-001.",
+      "severity": "medium",
+      "title": "A daemon upgraded before its first peer check accepted the new build as itself",
+      "problem": "On macOS the daemon resolved its own image identity lazily, on the first connection whose peer pid it could read. resolveSelfImage compares the file at os.Executable() with the kernel's record of the running image; if the binary had been rebuilt in place before that first resolution, the two differed, the mechanism was marked untrustworthy for the life of the process, and every later check fell back to the path comparison. After an in-place upgrade the path names the new file, so the old daemon then accepted the new build's relays as itself, silently, with no refusal and no F-001 diagnosis. It surfaced as a flaky end-to-end test: whether the test's readiness dial happened to be checked before the rebuild decided which behaviour the old daemon had.",
+      "impact": "The guarantee that the daemon answers only to its own image degraded to a path check exactly in the upgrade case F-001 exists for: an operator who installed a new build over a daemon that had not yet served anyone got a stale daemon serving new clients, with holdcall status naming the older build while the daemon itself saw nothing wrong. Not an authorization bypass for an attacker, who still needs to place a file at the daemon's own launch path, but a silent divergence between what the CLI diagnosed and what the daemon did.",
+      "evidence": "Diagnosed with a temporary log line in peer.diagnose and by reading isSelfImpl: in every failing run the old daemon logged nothing for the probes at all, because it was accepting them. Fixed: the daemon now resolves its own image at startup, before it listens (peer.PrimeSelf in daemon.Run), while the path still names the running image; the identity is captured once and an upgrade after that is seen as what it is. The end-to-end upgrade test also keeps each probe alive until the old daemon has logged something, so a loaded runner cannot make the probe vanish before it is inspected.",
+      "status": "fixed",
+      "nextAction": "The daemon could log when its own image could not be verified at startup, so an ABI drift on a future macOS is visible in the log rather than only as a weaker check.",
       "provenance": "declared"
     },
     {

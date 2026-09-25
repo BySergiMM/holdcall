@@ -90,3 +90,8 @@ func pidOfImpl(conn net.Conn) (int, bool, error) {
 	}
 	return int(ucred.Pid), true, nil
 }
+
+// primeSelfImpl has nothing to resolve ahead of time on this platform: the
+// self check reads the running image from the kernel on every call, or is
+// unsupported outright. See PrimeSelf.
+func primeSelfImpl() {}

@@ -52,6 +52,22 @@ func IsSelfPID(conn net.Conn) (supported, same bool, pid int) {
 	return isSelfImpl(conn)
 }
 
+// PrimeSelf resolves this process's own image identity now, rather than on
+// the first connection that gets checked. A daemon calls it before it
+// listens.
+//
+// The order matters on macOS, where the identity is resolved once and
+// verified against the file at os.Executable(): a binary rebuilt in place
+// before that first resolution makes the file and the running image differ,
+// the mechanism is then judged untrustworthy for the life of the process,
+// and every later check falls back to comparing launch paths -- which, after
+// an in-place upgrade, the new build shares. An old daemon in that state
+// accepted the new build's relays as itself, silently, instead of refusing
+// them with the F-001 diagnosis (F-026). Resolved at startup, while the path
+// still names the running image, the identity is the running image and an
+// upgrade after that is seen for what it is.
+func PrimeSelf() { primeSelfImpl() }
+
 // Diagnosis explains why a peer that already failed IsSelf's check --
 // supported=true, same=false -- differs from us. It plays no part in that
 // decision and cannot soften it: IsSelf has already refused the connection

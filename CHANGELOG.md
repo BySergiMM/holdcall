@@ -13,6 +13,21 @@ test names behind each claim live.
 
 ### Fixed
 
+- **A daemon upgraded before its first peer check no longer accepts the
+  new build as itself (F-026).** On macOS the daemon resolved its own
+  image lazily, on the first checkable connection; rebuilt in place before
+  that, it fell back to the path comparison for good and served the new
+  build's relays silently, with no F-001 diagnosis. It resolves its image
+  at startup now, before listening. Found through a test that flaked for
+  exactly this reason; the test also keeps each probe alive until the old
+  daemon has looked at it.
+- **The daemon's tests create their own machine-id (F-027, second part).**
+  Tests that enrol through the journal before the daemon has created the
+  identifier lost that race on CI; the helpers now create it first.
+- **CI's test job runs in `engine/` on every platform.** A job-level
+  `defaults.run` replaces the workflow-level one, so the working directory
+  was lost; the first run on a real runner failed on `go vet` at the root,
+  and the Windows pre-checkout step must not use it.
 - **`install.sh` no longer overwrites the binary in place (F-028).** On
   macOS that left a `holdcall` the kernel killed on every exec once a daemon
   from the previous build was running. The installer now copies beside the

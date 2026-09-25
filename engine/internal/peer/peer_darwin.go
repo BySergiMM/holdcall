@@ -148,3 +148,6 @@ func pidOfImpl(conn net.Conn) (int, bool, error) {
 	}
 	return pid, true, nil
 }
+
+// primeSelfImpl resolves selfImage now; see PrimeSelf.
+func primeSelfImpl() { selfImageID() }

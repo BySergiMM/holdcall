@@ -67,6 +67,9 @@ jobs:
       # checkout, so checkout itself writes the bytes the repository has.
       - name: Preserve LF line endings (windows)
         if: runner.os == 'Windows'
+        # Runs before checkout, so engine/ does not exist yet: this step, and
+        # only this one, must not use the job's working directory.
+        working-directory: .
         run: git config --global core.autocrlf false
 
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0

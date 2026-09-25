@@ -61,3 +61,8 @@ import "net"
 func isSelfImpl(conn net.Conn) (supported, same bool, pid int) {
 	return false, false, 0
 }
+
+// primeSelfImpl has nothing to resolve ahead of time on this platform: the
+// self check reads the running image from the kernel on every call, or is
+// unsupported outright. See PrimeSelf.
+func primeSelfImpl() {}

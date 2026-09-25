@@ -1097,10 +1097,20 @@ func TestAnInPlaceUpgradeIsDiagnosedAndDaemonRestartFixesIt(t *testing.T) {
 	// stdin, whether or not it found a daemon to talk to), but retrying with
 	// a fresh one is still the honest way to test a check that is allowed to
 	// occasionally, safely decline to guess.
+	//
+	// Each probe stays alive until the daemon has actually looked at it. A
+	// fixed 150 ms was not that: under the race detector on a loaded runner
+	// the daemon reached the connection after the probe had been killed,
+	// read no peer pid at all, and could only log the generic line, every
+	// time (F-026). The daemon's log growing is the signal that it has
+	// handled the connection, whichever line it wrote.
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) && !strings.Contains(daemonStderr.String(), "different build of Holdcall") {
+		before := len(daemonStderr.String())
 		probe := s.serve(t)
-		time.Sleep(150 * time.Millisecond)
+		for waited := time.Duration(0); len(daemonStderr.String()) == before && waited < 3*time.Second; waited += 50 * time.Millisecond {
+			time.Sleep(50 * time.Millisecond)
+		}
 		probe.kill()
 	}
 	logged := daemonStderr.String()
