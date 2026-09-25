@@ -54,6 +54,12 @@ the test names behind each claim live.
 
 ### Fixed
 
+- **The daemon's tests no longer reach the real install (F-027).** The
+  in-process daemon tests gave each daemon a temporary data directory but
+  not a home, so the machine-id was read from, and on an empty journal
+  written to, the operator's own `Application Support` directory. Both
+  helpers now set `HOLDCALL_HOME`, and a `TestMain` points the package at a
+  temporary home before any test runs.
 - **Holdcall's refusals now follow the handshake the session negotiated (F-021).**
   A connector that speaks the 2026-07-28 revision is negotiated through
   `server/discover` rather than `initialize`, and every result on that

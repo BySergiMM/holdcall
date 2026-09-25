@@ -18,6 +18,10 @@ func start(t testing.TB) (cfg config.Config, dbPath string) {
 	t.Helper()
 
 	home := t.TempDir()
+	// The daemon reads and, on an empty journal, creates the machine-id in
+	// config.Home(): without this the real install's home is what it would
+	// reach. See TestMain.
+	t.Setenv(config.HomeEnvVar, home)
 	// The socket lives outside home on purpose: an AF_UNIX path is capped near
 	// 104 bytes and a temp directory is already most of that.
 	sock := filepath.Join(os.TempDir(), fmt.Sprintf("holdcall-test-%d.sock", time.Now().UnixNano()%1e9))
@@ -57,6 +61,10 @@ func startWithApprovalTimeout(t testing.TB, timeout time.Duration) (cfg config.C
 	t.Helper()
 
 	home := t.TempDir()
+	// The daemon reads and, on an empty journal, creates the machine-id in
+	// config.Home(): without this the real install's home is what it would
+	// reach. See TestMain.
+	t.Setenv(config.HomeEnvVar, home)
 	sock := filepath.Join(os.TempDir(), fmt.Sprintf("holdcall-test-%d.sock", time.Now().UnixNano()%1e9))
 	t.Cleanup(func() { os.Remove(sock) })
 

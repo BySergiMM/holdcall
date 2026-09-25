@@ -1711,6 +1711,17 @@
       "status": "open",
       "nextAction": "Reproduce with timing logged on both sides, then either lengthen the probe's handshake wait in the test or make the probe a process that stays alive after being refused. Until then a failure of this one test on a loaded machine is not evidence against F-001.",
       "provenance": "declared"
+    },
+    {
+      "id": "F-027",
+      "severity": "medium",
+      "title": "The daemon's in-process tests reached the real install's home",
+      "problem": "internal/daemon's test helper gave each daemon a temporary data directory but never redirected the home, and the daemon resolves the machine-id through config.Home(). On a journal with no entries it creates one. Under the old name this was invisible, because the real home already had a machine-id from August; the first test run under the new name created ~/Library/Application Support/holdcall/machine-id on the operator's machine, moments before the real install was moved there. Worse, the tests that open a journal directly (agent and derivation tests) had been reading the operator's identifier as their own: pointed at an empty home they refused to start, which is how the dependency showed.",
+      "impact": "A test suite writing into the operator's install. Had the move happened first, the suite would have found an empty journal beside the real machine-id, and a later daemon could have chained the operator's first real entry to whichever identifier the tests left behind.",
+      "evidence": "Fixed: both helpers in daemon_test.go now set HOLDCALL_HOME to their temporary directory, and zz_home_test.go adds a TestMain that points the whole package at a temporary home before any test runs, so a helper that forgets still cannot reach the real one, and creates the package's own machine-id there, so no test reads the operator's. The package passes with the real identifier out of reach. The stray machine-id was set aside before the migration and the real install's own identifier, from 2026-08-07, seeds its chain; holdcall doctor reports the six entries self-consistent.",
+      "status": "fixed",
+      "nextAction": "The same floor for any future package whose tests start a daemon in-process; today only internal/daemon does.",
+      "provenance": "declared"
     }
   ],
   "decisions": [
