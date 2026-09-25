@@ -39,3 +39,4 @@ tools/relay-rig/nim-home/
 .vscode/
 .DS_Store
 .env*
+.vercel
