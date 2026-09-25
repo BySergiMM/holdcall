@@ -53,6 +53,12 @@ jobs:
         # too), and one bash script covers all three platforms instead of a
         # parallel pwsh translation of each step.
         shell: bash
+        # A job-level defaults.run replaces the workflow-level one rather than
+        # merging with it, so the working directory set at the top of this
+        # file is lost here unless repeated. The first run of this job on a
+        # real runner (2026-09-26) failed on `go vet ./...` at the repository
+        # root for exactly that reason.
+        working-directory: engine
     steps:
       # Windows' git defaults to checking text files out with CRLF. Every .go
       # file in this repo is written with LF, which is also what gofmt itself
