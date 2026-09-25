@@ -19,3 +19,13 @@ Then open http://127.0.0.1:7719/#held. The console and the daemon must be the
 same build: rebuild `holdcall`, and the running daemon will be refused as an
 older build until the script is restarted (that refusal is F-001 working).
 `?theme=dark` or `?theme=light` forces a theme for a screenshot.
+
+## The GIF
+
+`gif.py` stages the same story in four stops, each released by a trigger
+file, so a frame can be captured between them: the overview, the strip that
+says a call is held, the held call with its arguments, and the journal after
+the rejection. Capture each stop with headless Chrome at 1200x760
+(`--force-device-scale-factor=1`), then assemble with Pillow: resize to 960
+wide, quantize to about 160 colours, durations around 2.6, 2.2, 4.2 and 3.8
+seconds, loop forever. The result is `docs/images/console.gif`, about 260 KB.

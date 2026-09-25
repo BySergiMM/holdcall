@@ -3,6 +3,8 @@
 **[holdcall.vercel.app](https://holdcall.vercel.app)** — the product page,
 and [/status](https://holdcall.vercel.app/status/) for what is verified.
 
+![The console: the overview of a journal, a call arriving held for a human, its real arguments including a bidirectional override shown as an escape, and the journal after the rejection with the entry's place in the hash chain](docs/images/console.gif)
+
 Holdcall is a local process that sits between an MCP client — Claude Code, Cursor,
 Claude Desktop — and the MCP servers it spawns. It holds each server's
 credentials, decides whether every `tools/call` is allowed before it reaches
