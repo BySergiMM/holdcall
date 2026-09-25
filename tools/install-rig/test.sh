@@ -53,13 +53,13 @@ case "$arch" in
 esac
 
 version="v0.0.0-test"
-name="nim_${version}_${goos}_${goarch}"
+name="holdcall_${version}_${goos}_${goarch}"
 archive="$name.tar.gz"
 
 server_dir="$work/server"
 mkdir -p "$server_dir/$name"
 # A fake binary is enough: install.sh only copies it, never runs it.
-printf '#!/bin/sh\necho fake nim\n' >"$server_dir/$name/nim"
+printf '#!/bin/sh\necho fake holdcall\n' >"$server_dir/$name/holdcall"
 echo "fake readme" >"$server_dir/$name/README.md"
 echo "fake license" >"$server_dir/$name/LICENSE"
 (cd "$server_dir" && tar czf "$archive" "$name" && rm -rf "$name")
@@ -107,9 +107,9 @@ fail=0
 echo "$good_sum  $archive" >"$server_dir/SHA256SUMS"
 
 install_dir_ok="$work/install-ok"
-if NIM_VERSION="$version" NIM_DOWNLOAD_BASE="$base" NIM_INSTALL_DIR="$install_dir_ok" \
+if HOLDCALL_VERSION="$version" HOLDCALL_DOWNLOAD_BASE="$base" HOLDCALL_INSTALL_DIR="$install_dir_ok" \
     sh "$install_sh" >"$work/ok.out" 2>&1; then
-    if [ -f "$install_dir_ok/nim" ]; then
+    if [ -f "$install_dir_ok/holdcall" ]; then
         echo "PASS: a correct checksum installed the binary"
     else
         echo "FAIL: a correct checksum reported success but installed nothing"
@@ -127,12 +127,12 @@ fi
 echo "deadbeef  $archive" >"$server_dir/SHA256SUMS"
 
 install_dir_bad="$work/install-bad"
-if NIM_VERSION="$version" NIM_DOWNLOAD_BASE="$base" NIM_INSTALL_DIR="$install_dir_bad" \
+if HOLDCALL_VERSION="$version" HOLDCALL_DOWNLOAD_BASE="$base" HOLDCALL_INSTALL_DIR="$install_dir_bad" \
     sh "$install_sh" >"$work/bad.out" 2>&1; then
     echo "FAIL: a wrong checksum was accepted"
     cat "$work/bad.out" >&2
     fail=1
-elif [ -f "$install_dir_bad/nim" ]; then
+elif [ -f "$install_dir_bad/holdcall" ]; then
     echo "FAIL: a wrong checksum was refused but a binary was installed anyway"
     fail=1
 elif ! grep -q "checksum mismatch" "$work/bad.out"; then

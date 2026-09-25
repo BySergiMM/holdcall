@@ -1,6 +1,6 @@
 # The dashboard
 
-`dashboard/` is a static page describing what Nim guarantees, what it does not,
+`dashboard/` is a static page describing what Holdcall guarantees, what it does not,
 and what has never been tested. It is built from this repository and published
 as HTML with no server behind it.
 
@@ -79,15 +79,15 @@ go green when a cited test was *skipped* rather than run, via
 
 **No runtime state, ever.** The journal, live sessions, enrolled agents,
 rules, connectors and daemon health are not on the page and are not going on
-it. Nim is local-first; that state lives on the machine running Nim, and
+it. Holdcall is local-first; that state lives on the machine running Holdcall, and
 shipping it to a hosted page would export the thing it is supposed to protect.
 The runtime section says NOT AVAILABLE and names the local command for each
-datum instead: `nim console` serves the journal and its sessions over
-loopback, and `nim agent list`, `nim policy list` and `nim connector list`
+datum instead: `holdcall console` serves the journal and its sessions over
+loopback, and `holdcall agent list`, `holdcall policy list` and `holdcall connector list`
 show the rest.
 
 **No secrets, by construction and then by scanning anyway.** The generator reads
-`engine/`, `docs/` and `git log`. It never opens `nim.db`, the socket, or a
+`engine/`, `docs/` and `git log`. It never opens `holdcall.db`, the socket, or a
 credential store, and a test asserts it does not even name a path into them.
 
 Construction is not enough on its own, because `state.json` is written by hand
@@ -116,10 +116,10 @@ when every cited test is tagged away from it, but it cannot refuse a test that
 compiles on Windows and proves nothing on it. Those columns rest on judgement.
 
 `verified` on this page means a test passes. It does not mean audited, reviewed
-by anyone outside this project, or proven. Nobody external has looked at Nim.
+by anyone outside this project, or proven. Nobody external has looked at Holdcall.
 
-The Break Nim table lists the attacks someone thought of, not the attacks that
-exist. It grows when Nim gets more scrutiny, not when it gets worse.
+The Break Holdcall table lists the attacks someone thought of, not the attacks that
+exist. It grows when Holdcall gets more scrutiny, not when it gets worse.
 
 The page says all of this on itself, in a section called "What this dashboard
 cannot tell you". That section is not an apology — it is the part that makes the
@@ -161,12 +161,12 @@ setting: the production domain answers anyone, while the deployment URL and
 the branch alias redirect to Vercel's sign-in. Nothing but the production
 domain is meant to be read, so that is the right shape, and it is the
 opposite of what the earlier project had (protection off, every hostname
-public). The previous project, `nim`, and its URL still answer; retiring
+public). The previous project, `holdcall`, and its URL still answer; retiring
 them is a separate step.
 
 Since 2026-09-25 the same deployment serves two pages. The product page at
-`/` is the public face of Nim: a real session's `nim log`, the `nim approve`
-moment, how the relay fits, what Nim does not promise, and an early-access
+`/` is the public face of Holdcall: a real session's `holdcall log`, the `holdcall approve`
+moment, how the relay fits, what Holdcall does not promise, and an early-access
 form. The status page, this dashboard, moved to `/status/`; every anchor it
 had still works there. Both are built from the same repository by the same
 generator, and the output scan covers both. The product page is meant to be

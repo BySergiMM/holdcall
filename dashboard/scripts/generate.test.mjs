@@ -329,7 +329,7 @@ test("a secret smuggled into declared prose is refused", () => {
     "AKIAIOSFODNN7EXAMPLE was in the log",
     "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9",
     "-----BEGIN RSA PRIVATE KEY-----",
-    "NIM_API_KEY=s3cr3tvalue12345",
+    "HOLDCALL_API_KEY=s3cr3tvalue12345",
   ]) {
     const r = runWith((s) => {
       s.findings[0].evidence = value;
@@ -341,9 +341,9 @@ test("a secret smuggled into declared prose is refused", () => {
 
 test("a local path smuggled into declared prose is refused", () => {
   for (const value of [
-    "Built from /Users/someone/Documents/GitHub/nim on this machine, which is fine",
-    "The journal lives at /home/someone/.nim/nim.db on that host",
-    "It resolves to C:\\Users\\someone\\nim on windows",
+    "Built from /Users/someone/Documents/GitHub/holdcall on this machine, which is fine",
+    "The journal lives at /home/someone/.holdcall/holdcall.db on that host",
+    "It resolves to C:\\Users\\someone\\holdcall on windows",
   ]) {
     const r = runWith((s) => {
       s.project.statusNote = value;
@@ -428,7 +428,7 @@ test("the generated data carries nothing from outside the repository", () => {
 // path into them.
 test("the generator never reads runtime state", () => {
   const src = readFileSync(join(here, "generate.mjs"), "utf8");
-  for (const forbidden of ["nim.db", "nim.sock", ".nim/", "security find-generic-password", "secret-tool"]) {
+  for (const forbidden of ["holdcall.db", "holdcall.sock", ".holdcall/", "security find-generic-password", "secret-tool"]) {
     assert.ok(!src.includes(forbidden), `the generator references runtime state: ${forbidden}`);
   }
 });

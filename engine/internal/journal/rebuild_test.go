@@ -82,7 +82,7 @@ func anM2Journal(t *testing.T, path string) []Entry {
 // Opening it must rebuild the table, and the chain that comes out must be the
 // chain that went in.
 func TestAJournalTableFromAnEarlierBuildIsRebuiltWithoutChangingTheChain(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "nim.db")
+	path := filepath.Join(t.TempDir(), "holdcall.db")
 	seeded := anM2Journal(t, path)
 
 	j, err := Open(path, "test-machine")
@@ -266,7 +266,7 @@ func anM4Journal(t *testing.T, path string) []Entry {
 // through the same rebuild that carried M2 databases forward, and the chain
 // that comes out must be the chain that went in.
 func TestADatabaseFromTheM4BuildGainsTheEnrolmentColumnsAndStillVerifies(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "nim.db")
+	path := filepath.Join(t.TempDir(), "holdcall.db")
 	seeded := anM4Journal(t, path)
 
 	j, err := Open(path, "test-machine")
@@ -381,7 +381,7 @@ func anM4RulesTable(t *testing.T, path string) Rule {
 // widen a CHECK in place -- the same problem rebuildJournalTable solves for
 // nim_journal's kind column, solved here the same way for nim_rules.effect.
 func TestANimRulesTableFromTheCurrentDDLIsWidenedForAllowRules(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "nim.db")
+	path := filepath.Join(t.TempDir(), "holdcall.db")
 	seeded := anM4RulesTable(t, path)
 
 	j, err := Open(path, "test-machine")
@@ -532,7 +532,7 @@ func anM45Journal(t *testing.T, path string) []Entry {
 // the CHECK, through the same rebuild that carried M2 and M4 databases
 // forward, and the chain that comes out must be the chain that went in.
 func TestADatabaseFromTheCurrentBuildGainsTheBudgetKindsAndStillVerifies(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "nim.db")
+	path := filepath.Join(t.TempDir(), "holdcall.db")
 	seeded := anM45Journal(t, path)
 
 	j, err := Open(path, "test-machine")
@@ -642,7 +642,7 @@ func anM45RulesTable(t *testing.T, path string) Rule {
 // CHECK in place -- the same problem TestANimRulesTableFromTheCurrentDDLIsWidenedForAllowRules
 // exercised for the M4 -> M4.5 step, exercised here for M4.5 -> M6.
 func TestANimRulesTableFromTheM45DDLIsWidenedForAskRules(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "nim.db")
+	path := filepath.Join(t.TempDir(), "holdcall.db")
 	seeded := anM45RulesTable(t, path)
 
 	j, err := Open(path, "test-machine")
@@ -730,7 +730,7 @@ func anM45JournalWithARule(t *testing.T, path string) []Entry {
 // has carried every earlier CHECK change, and the chain that comes out must
 // be the chain that went in.
 func TestAJournalTableFromBeforeAskRulesIsWidenedForAsk(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "nim.db")
+	path := filepath.Join(t.TempDir(), "holdcall.db")
 	seeded := anM45JournalWithARule(t, path)
 
 	j, err := Open(path, "test-machine")

@@ -7,18 +7,18 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"github.com/BySergiMM/nim/engine/internal/config"
-	"github.com/BySergiMM/nim/engine/internal/daemon"
-	"github.com/BySergiMM/nim/engine/internal/journal"
-	"github.com/BySergiMM/nim/engine/internal/shim"
+	"github.com/BySergiMM/holdcall/engine/internal/config"
+	"github.com/BySergiMM/holdcall/engine/internal/daemon"
+	"github.com/BySergiMM/holdcall/engine/internal/journal"
+	"github.com/BySergiMM/holdcall/engine/internal/shim"
 )
 
-const policyUsage = "nim policy deny|allow|ask <tool> [--agent <name>] [--connector <name>] | " +
-	"nim policy default deny|allow|ask [--agent <name>] [--connector <name>] | " +
-	"nim policy remove <tool>|--default [--agent <name>] [--connector <name>] | " +
-	"nim policy list | nim policy explain <tool> [--agent <name>] [--connector <name>] | " +
-	"nim policy budget <n> --tool <tool>|--all-tools [--agent <name>] [--connector <name>] | " +
-	"nim policy budget remove --tool <tool>|--all-tools [--agent <name>] [--connector <name>]"
+const policyUsage = "holdcall policy deny|allow|ask <tool> [--agent <name>] [--connector <name>] | " +
+	"holdcall policy default deny|allow|ask [--agent <name>] [--connector <name>] | " +
+	"holdcall policy remove <tool>|--default [--agent <name>] [--connector <name>] | " +
+	"holdcall policy list | holdcall policy explain <tool> [--agent <name>] [--connector <name>] | " +
+	"holdcall policy budget <n> --tool <tool>|--all-tools [--agent <name>] [--connector <name>] | " +
+	"holdcall policy budget remove --tool <tool>|--all-tools [--agent <name>] [--connector <name>]"
 
 func runPolicy(args []string) error {
 	if len(args) == 0 {
@@ -109,12 +109,12 @@ func runPolicyChange(kind string, args []string) error {
 	return sendPolicyChange(kind, tool, agent, connector, false)
 }
 
-// runPolicyDefault handles `nim policy default deny|allow|ask [--agent]
+// runPolicyDefault handles `holdcall policy default deny|allow|ask [--agent]
 // [--connector]`. A default has no tool of its own -- RuleDefault carries
 // that to the daemon, which is the one place "*" is ever written -- so this
 // parses the effect word plus scope, not parsePolicyArgs's tool-plus-scope.
 func runPolicyDefault(args []string) error {
-	const usage = "usage: nim policy default deny|allow|ask [--agent <name>] [--connector <name>]"
+	const usage = "usage: holdcall policy default deny|allow|ask [--agent <name>] [--connector <name>]"
 	if len(args) == 0 {
 		return fmt.Errorf("%s", usage)
 	}
@@ -139,11 +139,11 @@ func runPolicyDefault(args []string) error {
 	return sendPolicyChange(kind, "", agent, connector, true)
 }
 
-// runPolicyRemove handles both nim policy remove <tool> ... and nim policy
+// runPolicyRemove handles both holdcall policy remove <tool> ... and holdcall policy
 // remove --default ...: exactly one of a tool name or --default is required,
 // because a scope holds one rule and this is what names it.
 func runPolicyRemove(args []string) error {
-	const usage = "usage: nim policy remove <tool>|--default [--agent <name>] [--connector <name>]"
+	const usage = "usage: holdcall policy remove <tool>|--default [--agent <name>] [--connector <name>]"
 	agent, connector, rest, err := parseScopeFlags(args)
 	if err != nil {
 		return err
@@ -246,7 +246,7 @@ func scopeWord(what, name string) string {
 
 func runPolicyList(args []string) error {
 	if len(args) != 0 {
-		return fmt.Errorf("usage: nim policy list")
+		return fmt.Errorf("usage: holdcall policy list")
 	}
 	cfg, err := config.Load()
 	if err != nil {
@@ -283,7 +283,7 @@ func runPolicyList(args []string) error {
 		fmt.Println("the most specific wins: an exact tool beats a default, and naming the agent or")
 		fmt.Println("the connector beats not naming it; a tie in specificity goes to deny, then ask,")
 		fmt.Println("then allow.")
-		fmt.Println("nim policy explain <tool> shows which rule decides one particular call, and why.")
+		fmt.Println("holdcall policy explain <tool> shows which rule decides one particular call, and why.")
 	}
 
 	// Budgets are policy too -- the same connection may ask for them, since
@@ -379,14 +379,14 @@ func runPolicyExplain(args []string) error {
 	return nil
 }
 
-// runPolicyBudget handles `nim policy budget <n> --tool <tool>|--all-tools
-// [--agent <name>] [--connector <name>]` and `nim policy budget remove
+// runPolicyBudget handles `holdcall policy budget <n> --tool <tool>|--all-tools
+// [--agent <name>] [--connector <name>]` and `holdcall policy budget remove
 // --tool <tool>|--all-tools [--agent <name>] [--connector <name>]`.
 func runPolicyBudget(args []string) error {
 	if len(args) > 0 && args[0] == "remove" {
 		return runPolicyBudgetChange(daemon.KindBudgetRemove, 0, args[1:])
 	}
-	const usage = "usage: nim policy budget <n> --tool <tool>|--all-tools " +
+	const usage = "usage: holdcall policy budget <n> --tool <tool>|--all-tools " +
 		"[--agent <name>] [--connector <name>]"
 	if len(args) == 0 {
 		return fmt.Errorf("%s", usage)
@@ -399,14 +399,14 @@ func runPolicyBudget(args []string) error {
 }
 
 // parseBudgetScopeArgs reads --tool/--all-tools plus the --agent/--connector
-// scope flags shared with rules, for both nim policy budget <n> and nim
+// scope flags shared with rules, for both holdcall policy budget <n> and holdcall
 // policy budget remove.
 func parseBudgetScopeArgs(args []string) (tool string, allTools bool, agent, connector string, err error) {
 	agent, connector, rest, err := parseScopeFlags(args)
 	if err != nil {
 		return "", false, "", "", err
 	}
-	const usage = "usage: nim policy budget <n>|remove --tool <tool>|--all-tools " +
+	const usage = "usage: holdcall policy budget <n>|remove --tool <tool>|--all-tools " +
 		"[--agent <name>] [--connector <name>]"
 	for i := 0; i < len(rest); i++ {
 		a := rest[i]

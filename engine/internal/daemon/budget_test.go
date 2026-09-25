@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/BySergiMM/nim/engine/internal/journal"
+	"github.com/BySergiMM/holdcall/engine/internal/journal"
 )
 
 // A budget of N calls allows exactly N, and the N+1th is refused with the
@@ -168,7 +168,7 @@ func TestABudgetCannotNameAnUnenrolledAgent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.Error == "" || !strings.Contains(resp.Error, "nim agent add") {
+	if resp.Error == "" || !strings.Contains(resp.Error, "holdcall agent add") {
 		t.Fatalf("a budget for an unenrolled agent was accepted or badly refused: %q", resp.Error)
 	}
 
@@ -218,7 +218,7 @@ func TestBudgetRequestsAreValidated(t *testing.T) {
 		}
 		// The refusal is about a budget. Found by review: the scope-less
 		// case used to borrow a rule's message and told the caller to
-		// write nim policy deny.
+		// write holdcall policy deny.
 		if strings.Contains(resp.Error, "rule") || strings.Contains(resp.Error, "policy deny") {
 			t.Errorf("%+v was refused in a rule's words: %s", bad, resp.Error)
 		}

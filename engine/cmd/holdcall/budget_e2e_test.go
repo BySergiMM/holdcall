@@ -11,7 +11,7 @@ func (s *stack) budget(t *testing.T, args ...string) {
 	t.Helper()
 	out, err := s.run(t, append([]string{"policy", "budget"}, args...)...)
 	if err != nil || !strings.Contains(out, "recorded in the journal") {
-		t.Fatalf("nim policy budget %v: %v\n%s", args, err, out)
+		t.Fatalf("holdcall policy budget %v: %v\n%s", args, err, out)
 	}
 }
 
@@ -60,11 +60,11 @@ func TestABudgetOfTwoRefusesTheThirdCallAndANewRelayStartsFresh(t *testing.T) {
 	}
 	r.kill()
 
-	// nim log confirms the third call was decided and refused, on the
+	// holdcall log confirms the third call was decided and refused, on the
 	// record -- the same check TestRealRelayForwardsOneCallAndRefusesTheOther
 	// makes for a rule-based deny.
 	if out, err := s.run(t, "log"); err != nil || !strings.Contains(out, "denied") {
-		t.Errorf("nim log does not report the refused call as denied: %v\n%s", err, out)
+		t.Errorf("holdcall log does not report the refused call as denied: %v\n%s", err, out)
 	}
 
 	// What the connector actually saw: two calls, byte-identical, and no
@@ -84,11 +84,11 @@ func TestABudgetOfTwoRefusesTheThirdCallAndANewRelayStartsFresh(t *testing.T) {
 	r2.kill()
 
 	if out, err := s.run(t, "verify"); err != nil || !strings.Contains(out, "self-consistent") {
-		t.Errorf("nim verify: %v\n%s", err, out)
+		t.Errorf("holdcall verify: %v\n%s", err, out)
 	}
 }
 
-// nim policy list shows the budgets it holds, under the rules, with their
+// holdcall policy list shows the budgets it holds, under the rules, with their
 // scope and cap.
 func TestPolicyListShowsBudgets(t *testing.T) {
 	s := build(t)
@@ -98,30 +98,30 @@ func TestPolicyListShowsBudgets(t *testing.T) {
 
 	out, err := s.run(t, "policy", "list")
 	if err != nil {
-		t.Fatalf("nim policy list: %v\n%s", err, out)
+		t.Fatalf("holdcall policy list: %v\n%s", err, out)
 	}
 	if !strings.Contains(out, "BUDGETS") {
-		t.Fatalf("nim policy list does not show a BUDGETS section:\n%s", out)
+		t.Fatalf("holdcall policy list does not show a BUDGETS section:\n%s", out)
 	}
 	if !strings.Contains(out, "3") || !strings.Contains(out, "rm") {
-		t.Errorf("nim policy list does not show the rm budget:\n%s", out)
+		t.Errorf("holdcall policy list does not show the rm budget:\n%s", out)
 	}
 	if !strings.Contains(out, "7") || !strings.Contains(out, "gitlab") {
-		t.Errorf("nim policy list does not show the all-tools budget:\n%s", out)
+		t.Errorf("holdcall policy list does not show the all-tools budget:\n%s", out)
 	}
 
-	// nim status reads the same projection the console does, without the
+	// holdcall status reads the same projection the console does, without the
 	// daemon; a budget missing there would show a session as unbounded.
 	out, err = s.run(t, "status")
 	if err != nil {
-		t.Fatalf("nim status: %v\n%s", err, out)
+		t.Fatalf("holdcall status: %v\n%s", err, out)
 	}
 	if !strings.Contains(out, "budgets       2") {
-		t.Errorf("nim status does not count the two budgets:\n%s", out)
+		t.Errorf("holdcall status does not count the two budgets:\n%s", out)
 	}
 }
 
-// nim policy explain reports the budgets that would apply to a call and
+// holdcall policy explain reports the budgets that would apply to a call and
 // their caps -- kept simple, with no invented session state, as
 // docs/decisions/0004-budgets.md and the milestone brief ask for.
 func TestPolicyExplainShowsMatchingBudgets(t *testing.T) {
@@ -131,21 +131,21 @@ func TestPolicyExplainShowsMatchingBudgets(t *testing.T) {
 
 	out, err := s.run(t, "policy", "explain", "read_file")
 	if err != nil {
-		t.Fatalf("nim policy explain read_file: %v\n%s", err, out)
+		t.Fatalf("holdcall policy explain read_file: %v\n%s", err, out)
 	}
 	if !strings.Contains(out, "Budgets that would apply") {
-		t.Errorf("nim policy explain does not mention matching budgets:\n%s", out)
+		t.Errorf("holdcall policy explain does not mention matching budgets:\n%s", out)
 	}
 	if !strings.Contains(out, "4 calls") {
-		t.Errorf("nim policy explain does not name the budget's cap:\n%s", out)
+		t.Errorf("holdcall policy explain does not name the budget's cap:\n%s", out)
 	}
 
 	// A tool no budget names shows none.
 	out, err = s.run(t, "policy", "explain", "untouched_tool")
 	if err != nil {
-		t.Fatalf("nim policy explain untouched_tool: %v\n%s", err, out)
+		t.Fatalf("holdcall policy explain untouched_tool: %v\n%s", err, out)
 	}
 	if strings.Contains(out, "Budgets that would apply") {
-		t.Errorf("nim policy explain invented a budget for a tool none applies to:\n%s", out)
+		t.Errorf("holdcall policy explain invented a budget for a tool none applies to:\n%s", out)
 	}
 }

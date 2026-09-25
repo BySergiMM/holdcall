@@ -53,7 +53,7 @@ Scope is exactly: shim, daemon, unix socket / named pipe, SQLite, `config.toml`.
 Anything else is a later milestone.
 
 **Status: done.** A real MCP client was run twice against the same server, once
-direct and once through Nim, and the two runs were identical on everything the
+direct and once through Holdcall, and the two runs were identical on everything the
 client can observe: tool list, JSON schemas, unicode round-trips, a 512 KiB
 payload, error propagation and ping. The harness lives in `tools/relay-rig`.
 
@@ -62,7 +62,7 @@ Three findings worth keeping:
 - **Unix sockets work on Windows**, so one transport serves all three platforms
   and `go-winio` is not needed.
 - **The socket cannot live inside the install directory.** AF_UNIX paths are
-  capped near 104 bytes; a deep `NIM_HOME` overflowed it and the daemon died
+  capped near 104 bytes; a deep `HOLDCALL_HOME` overflowed it and the daemon died
   with `bind: invalid argument` while the relay carried on, recording nothing
   and reporting no problem. The socket name is now a hash of the home path,
   placed in the temp directory, and an unusable path is rejected with an
@@ -97,7 +97,7 @@ invisibility.
 - **`target` is now `connector`**, done while there is no history to migrate.
 - **Detectable gaps are counted.** Events are still dropped when the daemon is
   slow or absent — M2 replaces that path for `call.request` only, so it was not
-  worth repairing here — but the relay now says so on stderr, and `nim status`
+  worth repairing here — but the relay now says so on stderr, and `holdcall status`
   reconstructs what it can from the journal afterwards.
 
   **Not all of it.** Reporting is asynchronous and one-way, so a failure on the
@@ -111,12 +111,12 @@ invisibility.
   no record at all. In this milestone it still did, and left an `anomaly` entry
   saying so. M2 refuses an unparseable frame, and a batch that carries a
   `tools/call`; a batch carrying none is still relayed.
-- **`nim log`**, **`nim verify`**, and a `nim status` that prints the chain head.
+- **`holdcall log`**, **`holdcall verify`**, and a `holdcall status` that prints the chain head.
 
 **What the chain does not do.** It detects corruption and edits that did not
-recompute it. It does not detect anyone who can write to `nim.db`: nothing in it
+recompute it. It does not detect anyone who can write to `holdcall.db`: nothing in it
 is secret, so they can recompute every hash and it verifies cleanly. Recording
-the head elsewhere (`nim verify --expect-head`) closes that for everything
+the head elsewhere (`holdcall verify --expect-head`) closes that for everything
 before it; owning the file as another OS user closes it properly. A test asserts
 the limitation rather than the reverse, so it will notice if this ever changes.
 
@@ -142,18 +142,18 @@ Two findings worth keeping:
   open, which is exactly the period during which events were lost.
 - **A daemon outlives the shim and holds the journal open.** Deleting the data
   directory under a running daemon leaves it writing to an unlinked file while
-  `nim status` reports it as running. A preview of M2's process-lifetime work.
+  `holdcall status` reports it as running. A preview of M2's process-lifetime work.
 
 ## M2 — Minimal enforcement
 
-Nim can stop a `tools/call` from reaching a connector. That is the whole
+Holdcall can stop a `tools/call` from reaching a connector. That is the whole
 milestone: one property, demonstrated, with everything it does not yet cover
 written down beside it.
 
 The relay now asks the daemon before it forwards a call and waits for the
 answer. The daemon decides, writes the decision onto the `call.request` entry,
 and only then replies. An allowed call goes on as the exact bytes that arrived;
-a refused one never leaves Nim, and the client is answered with a JSON-RPC
+a refused one never leaves Holdcall, and the client is answered with a JSON-RPC
 response carrying `result.isError`.
 
 **Fail-closed, and not for performance reasons.** No daemon, a slow daemon, a
@@ -162,7 +162,7 @@ denial. The synchronous hop, with the durable write included, costs p99 0.27 ms
 for one relay and p99 1.6 ms with sixteen contending. See `docs/benchmarks.md`
 for the method, the machine and the commands that reproduce it. So
 there was never a performance argument for the alternative; the argument would
-have had to be that a call Nim cannot record should proceed anyway, and there
+have had to be that a call Holdcall cannot record should proceed anyway, and there
 isn't one.
 
 An earlier version of this section quoted 0.157 ms, from a measurement that
@@ -185,12 +185,12 @@ window needs machinery this milestone does not buy.
 
 **What M2 does not guarantee:**
 
-- **A refusal Nim could not record is not in the journal.** When the daemon is
+- **A refusal Holdcall could not record is not in the journal.** When the daemon is
   unreachable the relay denies locally, and the only writer is exactly what
   could not be reached. Those denials are counted as lost events and reported on
   stderr; that is all there is. So `decision = deny` in the journal always means
   a policy refusal, never an inability to decide.
-- **An invalid JSON frame may leave a client with no answer.** Nim will not relay
+- **An invalid JSON frame may leave a client with no answer.** Holdcall will not relay
   a frame it cannot parse — Go rejects `NaN` where Python accepts it, which is
   enough to put an unseen `tools/call` in front of a server — and if no id can be
   recovered, nothing is fabricated to answer with. Deliberate: the alternative is
@@ -216,7 +216,7 @@ approval, no control plane, and no change to how the daemon is supervised.
 **Status: done.** The daemon starts detached from the shim's process group and
 session — `Setsid` on Linux and macOS, `CREATE_BREAKAWAY_FROM_JOB` +
 `DETACHED_PROCESS` (with a fallback for job objects that forbid breakaway) on
-Windows. Verified end to end on macOS: a `nim serve` run inside its own
+Windows. Verified end to end on macOS: a `holdcall serve` run inside its own
 session, with the whole session's process group killed, leaves the daemon
 running.
 
@@ -255,7 +255,7 @@ Secret Service), never SQLite, never argv.
 **What authorizes a credential is the connector's registered command:**
 
 ```
-echo "$GITHUB_TOKEN" | nim connector set github --env GITHUB_TOKEN \
+echo "$GITHUB_TOKEN" | holdcall connector set github --env GITHUB_TOKEN \
     -- npx -y @modelcontextprotocol/server-github
 ```
 
@@ -266,7 +266,7 @@ supplies one.
 This corrects a claim an earlier version made. It said peer identity and
 per-connection target-binding together closed off a downstream server reaching
 another connector's secret. They did not — both passed
-`nim serve --connector github -- /bin/sh -c 'echo $GITHUB_TOKEN'`, reproduced
+`holdcall serve --connector github -- /bin/sh -c 'echo $GITHUB_TOKEN'`, reproduced
 live, which printed the real token. Peer identity asks whether the caller is
 this binary, and anything on the machine can be by running it; target binding
 asks whether a connection asked for a *second* connector, and this asks for
@@ -296,10 +296,10 @@ What landed:
 
 - **Agent identity**, derived by the daemon from the kernel -- the socket
   peer's parent process and the file it executes -- matched against
-  enrolments made with `nim agent add`. Nothing on the wire names an agent.
-  Recorded on `session.start` at schema_version 2, and shown by `nim log`,
-  `nim log --json` and the console.
-- **Rules in SQLite.** `nim policy deny <tool> [--agent] [--connector]`, kept
+  enrolments made with `holdcall agent add`. Nothing on the wire names an agent.
+  Recorded on `session.start` at schema_version 2, and shown by `holdcall log`,
+  `holdcall log --json` and the console.
+- **Rules in SQLite.** `holdcall policy deny <tool> [--agent] [--connector]`, kept
   in `nim_rules`, read by the daemon at decision time. Rules only deny; a tool
   no rule names is allowed, as before. A rule may name only an enrolled agent.
 - **Every change in the chain.** A rule and its `rule.add` or `rule.remove`
@@ -336,7 +336,7 @@ What it does not do, stated rather than implied:
 `cedar-go`. That was the wrong next step, and the merged engine made it obvious
 why: **a policy language had nothing to talk about yet.**
 
-Every decision Nim made was per-tool and global. Two agents against the
+Every decision Holdcall made was per-tool and global. Two agents against the
 same connector got the same answer, because there was no way to tell them apart
 — the word "agent" appeared in this document and nowhere in the schema. Grants
 (M4 as written), budgets (M5) and human approval (M6) all need a subject, and
@@ -387,8 +387,8 @@ What landed:
   `nim_rules` is not part of the hash chain, unlike `nim_journal`, so its
   rebuild needed no view to drop and nothing to re-verify beyond the rows
   themselves.
-- **`tool` may be `*`, meaning every tool, only through `nim policy default
-  deny|allow`.** Everywhere else -- `nim policy deny`, `allow`, the match at
+- **`tool` may be `*`, meaning every tool, only through `holdcall policy default
+  deny|allow`.** Everywhere else -- `holdcall policy deny`, `allow`, the match at
   decision time -- it is refused as an ordinary tool name, so there remains
   exactly one way to write a rule that matches more than one tool. It is not
   a wildcard or a prefix. A client that genuinely calls a tool named `*` is
@@ -402,7 +402,7 @@ What landed:
   (`TestDecideAppliesSpecificityThenDenyOverAllow`,
   `internal/journal/decide_test.go`) rather than only through the daemon.
 - **D-002 answered again, for this model**, in docs/decisions/0003 and in
-  0002's last section: `nim policy default deny` plus `nim policy allow
+  0002's last section: `holdcall policy default deny` plus `holdcall policy allow
   <tool> --agent <name>` is the allow-list M4 could not express, and an
   unenrolled program is denied by the default because no rule naming no
   agent grants it anything. Proven at the answer level
@@ -411,7 +411,7 @@ What landed:
   (`TestADefaultDenyClosesEverythingAndAnAgentScopedAllowReopensOneToolForOneAgent`),
   the second following the shape
   `TestTwoRealAgentsAgainstOneConnectorReceiveDifferentVerdicts` set for M4.
-- **`nim policy explain <tool> [--agent] [--connector]`**, through a new
+- **`holdcall policy explain <tool> [--agent] [--connector]`**, through a new
   `policy.explain` daemon request, names the rule that would decide a call
   shaped like that and why -- computed by calling the same `journal.Decide`
   the decision path uses, so it can never say something a real call would
@@ -478,7 +478,7 @@ What landed:
   second guarantee. `TestTheNthPlusOneAllowedCallIsDeniedAndRefusalsDoNotCount`
   proves both halves in one sequence: the (N+1)th allowed call is refused,
   and the refusals woven through the sequence never counted.
-- **Per session means session.start to session.end**, the unit Nim already
+- **Per session means session.start to session.end**, the unit Holdcall already
   had; a client that restarts its relay starts a new session with a fresh
   count (`TestANewSessionStartsWithAFreshBudget`, and end to end with a real
   relay, `TestABudgetOfTwoRefusesTheThirdCallAndANewRelayStartsFresh`).
@@ -496,13 +496,13 @@ What landed:
   same SQLite transaction as the change itself
   (`TestABudgetAndItsEntryAreOneChange`,
   `TestABudgetChangeThatCannotBeRecordedIsNotMade`).
-- **`nim policy budget <n> --tool <tool>|--all-tools [--agent] [--connector]`**
-  and **`nim policy budget remove`** with the same scope, through new daemon
+- **`holdcall policy budget <n> --tool <tool>|--all-tools [--agent] [--connector]`**
+  and **`holdcall policy budget remove`** with the same scope, through new daemon
   request kinds `budget.set`, `budget.remove` and `budget.list` -- budgets
   are policy, so a connection that has committed to that purpose may send
-  either alongside `policy.deny`/`allow`/`remove`/`list`/`explain`. `nim
+  either alongside `policy.deny`/`allow`/`remove`/`list`/`explain`. `holdcall
   policy list` shows a BUDGETS table under the rules table.
-- **`nim policy explain` lists the budgets that would apply to a call and
+- **`holdcall policy explain` lists the budgets that would apply to a call and
   their caps, and stops there.** It has no session to weigh a count against
   -- explain answers "what would apply to a call shaped like this," and a
   session's usage is not part of that shape. Inventing a count would be a
@@ -529,7 +529,7 @@ What it does not do, stated rather than implied:
 ## M6 — Human approval
 
 **Status: done, 2026-09-15.** A third rule effect, `ask`, holds a call for a
-human instead of deciding it from a rule alone. `nim approve` shows the real
+human instead of deciding it from a rule alone. `holdcall approve` shows the real
 `params.arguments`, pretty-printed, never a summary and never anything the
 model that asked for the call wrote about itself --
 `docs/decisions/0005-human-approval.md` is the design and the argument for
@@ -537,8 +537,8 @@ why that has to be the real bytes.
 
 What landed:
 
-- **`effect` is `deny`, `allow` or `ask`.** `nim policy ask <tool> [--agent]
-  [--connector]` and `nim policy default ask` -- the third counterpart to
+- **`effect` is `deny`, `allow` or `ask`.** `holdcall policy ask <tool> [--agent]
+  [--connector]` and `holdcall policy default ask` -- the third counterpart to
   M4.5's `deny`/`allow`, through the same `nim_rules` CHECK-widening rebuild
   that grew the column before. `journal.Decide`'s precedence gained one
   line: at equal specificity, deny beats ask beats allow -- the 2026-09-15
@@ -558,7 +558,7 @@ What landed:
   exists for a call in this state, by construction, which is what keeps the
   real arguments out of the record as surely as the digest already kept
   ordinary arguments out of it.
-- **A human decides through `nim approve`/`nim reject`**, under their own
+- **A human decides through `holdcall approve`/`holdcall reject`**, under their own
   daemon purpose (`approval.list`, `approval.decide`) -- a connection
   speaking it cannot pivot to asking for a credential, exactly as a policy
   connection cannot
@@ -586,7 +586,7 @@ What landed:
   `mcp.DeniedApprovalTimedOut` for the relay's own local backstop, when even
   that answer never arrived.
 - **The human's reason for a rejection stays out of the chain.**
-  `nim reject <id> --reason <text>` logs the reason on the daemon's own log
+  `holdcall reject <id> --reason <text>` logs the reason on the daemon's own log
   and returns it to the CLI that asked; it is never written to the journal
   and never reaches the client the call came from
   (`TestTheRealArgumentsNeverReachTheJournalOrTheDaemonsLog` covers the
@@ -601,15 +601,15 @@ What landed:
   what it was holding on the way out.
 - **End to end with the real binary**
   (`TestRealApprovalHoldsACallForAHumanWhoDecidesItThroughTheCLI`,
-  `cmd/nim/e2e_test.go`): a real relay makes a call under an `ask` rule,
-  `nim approve` from a separate process lists it with the real arguments,
+  `cmd/holdcall/e2e_test.go`): a real relay makes a call under an `ask` rule,
+  `holdcall approve` from a separate process lists it with the real arguments,
   approving it is what lets the connector's own answer reach the client, and
   a second call under the same rule is rejected -- the client sees the
   refusal, the connector never sees the call.
 
 What it does not do, stated rather than implied:
 
-- **Who may approve is "anyone who can run `nim` as this user," and that is
+- **Who may approve is "anyone who can run `holdcall` as this user," and that is
   stated as the honest boundary, not glossed over.** Approval defends
   against the model driving the client, not against the operator --
   `docs/decisions/0005-human-approval.md`'s own section on this, and
@@ -620,7 +620,7 @@ What it does not do, stated rather than implied:
   is a fourth value the same `(agent, connector, tool)`-keyed rule can hold;
   nothing here reads `params.arguments` to decide when a rule should apply,
   only after it already has.
-- **No queueing, no notification.** `nim approve` with nothing held prints
+- **No queueing, no notification.** `holdcall approve` with nothing held prints
   that nothing is held; an operator has to run it to find out anything is
   waiting. Building a notification path was not this milestone's job.
 - **No delegation.** There is no second identity to hand approval to --
@@ -639,11 +639,11 @@ record inputs for. Folded into M4.
 
 **Status: planned, unblocked on 2026-09-16.** Syncing a record whose
 authenticity rests on an unkeyed chain exports a liability rather than
-evidence: anything able to write `nim.db` can rewrite history and the mirror
+evidence: anything able to write `holdcall.db` can rewrite history and the mirror
 would faithfully copy it. D-004 chose the honest side of that: the mirror
 presents what it shows as "what this machine reported", on every row, and
 the one strong claim it may hold is a head the operator pinned from
-`nim verify --expect-head`, stored apart from the synced rows.
+`holdcall verify --expect-head`, stored apart from the synced rows.
 `docs/decisions/0006-what-the-mirror-may-claim.md` is the argument, and
 adds three requirements to the contract below: provenance on every row, heads
 under a separate write path, and a sync that is an opt-in command the daemon

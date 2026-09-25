@@ -12,7 +12,7 @@ import (
 // literal ("*"), but a different table answering a different question. A
 // rule's "*" says which effect applies when nothing more specific does; a
 // budget's says which calls count against one cap. It exists only through
-// `nim policy budget <n> --all-tools`, and is otherwise an ordinary tool
+// `holdcall policy budget <n> --all-tools`, and is otherwise an ordinary tool
 // name to MatchingBudgets, for the same reason RuleToolDefault is to
 // MatchingRules -- see docs/decisions/0003's note on "*" for the argument,
 // which applies here unchanged.

@@ -7,7 +7,7 @@ import (
 )
 
 // verifyPeerIsSelf asks the OS, not the connecting process, whether the
-// process on the other end of conn is running this same nim binary.
+// process on the other end of conn is running this same holdcall binary.
 //
 // This is the actual authorization boundary for credential.get and every
 // connector.* operation: socket file permissions only prove "same OS user",
@@ -58,7 +58,7 @@ func IsSelfPID(conn net.Conn) (supported, same bool, pid int) {
 // by the time anything calls this (see daemon.go's accept-time check and
 // shim.daemonIsGenuine's callers). Its only job is choosing the sentence an
 // operator reads next, for F-001: replacing the binary while a daemon runs
-// used to leave both sides refusing each other with nothing but "not Nim"
+// used to leave both sides refusing each other with nothing but "not Holdcall"
 // to go on, indistinguishable from a genuine impostor.
 //
 // Telling SameLaunchPathOlderBuild apart from DifferentBinary needs a launch
@@ -67,29 +67,29 @@ func IsSelfPID(conn net.Conn) (supported, same bool, pid int) {
 // and image.go's doc comment. That is fine here: nothing Diagnose produces
 // ever feeds back into an allow/deny decision, only into text. An attacker
 // who wins this comparison is exactly as refused as one who does not; it
-// only changes which explanation they, or a genuinely upgraded Nim, read.
+// only changes which explanation they, or a genuinely upgraded Holdcall, read.
 type Diagnosis int
 
 const (
-	// DifferentBinary means the peer's launch path is not our own: not Nim,
-	// or Nim installed somewhere else. This is the ordinary case for an
+	// DifferentBinary means the peer's launch path is not our own: not Holdcall,
+	// or Holdcall installed somewhere else. This is the ordinary case for an
 	// impostor -- see shim.daemonIsGenuine's doc and impostor_test.go -- and
-	// the wording stays "is not Nim", unchanged from before Diagnose existed.
+	// the wording stays "is not Holdcall", unchanged from before Diagnose existed.
 	DifferentBinary Diagnosis = iota
 	// SameLaunchPathOlderBuild means the peer was launched from exactly the
 	// path our own binary runs from, but its running image is a different
 	// file. That is precisely the shape an in-place upgrade or a `go build`
 	// over a running daemon leaves behind (F-001): the old process keeps
 	// executing the old, now-unlinked inode while the path now names a new
-	// one. The peer is an older build of Nim, not an impostor, and the
-	// remedy is `nim daemon restart`.
+	// one. The peer is an older build of Holdcall, not an impostor, and the
+	// remedy is `holdcall daemon restart`.
 	SameLaunchPathOlderBuild
 	// DiagnosisUnavailable means neither launch path could be read at all --
 	// an unsupported platform (Windows; see image_windows.go) or a lookup
 	// that failed for this particular pid (it has already exited, or
 	// belongs to a user this process may not inspect). Never reported as
 	// SameLaunchPathOlderBuild: a wrong diagnosis here would send an
-	// operator to `nim daemon restart` a process that was never Nim at all.
+	// operator to `holdcall daemon restart` a process that was never Holdcall at all.
 	DiagnosisUnavailable
 )
 
@@ -104,8 +104,8 @@ const (
 // close its end at any moment, once its own mirroring check -- the daemon's
 // accept-time refusal, or the client's own daemonIsGenuine -- reaches the
 // same conclusion independently. Calling Diagnose more than once on the same
-// conn was observed to disagree with itself across that window: nim status
-// and nim doctor briefly reported a genuine upgrade as a plain impostor,
+// conn was observed to disagree with itself across that window: holdcall status
+// and holdcall doctor briefly reported a genuine upgrade as a plain impostor,
 // because the second call raced the peer's own close. A caller that needs
 // the diagnosis more than once must call this at most once and keep the
 // result, or call PIDOf once and reuse DiagnosePID, never call Diagnose

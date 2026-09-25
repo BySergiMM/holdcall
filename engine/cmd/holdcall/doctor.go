@@ -9,13 +9,13 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/BySergiMM/nim/engine/internal/clientconfig"
-	"github.com/BySergiMM/nim/engine/internal/config"
-	"github.com/BySergiMM/nim/engine/internal/credential"
-	"github.com/BySergiMM/nim/engine/internal/daemon"
-	"github.com/BySergiMM/nim/engine/internal/journal"
-	"github.com/BySergiMM/nim/engine/internal/readmodel"
-	"github.com/BySergiMM/nim/engine/internal/shim"
+	"github.com/BySergiMM/holdcall/engine/internal/clientconfig"
+	"github.com/BySergiMM/holdcall/engine/internal/config"
+	"github.com/BySergiMM/holdcall/engine/internal/credential"
+	"github.com/BySergiMM/holdcall/engine/internal/daemon"
+	"github.com/BySergiMM/holdcall/engine/internal/journal"
+	"github.com/BySergiMM/holdcall/engine/internal/readmodel"
+	"github.com/BySergiMM/holdcall/engine/internal/shim"
 )
 
 // severity is how bad one doctor check turned out to be. Ordered so the
@@ -46,7 +46,7 @@ const dialTimeout = 500 * time.Millisecond
 
 // runDoctor prints one line per check and exits 1 only if something FAILed; a
 // WARN is not a healthy install, but it is not what "exit 1" means here --
-// that is reserved for what the operator must fix before Nim can be trusted
+// that is reserved for what the operator must fix before Holdcall can be trusted
 // at all, as opposed to a degraded but working state (no daemon yet, a stale
 // enrolment, a client not wired up).
 //
@@ -89,23 +89,23 @@ func runDoctor(args []string) error {
 
 type reportFunc func(severity, string, ...any)
 
-// 1. The binary answering to "nim" on PATH should be the one running. Not a
-// FAIL either way: nim init writes an absolute path into every client config
-// it rewrites, so a client spawning nim never consults PATH at all. This only
-// matters to someone typing `nim` themselves at a shell.
+// 1. The binary answering to "holdcall" on PATH should be the one running. Not a
+// FAIL either way: holdcall init writes an absolute path into every client config
+// it rewrites, so a client spawning holdcall never consults PATH at all. This only
+// matters to someone typing `holdcall` themselves at a shell.
 func checkBinaryOnPath(report reportFunc) {
 	self, err := os.Executable()
 	if err != nil {
-		report(sevWarn, "nim binary -- could not determine the running executable: %v", err)
+		report(sevWarn, "holdcall binary -- could not determine the running executable: %v", err)
 		return
 	}
 	if resolved, err := filepath.EvalSymlinks(self); err == nil {
 		self = resolved
 	}
 
-	found, err := exec.LookPath("nim")
+	found, err := exec.LookPath("holdcall")
 	if err != nil {
-		report(sevWarn, "nim binary -- not on PATH -- add its directory to PATH so a shell can spawn it by name")
+		report(sevWarn, "holdcall binary -- not on PATH -- add its directory to PATH so a shell can spawn it by name")
 		return
 	}
 	if resolved, err := filepath.EvalSymlinks(found); err == nil {
@@ -113,10 +113,10 @@ func checkBinaryOnPath(report reportFunc) {
 	}
 
 	if found != self {
-		report(sevWarn, "nim binary -- PATH resolves to %s, but this process is %s -- harmless for clients, which nim init points at an absolute path; only a shell typing `nim` sees the difference", found, self)
+		report(sevWarn, "holdcall binary -- PATH resolves to %s, but this process is %s -- harmless for clients, which holdcall init points at an absolute path; only a shell typing `holdcall` sees the difference", found, self)
 		return
 	}
-	report(sevOK, "nim binary -- on PATH and matches the running executable (%s)", self)
+	report(sevOK, "holdcall binary -- on PATH and matches the running executable (%s)", self)
 }
 
 // 2. config.toml loads and validates. A stale [policy] section is the error
@@ -139,7 +139,7 @@ func checkConfig(report reportFunc) (config.Config, bool) {
 // 3. The daemon socket answers, the peer on the other end is genuine, and it
 // is the same build as this binary -- F-001: replacing the binary while a
 // daemon runs makes the two refuse each other, and an operator reading a
-// bare "something other than Nim is on that socket" cannot tell that apart
+// bare "something other than Holdcall is on that socket" cannot tell that apart
 // from a real impostor. shim.ErrDaemonOlderBuild is the specific case;
 // everything else keeps the older, more general FAIL.
 func checkDaemon(report reportFunc, cfg config.Config, cfgOK bool) {
@@ -151,11 +151,11 @@ func checkDaemon(report reportFunc, cfg config.Config, cfgOK bool) {
 	if err != nil {
 		switch {
 		case errors.Is(err, shim.ErrDaemonNotReachable):
-			report(sevWarn, "daemon -- not running at %s -- it starts on demand when a client spawns `nim serve`, or run `nim daemon`", cfg.Daemon.Socket)
+			report(sevWarn, "daemon -- not running at %s -- it starts on demand when a client spawns `holdcall serve`, or run `holdcall daemon`", cfg.Daemon.Socket)
 		case errors.Is(err, shim.ErrDaemonOlderBuild):
 			report(sevFail, "daemon build -- %v", err)
 		default:
-			report(sevFail, "daemon -- %v -- something other than Nim is on that socket; stop it and let a client restart the daemon", err)
+			report(sevFail, "daemon -- %v -- something other than Holdcall is on that socket; stop it and let a client restart the daemon", err)
 		}
 		return
 	}
@@ -257,7 +257,7 @@ func checkAgents(report reportFunc, cfg config.Config, cfgOK bool) {
 	for _, a := range resp.Agents {
 		if !a.Current {
 			stale++
-			report(sevWarn, "enrolment %q -- STALE, %s no longer matches what was enrolled -- run `nim agent add %s %s` to re-enrol", a.Name, a.ExecPath, a.Name, a.ExecPath)
+			report(sevWarn, "enrolment %q -- STALE, %s no longer matches what was enrolled -- run `holdcall agent add %s %s` to re-enrol", a.Name, a.ExecPath, a.Name, a.ExecPath)
 		}
 	}
 	if stale == 0 {
@@ -287,7 +287,7 @@ func checkRulesAndConnectors(report reportFunc, cfg config.Config, cfgOK bool) {
 		case resp.Error != "":
 			report(sevFail, "rules -- %s", resp.Error)
 		default:
-			report(sevOK, "rules -- %d denial rule(s) (nim policy list)", len(resp.Rules))
+			report(sevOK, "rules -- %d denial rule(s) (holdcall policy list)", len(resp.Rules))
 		}
 	}
 
@@ -315,13 +315,13 @@ func checkRulesAndConnectors(report reportFunc, cfg config.Config, cfgOK bool) {
 		}
 	}
 	if withoutCommand > 0 {
-		report(sevWarn, "connectors -- %d configured, %d with no authorized command -- register them again with `nim connector set`", len(resp.Connectors), withoutCommand)
+		report(sevWarn, "connectors -- %d configured, %d with no authorized command -- register them again with `holdcall connector set`", len(resp.Connectors), withoutCommand)
 		return
 	}
 	report(sevOK, "connectors -- %d configured", len(resp.Connectors))
 }
 
-// 9. Client configs: the same detection nim init uses, read-only -- this
+// 9. Client configs: the same detection holdcall init uses, read-only -- this
 // never calls clientconfig.Apply, so it changes nothing on disk.
 func checkClientConfigs(report reportFunc) {
 	cwd, err := os.Getwd()
@@ -331,7 +331,7 @@ func checkClientConfigs(report reportFunc) {
 	}
 	nimPath, err := resolveNimPath()
 	if err != nil {
-		report(sevWarn, "client configs -- could not resolve the running nim binary: %v", err)
+		report(sevWarn, "client configs -- could not resolve the running holdcall binary: %v", err)
 		return
 	}
 	files, err := clientconfig.Discover("", "", cwd)
@@ -352,16 +352,16 @@ func checkClientConfigs(report reportFunc) {
 		}
 		through, notThrough := tallyClientEntries(res)
 		if notThrough > 0 {
-			report(sevWarn, "%s (%s) -- %d server(s) through Nim, %d not yet -- run `nim init` to fix", f.Path, f.Client, through, notThrough)
+			report(sevWarn, "%s (%s) -- %d server(s) through Holdcall, %d not yet -- run `holdcall init` to fix", f.Path, f.Client, through, notThrough)
 			continue
 		}
-		report(sevOK, "%s (%s) -- %d server(s) through Nim", f.Path, f.Client, through)
+		report(sevOK, "%s (%s) -- %d server(s) through Holdcall", f.Path, f.Client, through)
 	}
 }
 
 // tallyClientEntries counts entries clientconfig has already classified, the
-// same classification nim init itself would act on -- so this can never
-// report a different count than a `nim init` dry run would show.
+// same classification holdcall init itself would act on -- so this can never
+// report a different count than a `holdcall init` dry run would show.
 func tallyClientEntries(res clientconfig.Result) (through, notThrough int) {
 	for _, g := range res.Groups {
 		for _, e := range g.Entries {

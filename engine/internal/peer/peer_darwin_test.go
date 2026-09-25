@@ -44,7 +44,7 @@ func TestVerifyPeerIsSelfRejectsADifferentBinary(t *testing.T) {
 	if _, err := exec.LookPath("nc"); err != nil {
 		t.Skip("nc not available")
 	}
-	// nc -U <path>: a real, separate process that is definitely not nim.
+	// nc -U <path>: a real, separate process that is definitely not holdcall.
 	client := exec.Command("nc", "-U")
 	conn := acceptOneConn(t, client)
 
@@ -67,7 +67,7 @@ func TestVerifyPeerIsSelfAcceptsTheSameBinary(t *testing.T) {
 	// Re-exec this same test binary with a flag that makes it just dial the
 	// socket and block, instead of running the test suite again.
 	client := exec.Command(self, "-test.run=TestHelperProcessDialAndBlock")
-	client.Env = append(os.Environ(), "NIM_PEER_TEST_HELPER=1")
+	client.Env = append(os.Environ(), "HOLDCALL_PEER_TEST_HELPER=1")
 	conn := acceptOneConn(t, client)
 
 	supported, same := IsSelf(conn)
@@ -127,9 +127,9 @@ func TestVerifyPeerIsSelfFailsClosedOnAClosedConnection(t *testing.T) {
 // TestHelperProcessDialAndBlock is not a real test: it is re-executed as a
 // subprocess by TestVerifyPeerIsSelfAcceptsTheSameBinary via `go test
 // -test.run=...`, using this test binary itself as "a separate process
-// running the same nim binary" stand-in.
+// running the same holdcall binary" stand-in.
 func TestHelperProcessDialAndBlock(t *testing.T) {
-	if os.Getenv("NIM_PEER_TEST_HELPER") != "1" {
+	if os.Getenv("HOLDCALL_PEER_TEST_HELPER") != "1" {
 		t.Skip("not invoked as a helper process")
 	}
 	path := os.Args[len(os.Args)-1]

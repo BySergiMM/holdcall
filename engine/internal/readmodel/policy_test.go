@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/BySergiMM/nim/engine/internal/journal"
-	"github.com/BySergiMM/nim/engine/internal/peer"
+	"github.com/BySergiMM/holdcall/engine/internal/journal"
+	"github.com/BySergiMM/holdcall/engine/internal/peer"
 )
 
 // anExecutable writes a file that looks enough like a program to be enrolled,
@@ -52,7 +52,7 @@ func TestAFreshEnrolmentReadsAsCurrent(t *testing.T) {
 // An enrolment whose file has been replaced must read as stale, not fail and
 // not silently follow the new file -- the same property
 // daemon.TestAReplacedFileIsReportedStaleRatherThanFailing establishes for
-// `nim agent list`, which this must agree with since both compute it the
+// `holdcall agent list`, which this must agree with since both compute it the
 // same way.
 func TestAReplacedFileReadsAsStale(t *testing.T) {
 	if !peer.FileIdentitySupported {
@@ -236,8 +236,8 @@ func TestTakePolicyReportsAReadFailure(t *testing.T) {
 }
 
 // A budget reaches the reader with its scope and its cap, copied, in the
-// order the journal lists them. Found missing by the M5 review: nim policy
-// list showed budgets while nim status and the console, which read this
+// order the journal lists them. Found missing by the M5 review: holdcall policy
+// list showed budgets while holdcall status and the console, which read this
 // projection, showed a session as unbounded that was not.
 func TestTakePolicyProjectsBudgets(t *testing.T) {
 	agent := "claude-code"

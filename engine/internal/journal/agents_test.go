@@ -12,7 +12,7 @@ import (
 // that the chain does not know about. Removing a name that was never
 // enrolled writes nothing -- the "none" case RemoveRule has for a rule that
 // is not there, except an enrolment removal is not an error: the daemon's
-// handler relies on that to keep `nim agent remove` idempotent.
+// handler relies on that to keep `holdcall agent remove` idempotent.
 func TestAnEnrolmentAndItsEntryAreOneChange(t *testing.T) {
 	j, _ := openTemp(t)
 	before := chainLength(t, j)

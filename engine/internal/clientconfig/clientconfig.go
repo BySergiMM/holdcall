@@ -1,10 +1,10 @@
 // Package clientconfig rewrites MCP client configuration files so every
-// stdio server they spawn goes through Nim instead.
+// stdio server they spawn goes through Holdcall instead.
 //
 // It is the one place that knows where each client keeps its configuration
-// and what an entry inside it looks like. `nim init` uses it to change those
-// files, and `nim doctor` uses the same read path to report on them, so the
-// two commands can never disagree about what "through Nim" means.
+// and what an entry inside it looks like. `holdcall init` uses it to change those
+// files, and `holdcall doctor` uses the same read path to report on them, so the
+// two commands can never disagree about what "through Holdcall" means.
 package clientconfig
 
 import (
@@ -14,14 +14,14 @@ import (
 )
 
 // Client identifiers, used both to select which files Discover looks at and
-// as the --client label nim init writes into a rewritten entry's args.
+// as the --client label holdcall init writes into a rewritten entry's args.
 const (
 	ClaudeCode    = "claude-code"
 	Cursor        = "cursor"
 	ClaudeDesktop = "claude-desktop"
 )
 
-// AllClients is every client Nim knows how to configure, in the order they
+// AllClients is every client Holdcall knows how to configure, in the order they
 // are checked and reported.
 var AllClients = []string{ClaudeCode, Cursor, ClaudeDesktop}
 
@@ -35,14 +35,14 @@ const (
 	KindClaudeCode                 // top-level "mcpServers" plus "projects.<path>.mcpServers"
 )
 
-// File is one JSON file nim init or nim doctor looks at.
+// File is one JSON file holdcall init or holdcall doctor looks at.
 type File struct {
 	Client string
 	Path   string
 	Kind   FileKind
 }
 
-// Discover lists the files nim init would look at.
+// Discover lists the files holdcall init would look at.
 //
 // clientFilter, when non-empty, restricts this to one client. configOverride
 // replaces that one client's primary file and requires clientFilter to be

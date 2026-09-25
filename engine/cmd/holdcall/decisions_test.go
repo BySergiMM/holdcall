@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/BySergiMM/nim/engine/internal/console"
-	"github.com/BySergiMM/nim/engine/internal/journal"
-	"github.com/BySergiMM/nim/engine/internal/readmodel"
+	"github.com/BySergiMM/holdcall/engine/internal/console"
+	"github.com/BySergiMM/holdcall/engine/internal/journal"
+	"github.com/BySergiMM/holdcall/engine/internal/readmodel"
 )
 
 // decided builds a journal with everything a reader has to tell apart: an
@@ -17,7 +17,7 @@ import (
 // call from before decisions existed.
 func decided(t *testing.T) (*journal.Journal, string) {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "nim.db")
+	path := filepath.Join(t.TempDir(), "holdcall.db")
 
 	w, err := journal.Open(path, "test-machine")
 	if err != nil {
@@ -82,12 +82,12 @@ func TestDecisionsAreNotLosses(t *testing.T) {
 	}
 }
 
-// Every call reads as the same thing in `nim log` and in the console, because
+// Every call reads as the same thing in `holdcall log` and in the console, because
 // both ask the same function. This is the test that keeps them from drifting.
 func TestCLIAndConsoleAgreeOnEveryCallState(t *testing.T) {
 	j, _ := decided(t)
 
-	// What `nim log` derives, from the row the CLI reads.
+	// What `holdcall log` derives, from the row the CLI reads.
 	calls, err := j.RecentCalls(50)
 	if err != nil {
 		t.Fatal(err)
@@ -169,7 +169,7 @@ func TestCLIAndConsoleAgreeOnEveryCallState(t *testing.T) {
 // say "observed", which means nothing was decided -- and the relay forwarded
 // them anyway, so they read like allowances.
 func TestAJournalFromBeforeEnforcementStillReads(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "nim.db")
+	path := filepath.Join(t.TempDir(), "holdcall.db")
 	w, err := journal.Open(path, "test-machine")
 	if err != nil {
 		t.Fatal(err)

@@ -49,7 +49,7 @@ type VerifyReport struct {
 // is for: everything up to that point is intact, because each entry's hash
 // commits to its predecessor.
 //
-// What Verify does not detect: an attacker who can write to nim.db can also
+// What Verify does not detect: an attacker who can write to holdcall.db can also
 // recompute every hash from the genesis onwards, and the result verifies
 // cleanly. Nothing in the chain is secret, so there is nothing they lack. Only
 // a head recorded elsewhere, or a journal owned by another OS user, closes

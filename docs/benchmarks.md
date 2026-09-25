@@ -40,7 +40,7 @@ The whole round trip a relay blocks on: write `call.request` to the socket,
 look the call up in the rules table, append the chained entry to SQLite **and
 commit it**, write the decision back, read it. The journal write is included
 deliberately — the entry is durable before the answer is sent, and excluding it
-would measure something Nim never does.
+would measure something Holdcall never does.
 
 | Benchmark | p50 | p95 | p99 | max |
 |---|---|---|---|---|
@@ -91,8 +91,8 @@ part; for an indexed exact-name lookup they must not, and they do not.
 
 Measured at the handler, so it excludes the OS credential store. That is
 deliberate: a Keychain or Secret Service read is the operating system's cost,
-not Nim's, and it varies with whether the keychain is unlocked. What this says
-is that Nim's own part of a credential lookup is free next to everything else.
+not Holdcall's, and it varies with whether the keychain is unlocked. What this says
+is that Holdcall's own part of a credential lookup is free next to everything else.
 
 ## Journal
 
@@ -109,7 +109,7 @@ argument about the chain being expensive should start here.
 
 **Verification stays cheap but grows.** 2000 entries in 3.2 ms is roughly
 1.6 µs per entry, and it is linear: a million-entry journal is about 1.6 s.
-That is fine for `nim verify` on demand and would not be fine on every write,
+That is fine for `holdcall verify` on demand and would not be fine on every write,
 which is why nothing verifies on the write path.
 
 ## Relay — the invisibility budget
@@ -133,7 +133,7 @@ object is read key by key, refusing a key that appears twice, instead of one
 tools/call is the only message that pays it, it is paid once, and it is a
 fraction of the journal commit that follows.
 
-**The digest is the size-proportional cost.** Nothing else Nim does per call
+**The digest is the size-proportional cost.** Nothing else Holdcall does per call
 scales with payload size — messages are never re-serialised, only inspected —
 so `ArgumentsDigest` is the floor for a large `tools/call`, and it runs at
 roughly SHA-256's own speed.

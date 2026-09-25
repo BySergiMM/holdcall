@@ -1,7 +1,7 @@
 package daemon
 
 // Human approval (M6): a call whose winning rule is ask is held here, in
-// memory only, until a human decides it with nim approve/nim reject, the
+// memory only, until a human decides it with holdcall approve/holdcall reject, the
 // approval timer runs out, or its session ends first. Nothing about a held
 // call -- not even that it happened -- reaches the journal until one of
 // those settles it, and its real arguments never reach the journal at all:
@@ -18,7 +18,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/BySergiMM/nim/engine/internal/journal"
+	"github.com/BySergiMM/holdcall/engine/internal/journal"
 )
 
 // pendingCall is one call on hold. Every field but Arguments and the
@@ -56,7 +56,7 @@ type pendingCall struct {
 	timer          *time.Timer
 }
 
-// id is the string nim approve lists a call under and nim approve/reject
+// id is the string holdcall approve lists a call under and holdcall approve/reject
 // takes back: session and seq are already how call.request and
 // call.outcome correlate, so this reuses that rather than minting a second
 // name for the same call.
@@ -84,14 +84,14 @@ func (p *pendingCall) getArguments() (json.RawMessage, bool) {
 }
 
 // errAlreadyResolved means a call's decision was already made by whichever
-// of nim reject/approve, the approval timer or a session ending got there
+// of holdcall reject/approve, the approval timer or a session ending got there
 // first. The others are not errors from the operator's point of view -- the
 // call was decided, which is what they wanted -- but resolve still reports
 // it so a caller like handleApprovalDecide can say so.
 var errAlreadyResolved = errors.New("that call was already decided")
 
 // pendingRegistry is the daemon-wide set of calls currently held for a
-// human -- nim approve's whole view of the world, and the only place any of
+// human -- holdcall approve's whole view of the world, and the only place any of
 // this lives. It is never written to SQLite; only the eventual decision is,
 // through resolve.
 type pendingRegistry struct {
@@ -114,7 +114,7 @@ func (reg *pendingRegistry) hold(p *pendingCall) {
 }
 
 // arm starts the daemon-side clock on p: if nobody decides it within
-// timeout, it is rejected and journaled exactly as an explicit nim reject
+// timeout, it is rejected and journaled exactly as an explicit holdcall reject
 // would be, with its own reason -- so the journal never ends up holding a
 // call that was neither approved nor rejected, whether or not a relay is
 // still there to hear the answer.
@@ -142,7 +142,7 @@ func (reg *pendingRegistry) setArguments(sessionID string, seq int, arguments js
 	p.setArguments(arguments)
 }
 
-// get looks up a held call by the id nim approve showed for it.
+// get looks up a held call by the id holdcall approve showed for it.
 func (reg *pendingRegistry) get(id string) (*pendingCall, bool) {
 	reg.mu.Lock()
 	defer reg.mu.Unlock()
@@ -150,7 +150,7 @@ func (reg *pendingRegistry) get(id string) (*pendingCall, bool) {
 	return p, ok
 }
 
-// list returns every call still held, oldest first -- the order nim approve
+// list returns every call still held, oldest first -- the order holdcall approve
 // shows them in, so the one an operator is most overdue to look at is
 // always on top.
 func (reg *pendingRegistry) list() []*pendingCall {
@@ -252,7 +252,7 @@ func (reg *pendingRegistry) rejectSession(sessionID string, j *journal.Journal) 
 	}
 }
 
-// handleApprovalList answers nim approve with no argument: every call
+// handleApprovalList answers holdcall approve with no argument: every call
 // currently held, with its real arguments -- never a summary, never
 // something a model wrote. docs/decisions/0005-human-approval.md is why
 // that is the whole point.
@@ -265,7 +265,7 @@ func handleApprovalList(req Request, approvals *pendingRegistry) Response {
 	return Response{ID: req.ID, Pending: infos}
 }
 
-// handleApprovalDecide answers nim approve <id> and nim reject <id>
+// handleApprovalDecide answers holdcall approve <id> and holdcall reject <id>
 // [--reason]. The human's reason, if any, is logged here and returned in
 // this Response for the CLI to print -- and goes nowhere else: not the
 // journal, not the client the call came from. See Request.ApprovalReason.
@@ -278,7 +278,7 @@ func handleApprovalDecide(req Request, approvals *pendingRegistry, j *journal.Jo
 	p, ok := approvals.get(req.ApprovalID)
 	if !ok {
 		return Response{ID: req.ID, Error: fmt.Sprintf(
-			"no call is held under %q -- nim approve lists what is, and a call leaves that list "+
+			"no call is held under %q -- holdcall approve lists what is, and a call leaves that list "+
 				"once it is decided or its wait runs out", req.ApprovalID)}
 	}
 	info := pendingInfo(p)
@@ -290,7 +290,7 @@ func handleApprovalDecide(req Request, approvals *pendingRegistry, j *journal.Jo
 	if req.ApprovalDecision == journal.DecisionApproved && !info.ArgumentsKnown {
 		return Response{ID: req.ID, Error: fmt.Sprintf(
 			"the arguments of %s have not reached the daemon yet, so there is nothing to approve; "+
-				"run nim approve again in a moment, or nim reject %s", req.ApprovalID, req.ApprovalID)}
+				"run holdcall approve again in a moment, or holdcall reject %s", req.ApprovalID, req.ApprovalID)}
 	}
 
 	reason := "a human approved this call"

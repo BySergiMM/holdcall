@@ -1,11 +1,11 @@
--- Applied to project rsysotrzwipxosuwndux (shared; Nim is a tenant there).
+-- Applied to project rsysotrzwipxosuwndux (shared; Holdcall is a tenant there).
 --
 -- The journal became append-only and hash-chained, so the mirror follows: one
 -- table of immutable entries, with nim_sessions and nim_calls as views over it.
 -- A call is two entries -- request and outcome -- because a row that gets
 -- updated cannot be part of a chain.
 --
--- Still a READ MIRROR. Nim decides locally and always; nothing here
+-- Still a READ MIRROR. Holdcall decides locally and always; nothing here
 -- participates in an authorization decision.
 -- Contract: never credentials, never call parameters, never response bodies.
 --
@@ -55,7 +55,7 @@ create table if not exists public.nim_journal (
 );
 
 comment on table  public.nim_journal is
-    'Nim: append-only, hash-chained record of what agents did, mirrored from the local journal.';
+    'Holdcall: append-only, hash-chained record of what agents did, mirrored from the local journal.';
 comment on column public.nim_journal.machine_id is
     'Opaque per-install id. Not a user, not a hostname. Also seeds the chain, so it scopes the primary key.';
 comment on column public.nim_journal.params_digest is

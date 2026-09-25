@@ -29,8 +29,8 @@ func TestWindowsReportsUnsupportedRatherThanAnEmptyIdentity(t *testing.T) {
 
 // Windows has no launch-path lookup at all (see ExecPathOf above), so a
 // diagnosis can never come back SameLaunchPathOlderBuild there. Reporting
-// that without a real basis would send an operator to `nim daemon restart`
-// a process that was never confirmed to be Nim at all -- unsupported must
+// that without a real basis would send an operator to `holdcall daemon restart`
+// a process that was never confirmed to be Holdcall at all -- unsupported must
 // stay unsupported, the same rule every other check in this package holds
 // to.
 func TestWindowsDiagnoseIsAlwaysUnavailable(t *testing.T) {

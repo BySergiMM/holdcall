@@ -15,7 +15,7 @@ guarantee than the one asked for.
 
 ## What a session is
 
-One relay run: `session.start` to `session.end`. Nim already has this unit --
+One relay run: `session.start` to `session.end`. Holdcall already has this unit --
 it is what `agent` and `connector` are properties of, and what every
 `call.request` is numbered within. A budget reuses it rather than inventing a
 second notion of "a client's use of a tool," because a second notion would
@@ -41,7 +41,7 @@ other.** `CountAllowedCalls` (`internal/journal/budgets.go`) filters on
 deny, or this same budget's own cap, arrives at its sixth call having spent
 nothing. The alternative -- counting attempts regardless of decision -- would
 make a budget and a rate limit the same thing, and they are not: a budget
-caps how much a session may *do*, and a call Nim refused is something the
+caps how much a session may *do*, and a call Holdcall refused is something the
 session was prevented from doing.
 
 **A call the relay gave up on before forwarding still counts.** The relay's
@@ -58,14 +58,14 @@ policy gap, not merely an accounting one.
 
 **Decremented at authorization time, not execution time, is therefore not a
 choice between two ways to count the same thing -- it is the only choice
-available.** Nim has no signal for "the connector actually ran this and
-returned," only "Nim decided to let it through." `call.outcome` records
+available.** Holdcall has no signal for "the connector actually ran this and
+returned," only "Holdcall decided to let it through." `call.outcome` records
 whether a call finished and how, but a denied call has no outcome and an
 allowed one may never get one if the relay gives up waiting, so outcomes
 cannot be what a budget is weighed against without also solving the pending-call
 problem the M2 guarantee is explicit about not solving. Counting decisions is
 what "per session, decremented at authorization time" was always going to
-mean, once a session and a decision are the only two things Nim reliably
+mean, once a session and a decision are the only two things Holdcall reliably
 knows about a call.
 
 ## Why the check runs where it does, and not somewhere else
@@ -122,16 +122,16 @@ it, which is exactly what a schema version exists to prevent. `nim_journal`'s
 opens a database built exactly as the pre-M5 code left it and checks the
 chain out unchanged before and after).
 
-## What `nim policy explain` says about a budget, and what it does not
+## What `holdcall policy explain` says about a budget, and what it does not
 
-`nim policy explain <tool> [--agent] [--connector]` lists every budget whose
+`holdcall policy explain <tool> [--agent] [--connector]` lists every budget whose
 scope matches the call it describes, and each one's cap. It does not say how
 much of that cap a session has already used, because `explain` is not given a
 session -- it answers "what would apply to a call shaped like this," the same
 question it has always answered for rules, and a session's count is not part
 of that shape. Inventing one (an empty count, or the busiest recent session's
 count, or anything else) would be a guess dressed up as an answer, and worse
-than saying nothing: an operator who reads a number from `nim policy explain`
+than saying nothing: an operator who reads a number from `holdcall policy explain`
 reasonably expects it to be true of the call they are about to make, not an
 average across every session that ever asked. `checkBudgets`, the daemon's
 own counting, is the only place a real count is computed, and it is computed

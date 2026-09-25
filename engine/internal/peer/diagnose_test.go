@@ -17,8 +17,8 @@ import (
 
 // A peer launched from our own path, but running a different file, must be
 // told apart from a peer that is simply a different program somewhere else.
-// This is the distinction `nim daemon restart`'s remedy depends on: telling
-// an operator to restart Nim is only right in the first case, and the F-001
+// This is the distinction `holdcall daemon restart`'s remedy depends on: telling
+// an operator to restart Holdcall is only right in the first case, and the F-001
 // fix is worthless if the two ever compare equal.
 func TestDiagnoseTellsASamePathRebuildApartFromADifferentProgram(t *testing.T) {
 	cmd := exec.Command(sleepProgram, "30")
@@ -56,7 +56,7 @@ func TestDiagnoseTellsASamePathRebuildApartFromADifferentProgram(t *testing.T) {
 
 // A pid that has already exited cannot be diagnosed at all, and must never
 // be reported as SameLaunchPathOlderBuild: that would send an operator to
-// `nim daemon restart` a process that was never there, let alone Nim.
+// `holdcall daemon restart` a process that was never there, let alone Holdcall.
 func TestDiagnoseIsUnavailableForAPidThatHasExited(t *testing.T) {
 	cmd := exec.Command(sleepProgram, "30")
 	if err := cmd.Start(); err != nil {

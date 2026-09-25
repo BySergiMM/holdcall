@@ -5,10 +5,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/BySergiMM/nim/engine/internal/mcp"
+	"github.com/BySergiMM/holdcall/engine/internal/mcp"
 )
 
-// resultTypeOf reads result.resultType from a line Nim wrote, "" when absent.
+// resultTypeOf reads result.resultType from a line Holdcall wrote, "" when absent.
 func resultTypeOf(t *testing.T, line []byte) string {
 	t.Helper()
 	var got struct {
@@ -17,7 +17,7 @@ func resultTypeOf(t *testing.T, line []byte) string {
 		} `json:"result"`
 	}
 	if err := json.Unmarshal(line, &got); err != nil {
-		t.Fatalf("what Nim sent the client is not valid JSON: %v\n%s", err, line)
+		t.Fatalf("what Holdcall sent the client is not valid JSON: %v\n%s", err, line)
 	}
 	return got.Result.ResultType
 }
@@ -26,7 +26,7 @@ func lastLine(t *testing.T, out string) []byte {
 	t.Helper()
 	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
 	if len(lines) == 0 || lines[0] == "" {
-		t.Fatal("Nim wrote nothing to the client")
+		t.Fatal("Holdcall wrote nothing to the client")
 	}
 	return []byte(lines[len(lines)-1])
 }

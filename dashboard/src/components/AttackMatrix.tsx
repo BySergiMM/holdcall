@@ -6,7 +6,7 @@ import { state, tone, label } from "@/lib/state";
 const ORDER = { fail: 0, not_tested: 1, partial: 2, pass: 3, not_applicable: 4 } as const;
 
 /**
- * The BREAK NIM matrix.
+ * The BREAK HOLDCALL matrix.
  *
  * Sorted worst-first by default, and it stays that way: an attack table that
  * opens on its successes is a marketing page. The filter can hide rows, so the

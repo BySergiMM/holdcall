@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/BySergiMM/nim/engine/internal/journal"
+	"github.com/BySergiMM/holdcall/engine/internal/journal"
 )
 
 // An empty journal has not been checked. Reporting it as sound would put it on

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/BySergiMM/nim/engine/internal/journal"
+	"github.com/BySergiMM/holdcall/engine/internal/journal"
 )
 
 // anExecutable writes a file that looks enough like a program to be enrolled,
@@ -373,7 +373,7 @@ func TestASecondNameForOneExecutableIsRefusedNamingTheFirst(t *testing.T) {
 	if resp.Error == "" {
 		t.Fatal("a second name for the same executable was accepted")
 	}
-	if !strings.Contains(resp.Error, "claude-code") || !strings.Contains(resp.Error, "nim agent remove") {
+	if !strings.Contains(resp.Error, "claude-code") || !strings.Contains(resp.Error, "holdcall agent remove") {
 		t.Fatalf("the refusal does not say whose enrolment is in the way or what to do: %q", resp.Error)
 	}
 	if agents, _ := j.ListAgents(); len(agents) != 1 || agents[0].Name != "claude-code" {

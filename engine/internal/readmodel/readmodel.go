@@ -1,7 +1,7 @@
 // Package readmodel projects the journal into the shape things that read it
 // want, and holds no state of its own.
 //
-// Nim is the source of truth. Everything here is a function of the journal at a
+// Holdcall is the source of truth. Everything here is a function of the journal at a
 // given cursor: nothing is cached, nothing is accumulated, and there is no
 // second copy of the record to drift from the first. A reader that disappears
 // changes nothing, and one that comes back reads the same answers.
@@ -12,7 +12,7 @@
 // one, so it gets its own shape.
 package readmodel
 
-import "github.com/BySergiMM/nim/engine/internal/journal"
+import "github.com/BySergiMM/holdcall/engine/internal/journal"
 
 // The interfaces below are named after projections, not after storage, and each
 // one is what a single projection needs and no more.
@@ -113,7 +113,7 @@ type Event struct {
 	// session.start, and the scope of a rule on rule.add and rule.remove. It
 	// is hashed like every other field, so a reader recomputing an entry's
 	// hash from this projection needs it; it was missing for a while, which
-	// made `nim log --json` an incomplete account of a v2 entry.
+	// made `holdcall log --json` an incomplete account of a v2 entry.
 	//
 	// On agent.add and agent.remove it is instead the enrolment's name.
 	Agent *string `json:"agent,omitempty"`

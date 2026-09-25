@@ -4,7 +4,7 @@ Status: accepted, m1-bootstrap, 2026-09-15. This is M6 on the dashboard.
 
 ## The question
 
-`nim policy deny` and `nim policy allow` are both decided by a rule, in
+`holdcall policy deny` and `holdcall policy allow` are both decided by a rule, in
 advance, with nothing about the call itself ever read. That is the right
 shape for "this tool is always fine" and "this tool is never fine" -- but
 some calls are neither: safe most of the time, and worth a person's eyes
@@ -17,7 +17,7 @@ counts as that human.
 
 ## What the human sees, and why it is the real parameters
 
-`nim approve` prints a held call's exact `params.arguments`, pretty-printed,
+`holdcall approve` prints a held call's exact `params.arguments`, pretty-printed,
 never a summary and never anything the model that asked for the call wrote
 about itself. `docs/milestones.md` stated this as the requirement before any
 of it was built: "never a model-generated summary." The reason is the threat
@@ -30,19 +30,19 @@ call from one whose real arguments are `{"to":
 ..."}`, and a model motivated to get the call through has every reason to
 write the first sentence about the second call. The only text a human can
 trust here is the bytes the server would actually receive, which is why the
-daemon holds those bytes in memory and `nim approve` prints them verbatim.
+daemon holds those bytes in memory and `holdcall approve` prints them verbatim.
 
 Nothing else about the call is asked for. Tool, agent, connector and age are
-shown alongside the arguments because they are what the rest of `nim log`
-and `nim policy explain` already show for any call; none of it is
+shown alongside the arguments because they are what the rest of `holdcall log`
+and `holdcall policy explain` already show for any call; none of it is
 interpreted or reworded on the way to the terminal.
 
 ## Who may approve, and what that does and does not defend against
 
-**Anyone who can run `nim` as this user.** There is no separate approver
+**Anyone who can run `holdcall` as this user.** There is no separate approver
 identity, no second credential, no session tied to a particular terminal.
-`nim approve <id>` from any shell that can reach the daemon's socket decides
-the call, exactly as `nim policy deny` can already be run by anyone who can
+`holdcall approve <id>` from any shell that can reach the daemon's socket decides
+the call, exactly as `holdcall policy deny` can already be run by anyone who can
 run the binary.
 
 Say plainly what this means: **approval defends against the model driving
@@ -72,9 +72,9 @@ the daemon and the relay from the same `config.Config`) bounds how long a
 held call waits. Two clocks, not one, both fail toward denial:
 
 - **The daemon's own timer**, armed the instant a call starts being held, is
-  the one that actually decides: if nobody calls `nim approve`/`nim reject`
+  the one that actually decides: if nobody calls `holdcall approve`/`holdcall reject`
   before it fires, it rejects the call itself -- the same `call.request`
-  entry, decision `rejected`, that an explicit `nim reject` would write --
+  entry, decision `rejected`, that an explicit `holdcall reject` would write --
   and tells the relay so, unasked.
 - **The relay's own wait**, on the same connection, is a backstop rather
   than the primary mechanism: it is armed for the same duration, started a
@@ -95,7 +95,7 @@ that -- reject, journaled, recorded like any other decision.
 
 The client is told which kind of refusal it got. `mcp.DeniedByHuman`
 ("a human reviewing this call's real arguments rejected it") is what an
-explicit `nim reject` or the daemon's own timeout both answer with, because
+explicit `holdcall reject` or the daemon's own timeout both answer with, because
 from the calling agent's side both mean the same thing: this specific call
 did not clear the hold. `mcp.DeniedApprovalTimedOut` is reserved for the
 relay's own local backstop -- a distinct sentence for a distinct failure,
@@ -139,10 +139,10 @@ state this daemon holds is already documented to be lost that way.
 No conditions read `params.arguments` to decide whether to ask automatically
 -- a rule is still keyed on `(agent, connector, tool)`, and `ask` is a fourth
 value that column can hold, not a new kind of matching. No queueing or
-notification beyond `nim approve` listing what is held: an operator has to
+notification beyond `holdcall approve` listing what is held: an operator has to
 run it to find out anything is waiting. No delegation -- there is no way to
-name who besides "anyone who can run nim" may decide a held call, because
-Nim has no notion of a second identity to delegate to. Those would each need
+name who besides "anyone who can run holdcall" may decide a held call, because
+Holdcall has no notion of a second identity to delegate to. Those would each need
 a subject this milestone does not have, the same argument
 `docs/decisions/0003`'s closing section makes about conditions, time bounds
 and budgets.
@@ -152,26 +152,26 @@ and budgets.
 Review of the merged implementation found a gap between the design and the
 code. The daemon holds a call the moment an `ask` rule wins and answers
 `pending`; the relay's `call.arguments` event follows on the same
-connection a moment later. `nim approve <id>` reaches the daemon on a
+connection a moment later. `holdcall approve <id>` reaches the daemon on a
 different connection, and nothing tied the two together: an approval sent in
 that moment was recorded, journaled and forwarded with the daemon never
-having held a byte of what was approved, and `nim approve` showed such a
+having held a byte of what was approved, and `holdcall approve` showed such a
 call exactly as it shows one that carries no arguments -- `(none)`.
 
 Two changes close it. A held call now records whether the relay has
 reported its arguments, separately from what they are, and an *approve* is
-refused until it has, in words that say to run `nim approve` again; a
+refused until it has, in words that say to run `holdcall approve` again; a
 *reject* goes through regardless, because refusing what was not seen is the
 safe direction. And the first report is the one: a second `call.arguments`
 for the same call is ignored rather than replacing what a human may already
-have read, so the bytes shown are the bytes approved. `nim approve` says
+have read, so the bytes shown are the bytes approved. `holdcall approve` says
 "not received from the relay yet" for the one state and "(none)" for the
 other.
 
 What this does not change: the window itself. The relay sends the report
 immediately after reading `pending`, so under a human's hands it is closed
-before `nim approve` can be typed. It mattered for anything scripted on top
-of `nim approve`, and for the guarantee's wording: the only text a human can
+before `holdcall approve` can be typed. It mattered for anything scripted on top
+of `holdcall approve`, and for the guarantee's wording: the only text a human can
 trust is the bytes the server would receive, and now nothing can be approved
 before those bytes exist on the daemon's side.
 

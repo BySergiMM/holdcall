@@ -1,10 +1,10 @@
 # Security posture
 
-What Nim protects, what it does not, and what has actually been tried against
+What Holdcall protects, what it does not, and what has actually been tried against
 it. Every attack below was run against a real build; none is theoretical.
 
 Read `docs/journal-format.md` for the record's own limits and
-`docs/decisions/0001-failure-behaviour.md` for what happens when Nim cannot
+`docs/decisions/0001-failure-behaviour.md` for what happens when Holdcall cannot
 decide.
 
 ## The guarantee
@@ -20,7 +20,7 @@ Such a call reads as `pending`, never as executed.
 ## Threat model
 
 The adversary is **a downstream MCP server**: code the operator did not write,
-running as the same user, spawned by Nim itself. Everything below is written
+running as the same user, spawned by Holdcall itself. Everything below is written
 against that.
 
 **Human approval (M6) is written against a second adversary: the model
@@ -28,13 +28,13 @@ driving the client**, not only the server on the other side of a call. An
 `ask` rule exists because the operator does not trust a call's own
 arguments to be decided by policy alone, and the thing that produces those
 arguments -- picks the tool, writes the parameters, and would write a
-summary of them if `nim approve` showed one -- is the model, not the
+summary of them if `holdcall approve` showed one -- is the model, not the
 server. `docs/decisions/0005-human-approval.md` is the argument in full;
-the short form is that `nim approve` prints the real `params.arguments`
+the short form is that `holdcall approve` prints the real `params.arguments`
 because a model motivated to get a dangerous call approved has every reason
 to describe it as something else. **The human operator is trusted, in this
 model as in the base one.** Approval defends against the model choosing to
-ask for something it should not, not against the person running `nim`
+ask for something it should not, not against the person running `holdcall`
 choosing to approve it anyway -- that is the operator doing what they are
 entitled to do with a machine they run as themselves, the same boundary
 "a user who reconfigures their client" already draws below.
@@ -42,14 +42,14 @@ entitled to do with a machine they run as themselves, the same boundary
 Not in the model, and worth being explicit about:
 
 - **A user who reconfigures their client.** Nothing stops a client being
-  pointed straight at an MCP server instead of at Nim. No in-process shim can
-  stop that. Nim's guarantee is about calls that go through it; making
-  connectors unreachable except through Nim needs a network or sandbox
+  pointed straight at an MCP server instead of at Holdcall. No in-process shim can
+  stop that. Holdcall's guarantee is about calls that go through it; making
+  connectors unreachable except through Holdcall needs a network or sandbox
   boundary.
 - **Root, or another user with debugger access to the daemon.**
-- **A local attacker who can write to `nim.db`.** The chain is unkeyed —
+- **A local attacker who can write to `holdcall.db`.** The chain is unkeyed —
   nothing in it is secret, so anyone able to edit a row can recompute every
-  hash from the genesis and the result verifies cleanly. `nim verify
+  hash from the genesis and the result verifies cleanly. `holdcall verify
   --expect-head <hash>` is the only thing that catches it, and only for what
   was committed before the head you recorded.
 
@@ -67,13 +67,13 @@ whether the answer describes a **running image** or a **filename**.
 
 Both unix implementations previously stat'ed a *path* (`kern.procargs2` on
 darwin, `readlink /proc/<pid>/exe` on linux) and were defeated with no race at
-all: launch from a path you own, replace the file there with a link to the nim
+all: launch from a path you own, replace the file there with a link to the holdcall
 binary, then connect. `internal/peer/pathswap_test.go` is that attack, and it
 runs on both platforms.
 
 **What this is not.** It is executable identity, kernel-provided — not
 code-signing identity. It says nothing about who signed a binary, and a
-rebuild of Nim is a different inode and therefore a different program as far as
+rebuild of Holdcall is a different inode and therefore a different program as far as
 this is concerned. It also does not distinguish two processes running the same
 file, which is why session ownership exists.
 
@@ -87,7 +87,7 @@ changes is the diagnosis. `peer.Diagnose` tells that specific shape — the
 peer's launch path is exactly our own, only the file differs — apart from an
 unrelated impostor at a different path, so the daemon's log and every
 client's refusal can say "older build, restart it" instead of the generic
-"not Nim". `nim daemon restart` is that restart, sent by signal because the
+"not Holdcall". `holdcall daemon restart` is that restart, sent by signal because the
 socket itself is exactly what an older build cannot answer for a new client.
 
 **Darwin specifics.** `PROC_PIDREGIONPATHINFO` at address 0 returns the
@@ -112,9 +112,9 @@ needed: the vnode check answers the question actually being asked.
 | # | Attack | Result | Covered by |
 |---|---|---|---|
 | 1 | Name a connector, supply your own command, read the credential | **blocked** | `credential_binding_test.go`, `spawn_test.go` |
-| 2 | Ask for a credential from a process that is not Nim | **blocked** | `peer_authz_test.go` |
-| 3 | Write forged entries to the journal from a non-Nim process | **blocked** | `peer_authz_test.go` |
-| 4 | Obtain a decision from a non-Nim process | **blocked** | `peer_authz_test.go` |
+| 2 | Ask for a credential from a process that is not Holdcall | **blocked** | `peer_authz_test.go` |
+| 3 | Write forged entries to the journal from a non-Holdcall process | **blocked** | `peer_authz_test.go` |
+| 4 | Obtain a decision from a non-Holdcall process | **blocked** | `peer_authz_test.go` |
 | 5 | Report calls under a session another connection opened | **blocked** | `peer_authz_test.go` |
 | 6 | Bind the socket first and impersonate the daemon | **blocked** | `impostor_test.go` |
 | 7 | As the impostor, choose the command a credential is injected into | **blocked** | `impostor_test.go` |
@@ -133,16 +133,16 @@ needed: the vnode check answers the question actually being asked.
 | 20 | Smuggle a `tools/call` behind a repeated or case-variant JSON key | **blocked** (refused, anomaly recorded) | `mcp_test.go`, `enforce_test.go` |
 | 21 | Name one tool to the daemon and another to the server | **blocked** (exact keys; unreadable call refused) | `enforce_test.go` |
 | 22 | Start a session under an id another connection opened | **blocked** (daemon-wide, for all time) | `decide_test.go` |
-| 23 | Bind the socket first and receive the secret from `nim connector set` | **blocked** | `impostor_test.go` |
+| 23 | Bind the socket first and receive the secret from `holdcall connector set` | **blocked** | `impostor_test.go` |
 | 24 | Change the rules by editing `config.toml` | **blocked** (file refused) | `config_test.go`, `e2e_test.go` |
 | 25 | Change the rules without a journal entry | **blocked** (one transaction) | `rules_test.go` |
 | 26 | Read the console from another site through DNS rebinding | **blocked** (loopback Host only) | `console_test.go` |
 | 27 | Leave a connector running after the relay is asked to stop | **blocked** for SIGTERM/SIGINT; SIGKILL still open | `e2e_test.go` |
 | 28 | Enrol a second name against the operator's client binary, then wait for a re-enrolment | **blocked** (one executable is one agent) | `agents_test.go`, `agent_test.go` |
-| 29 | Read a secret from `nim init`'s own output | **blocked** (env values never shown) | `rewrite_test.go` |
+| 29 | Read a secret from `holdcall init`'s own output | **blocked** (env values never shown) | `rewrite_test.go` |
 | 30 | Read a connector's secret through the console | **blocked** (none is there to read) | `console_test.go` |
-| 31 | Speak the newer `server/discover` handshake so the client cannot parse Nim's refusals | **blocked** (refusals follow the negotiated dialect) | `dialect_test.go`, `deny_test.go`, `tools/relay-rig` |
-| 32 | Approve your own call from the model | **blocked only by circumstance, stated honestly rather than claimed further**: peer identity refuses anything that is not the `nim` binary, so a model that cannot execute commands has no way to reach `nim approve` at all -- but a model with shell access, which many agent setups grant, runs `nim approve` exactly as an operator typing it would, and nothing on the socket tells the two apart. See *Threat model* above and `docs/decisions/0005-human-approval.md`. | `peer_authz_test.go` (the peer-identity floor); not closed beyond it |
+| 31 | Speak the newer `server/discover` handshake so the client cannot parse Holdcall's refusals | **blocked** (refusals follow the negotiated dialect) | `dialect_test.go`, `deny_test.go`, `tools/relay-rig` |
+| 32 | Approve your own call from the model | **blocked only by circumstance, stated honestly rather than claimed further**: peer identity refuses anything that is not the `holdcall` binary, so a model that cannot execute commands has no way to reach `holdcall approve` at all -- but a model with shell access, which many agent setups grant, runs `holdcall approve` exactly as an operator typing it would, and nothing on the socket tells the two apart. See *Threat model* above and `docs/decisions/0005-human-approval.md`. | `peer_authz_test.go` (the peer-identity floor); not closed beyond it |
 | 33 | Exhaust a budget, then keep calling | **blocked** (the next allowed call is refused; a budget never grants) | `budget_test.go`, `budget_e2e_test.go` |
 
 Live vulnerabilities found by audit rather than hypotheticals: **1** (any local
@@ -160,7 +160,7 @@ management commands did not, and one of them carries the plaintext secret.
 **28** and **29** were found by the 2026-09-15 review of the merged M4.5 work
 and reproduced in scratch tests before the code shipped: two names could be
 enrolled against one executable with an unordered lookup between them, and
-`nim init`'s dry run printed the env block where client configs keep tokens.
+`holdcall init`'s dry run printed the env block where client configs keep tokens.
 
 The table above is the attacks someone thought of, and `dashboard/data/state.json`
 is the copy the build checks -- every test named there must exist. When the two
@@ -186,7 +186,7 @@ execute the binary passes it. It is verified at accept, while the peer is
 certainly alive, which also closes the pid-reuse window a later check would
 leave.
 
-**Session ownership** stops one run of Nim reporting under another's session.
+**Session ownership** stops one run of Holdcall reporting under another's session.
 Peer identity cannot tell two runs apart; this can.
 
 **The connector's registered command** is what authorizes a credential. Not
@@ -208,7 +208,7 @@ match a call, the most specific wins -- an exact tool over a default, naming
 the agent or the connector over not naming it -- and a tie in specificity
 goes to deny, then ask, then allow; no matching rule at all is allow, the M4
 baseline. One function, `journal.Decide`, is the whole of that precedence,
-table-driven tested and used by both the decision path and `nim policy
+table-driven tested and used by both the decision path and `holdcall policy
 explain`, so what the CLI says a call would get can never drift from what it
 actually gets. docs/decisions/0003-allow-rules-and-precedence.md, and its
 2026-09-15 addendum for `ask`, is the argument. What a rule is worth is
@@ -223,8 +223,8 @@ can never turn a rule's deny into anything else. docs/decisions/0004-budgets.md
 is the argument.
 
 **Human approval** (M6) is what an `ask` rule leads to: the call is held in
-memory, off the model's channel, until a human decides it through `nim
-approve`/`nim reject` or the approval timer rejects it for them. What it
+memory, off the model's channel, until a human decides it through `holdcall
+approve`/`holdcall reject` or the approval timer rejects it for them. What it
 protects is narrower than what the rules above protect, and
 `docs/decisions/0005-human-approval.md` says so directly: it defends
 against *the model* choosing to ask for something dangerous, not against
@@ -233,12 +233,12 @@ never touch SQLite or a log line while the call is held -- `pendingRegistry`
 is memory only -- and the daemon writes the decision before it answers the
 relay, the same ordering every other verdict this project makes already
 keeps. See row 32 in the attack table for what this does not close: nothing
-here tells a human typing `nim approve` apart from a model that has been
+here tells a human typing `holdcall approve` apart from a model that has been
 given a shell.
 
-**Strict reading** of the one message Nim acts on. Objects are read by exact
+**Strict reading** of the one message Holdcall acts on. Objects are read by exact
 key and a repeated key is refused, because that is the one shape on which
-parsers legitimately disagree, and a `tools/call` Nim cannot read as one tool
+parsers legitimately disagree, and a `tools/call` Holdcall cannot read as one tool
 name is refused before the daemon is asked.
 
 **Fail-closed** covers every way of not getting a decision, including a rule
@@ -279,7 +279,7 @@ The rules are in the chain; what they are scoped to is too.
 
 What it establishes: two different client programs are different agents. What
 it does not: two windows of the same program are the same agent, because they
-run the same file. Enrolment is also as privileged as running Nim -- anything
+run the same file. Enrolment is also as privileged as running Holdcall -- anything
 that can execute this binary as this user can enrol or replace one, exactly as
 it can register a connector.
 
@@ -290,7 +290,7 @@ it can register a connector.
 | **Windows has no peer verification** | high, on Windows | AF_UNIX there exposes no `SO_PEERCRED` equivalent. Needs a named-pipe transport, which reverses a standing decision. Nothing in this project has ever been run on Windows. |
 | **Windows socket directory has no real ACL** | high, on Windows | `os.Chmod` only toggles the read-only attribute. Confidentiality rests on default temp-directory ACLs. |
 | **PATH resolution on the registered command** | medium | The registered argv is spawned through normal PATH lookup, so a caller that already controls PATH can front-run the binary name. Closing it needs process inversion. |
-| **The credential is handed to the connector** | medium | Injected into the downstream's environment, so a compromised connector has its own secret and, on Linux, any same-user process can read `/proc/<pid>/environ`. Nim cannot revoke what it has given away. |
+| **The credential is handed to the connector** | medium | Injected into the downstream's environment, so a compromised connector has its own secret and, on Linux, any same-user process can read `/proc/<pid>/environ`. Holdcall cannot revoke what it has given away. |
 | **The journal is unkeyed** | medium | See the threat model. Only `--expect-head` covers rewriting. |
 | **A relay killed with SIGKILL cannot stop its connector** | low | Only a connector that reads its stdin notices. SIGTERM and SIGINT are handled; nothing can handle SIGKILL. |
 
@@ -298,7 +298,7 @@ it can register a connector.
 rules and a stated precedence between them and deny
 (docs/decisions/0003-allow-rules-and-precedence.md); D-002 is answered again
 there and in docs/decisions/0002's last section. An allow-list per agent is
-now `nim policy default deny` plus `nim policy allow <tool> --agent <name>`,
+now `holdcall policy default deny` plus `holdcall policy allow <tool> --agent <name>`,
 and an unenrolled program is denied by the default rule rather than merely
 unprivileged by an absent one.
 

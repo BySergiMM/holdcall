@@ -10,13 +10,13 @@ import (
 
 // runWithHome runs the built binary the way a real user's shell would,
 // except HOME (and, defensively, the platform-specific config-dir variables)
-// point at a temp directory rather than the machine's real one. nim init and
-// nim doctor both discover client config files through those variables when
+// point at a temp directory rather than the machine's real one. holdcall init and
+// holdcall doctor both discover client config files through those variables when
 // no --config override is given, and this is what keeps that discovery from
 // ever reaching the developer's actual ~/.claude.json.
 func runWithHome(t *testing.T, s *stack, home, cwd string, args ...string) (string, error) {
 	t.Helper()
-	cmd := exec.Command(s.nim, args...)
+	cmd := exec.Command(s.holdcall, args...)
 	cmd.Env = append(append([]string{}, s.env...),
 		"HOME="+home,
 		"XDG_CONFIG_HOME="+filepath.Join(home, ".config"),
@@ -27,17 +27,17 @@ func runWithHome(t *testing.T, s *stack, home, cwd string, args ...string) (stri
 	return string(out), err
 }
 
-// nim init followed by nim doctor, against the real binary: init rewrites a
+// holdcall init followed by holdcall doctor, against the real binary: init rewrites a
 // fixture Claude Code config, dry run first, and doctor then has to notice
 // the wrapped server on its own, through the same HOME-based discovery a real
-// client config would be found by -- not through --config, which only nim
+// client config would be found by -- not through --config, which only holdcall
 // init is given here.
 func TestInitThenDoctorSeeTheSameWrappedServer(t *testing.T) {
 	s := build(t)
 
-	// A fake OS home, distinct from NIM_HOME (build already pointed that at
+	// A fake OS home, distinct from HOLDCALL_HOME (build already pointed that at
 	// its own temp directory): this one stands in for the machine's real home
-	// directory, which nim init's default discovery and nim doctor's
+	// directory, which holdcall init's default discovery and holdcall doctor's
 	// client-config check must never touch.
 	fakeHome := t.TempDir()
 	cwd := t.TempDir() // no .mcp.json here, so Claude Code's project-local file is not in play
@@ -59,9 +59,9 @@ func TestInitThenDoctorSeeTheSameWrappedServer(t *testing.T) {
 	out, err := runWithHome(t, s, fakeHome, cwd,
 		"init", "--config", claudeJSON, "--client", "claude-code")
 	if err != nil {
-		t.Fatalf("nim init (dry run): %v\n%s", err, out)
+		t.Fatalf("holdcall init (dry run): %v\n%s", err, out)
 	}
-	if !strings.Contains(out, "route through Nim") {
+	if !strings.Contains(out, "route through Holdcall") {
 		t.Errorf("dry run did not report the pending change:\n%s", out)
 	}
 	if !strings.Contains(out, "Dry run: nothing was written") {
@@ -79,7 +79,7 @@ func TestInitThenDoctorSeeTheSameWrappedServer(t *testing.T) {
 	out, err = runWithHome(t, s, fakeHome, cwd,
 		"init", "--config", claudeJSON, "--client", "claude-code", "--write")
 	if err != nil {
-		t.Fatalf("nim init --write: %v\n%s", err, out)
+		t.Fatalf("holdcall init --write: %v\n%s", err, out)
 	}
 	if !strings.Contains(out, "wrote "+claudeJSON) {
 		t.Errorf("did not report writing %s:\n%s", claudeJSON, out)
@@ -91,12 +91,12 @@ func TestInitThenDoctorSeeTheSameWrappedServer(t *testing.T) {
 	}
 	backedUp := false
 	for _, e := range entries {
-		if strings.Contains(e.Name(), ".nim-backup-") {
+		if strings.Contains(e.Name(), ".holdcall-backup-") {
 			backedUp = true
 		}
 	}
 	if !backedUp {
-		t.Error("nim init --write left no backup file behind")
+		t.Error("holdcall init --write left no backup file behind")
 	}
 
 	written, err := os.ReadFile(claudeJSON)
@@ -109,22 +109,22 @@ func TestInitThenDoctorSeeTheSameWrappedServer(t *testing.T) {
 		}
 	}
 
-	// nim doctor, against a running daemon, must find the same server through
+	// holdcall doctor, against a running daemon, must find the same server through
 	// its own discovery -- no --config given this time -- and exit 0.
 	s.daemon(t)
 	out, err = runWithHome(t, s, fakeHome, cwd, "doctor")
 	if err != nil {
-		t.Fatalf("nim doctor: %v\n%s", err, out)
+		t.Fatalf("holdcall doctor: %v\n%s", err, out)
 	}
 	if !strings.Contains(out, claudeJSON) {
-		t.Errorf("nim doctor did not report on %s:\n%s", claudeJSON, out)
+		t.Errorf("holdcall doctor did not report on %s:\n%s", claudeJSON, out)
 	}
-	if !strings.Contains(out, "1 server(s) through Nim") {
-		t.Errorf("nim doctor did not report the wrapped server:\n%s", out)
+	if !strings.Contains(out, "1 server(s) through Holdcall") {
+		t.Errorf("holdcall doctor did not report the wrapped server:\n%s", out)
 	}
 }
 
-// nim doctor is read-only: with a daemon already running and healthy, it
+// holdcall doctor is read-only: with a daemon already running and healthy, it
 // must report OK across the board and exit 0, and it must not start a
 // daemon on its own when one is not running -- the daemon check reports WARN
 // instead of silently bringing one up, which is what makes "not running" an
@@ -136,17 +136,17 @@ func TestDoctorReportsHealthyWithARunningDaemon(t *testing.T) {
 	fakeHome := t.TempDir()
 	out, err := runWithHome(t, s, fakeHome, t.TempDir(), "doctor")
 	if err != nil {
-		t.Fatalf("nim doctor: %v\n%s", err, out)
+		t.Fatalf("holdcall doctor: %v\n%s", err, out)
 	}
 	if strings.Contains(out, "[FAIL]") {
 		t.Errorf("a healthy install reported a FAIL:\n%s", out)
 	}
 	if !strings.Contains(out, "daemon -- reachable and genuine") {
-		t.Errorf("nim doctor did not confirm the running daemon:\n%s", out)
+		t.Errorf("holdcall doctor did not confirm the running daemon:\n%s", out)
 	}
 }
 
-// With no daemon running at all, nim doctor must say so as a WARN -- not
+// With no daemon running at all, holdcall doctor must say so as a WARN -- not
 // start one, and not FAIL the whole command over it.
 func TestDoctorWarnsWithoutStartingADaemon(t *testing.T) {
 	s := build(t)
@@ -154,28 +154,28 @@ func TestDoctorWarnsWithoutStartingADaemon(t *testing.T) {
 	fakeHome := t.TempDir()
 	out, err := runWithHome(t, s, fakeHome, t.TempDir(), "doctor")
 	if err != nil {
-		t.Fatalf("nim doctor exited nonzero with no daemon running (should be a WARN, not a FAIL): %v\n%s", err, out)
+		t.Fatalf("holdcall doctor exited nonzero with no daemon running (should be a WARN, not a FAIL): %v\n%s", err, out)
 	}
 	if !strings.Contains(out, "daemon -- not running") {
-		t.Errorf("nim doctor did not report the daemon as not running:\n%s", out)
+		t.Errorf("holdcall doctor did not report the daemon as not running:\n%s", out)
 	}
 	if !strings.Contains(out, "starts on demand") {
-		t.Errorf("nim doctor did not say the daemon starts on demand:\n%s", out)
+		t.Errorf("holdcall doctor did not say the daemon starts on demand:\n%s", out)
 	}
 
 	// The point of the check: doctor must not have started it as a side
 	// effect of asking.
 	out2, err2 := s.run(t, "status")
 	if err2 != nil {
-		t.Fatalf("nim status: %v\n%s", err2, out2)
+		t.Fatalf("holdcall status: %v\n%s", err2, out2)
 	}
 	if !strings.Contains(out2, "daemon   not running") {
-		t.Errorf("nim doctor left a daemon running behind it:\n%s", out2)
+		t.Errorf("holdcall doctor left a daemon running behind it:\n%s", out2)
 	}
 }
 
 // A config.toml still carrying a [policy] section is the error config.Load
-// returns, and nim doctor must surface it verbatim (see checkConfig) rather
+// returns, and holdcall doctor must surface it verbatim (see checkConfig) rather
 // than summarising it -- the message itself names the fix, and is what
 // TestAStaleDenyListInConfigIsRefused holds every other command to. This
 // FAILs the whole command: it is exactly the state the exit code exists to
@@ -189,12 +189,12 @@ func TestDoctorFailsVerbatimOnAStalePolicySection(t *testing.T) {
 
 	out, err := s.run(t, "doctor")
 	if err == nil {
-		t.Fatalf("nim doctor exited 0 with a stale [policy] section:\n%s", out)
+		t.Fatalf("holdcall doctor exited 0 with a stale [policy] section:\n%s", out)
 	}
 	if !strings.Contains(out, "[FAIL] config.toml") {
-		t.Errorf("nim doctor did not FAIL the config check:\n%s", out)
+		t.Errorf("holdcall doctor did not FAIL the config check:\n%s", out)
 	}
-	if !strings.Contains(out, "nim policy deny") {
-		t.Errorf("nim doctor did not surface config.Load's own remedy verbatim:\n%s", out)
+	if !strings.Contains(out, "holdcall policy deny") {
+		t.Errorf("holdcall doctor did not surface config.Load's own remedy verbatim:\n%s", out)
 	}
 }

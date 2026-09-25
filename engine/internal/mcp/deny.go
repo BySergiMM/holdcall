@@ -1,8 +1,8 @@
 package mcp
 
-// The only messages Nim writes itself.
+// The only messages Holdcall writes itself.
 //
-// Everything else Nim handles was written by the client or by the server and is
+// Everything else Holdcall handles was written by the client or by the server and is
 // passed on unchanged. These are the exception, and they exist because a
 // refused call still has to be answered: a client left waiting for a response
 // that will never come is worse than being told no.
@@ -18,20 +18,20 @@ import "encoding/json"
 // Both discourage retrying, because an agent that retries a refusal turns one
 // denial into a loop.
 const (
-	DeniedByPolicy   = "Nim denied this call by policy. Do not retry automatically."
-	DeniedNoDecision = "Nim could not reach a decision and denied the call. Do not retry automatically."
+	DeniedByPolicy   = "Holdcall denied this call by policy. Do not retry automatically."
+	DeniedNoDecision = "Holdcall could not reach a decision and denied the call. Do not retry automatically."
 )
 
-// DeniedUnreadable explains a tools/call Nim refused because it could not read
+// DeniedUnreadable explains a tools/call Holdcall refused because it could not read
 // which tool it named. Its own sentence, because it is neither a rule nor an
 // outage: the frame was the problem, and sending the same bytes again will
 // meet the same refusal.
-const DeniedUnreadable = "Nim refused this call: it could not read the tool name unambiguously. Do not retry automatically."
+const DeniedUnreadable = "Holdcall refused this call: it could not read the tool name unambiguously. Do not retry automatically."
 
 // DeniedByHuman answers a call an "ask" rule held for a human, once one
 // decided against it. Its own sentence, distinct from DeniedByPolicy: a rule
 // is applied by the daemon and will be applied again, but this call was
-// individually refused by whoever is operating Nim, on the strength of its
+// individually refused by whoever is operating Holdcall, on the strength of its
 // real arguments -- docs/decisions/0005-human-approval.md is what they saw
 // and why. The reason a human gave, if any, is not in this text: it is kept
 // out of the call this model can read, on the daemon's own log and in the
@@ -43,14 +43,14 @@ const DeniedByHuman = "A human reviewing this call's real arguments rejected it.
 // one looked at this one and said no, no one looked at all in time, which is
 // exactly the "no decision reached" shape every other refusal in this file
 // already fails closed on.
-const DeniedApprovalTimedOut = "Nim held this call for a human to approve, and nobody decided within the approval timeout. Do not retry automatically."
+const DeniedApprovalTimedOut = "Holdcall held this call for a human to approve, and nobody decided within the approval timeout. Do not retry automatically."
 
 // DeniedBatch explains a refused batch.
-const DeniedBatch = "Nim refused this batch: it carries a tools/call, and Nim does not decide batch elements one by one. Send the calls individually."
+const DeniedBatch = "Holdcall refused this batch: it carries a tools/call, and Holdcall does not decide batch elements one by one. Send the calls individually."
 
 // DenyErrorCode is in JSON-RPC's implementation-defined server error range.
 //
-// Not -32600 "Invalid Request": the request was well formed and Nim understood
+// Not -32600 "Invalid Request": the request was well formed and Holdcall understood
 // it perfectly well. It was refused, which is a different statement, and one an
 // error code should not misreport.
 const DenyErrorCode = -32000

@@ -41,8 +41,8 @@ type Request struct {
 	// an enrolment exists rather than taking the name to mean anything on
 	// its own. An empty RuleAgent or RuleConnector means every.
 	//
-	// RuleDefault marks a request as `nim policy default deny|allow|ask` or
-	// `nim policy remove --default`: the rule's tool is
+	// RuleDefault marks a request as `holdcall policy default deny|allow|ask` or
+	// `holdcall policy remove --default`: the rule's tool is
 	// journal.RuleToolDefault ("*") rather than RuleTool, which must be empty
 	// when this is set. A default has no tool of its own to send, and a
 	// caller may not set both -- see ruleTool.
@@ -56,8 +56,8 @@ type Request struct {
 	// shape ruleScope validates for a rule, held in fields of their own
 	// rather than the Rule* ones above because a budget and a rule are
 	// different things that happen to share a scope shape, not the same
-	// request. BudgetAllTools marks `nim policy budget <n> --all-tools` the
-	// way RuleDefault marks `nim policy default`: the budget's tool becomes
+	// request. BudgetAllTools marks `holdcall policy budget <n> --all-tools` the
+	// way RuleDefault marks `holdcall policy default`: the budget's tool becomes
 	// journal.BudgetToolAll ("*") rather than BudgetTool, and a caller may
 	// not set both.
 	BudgetTool      string `json:"budget_tool,omitempty"`
@@ -105,7 +105,7 @@ const (
 	KindBudgetRemove = "budget.remove"
 	KindBudgetList   = "budget.list"
 	// KindApprovalList and KindApprovalDecide are their own purpose (see
-	// requestState.kind): nim approve and nim reject dial the daemon under
+	// requestState.kind): holdcall approve and holdcall reject dial the daemon under
 	// it, distinct from policy, and a connection that speaks one may not
 	// pivot to the other or to a credential -- purpose binding is what makes
 	// an approval connection unable to ask for a credential.
@@ -160,15 +160,15 @@ type Response struct {
 	Explain *ExplainInfo `json:"explain,omitempty"`
 
 	// approval.list: every call currently held for a human. approval.decide
-	// answers with the one call it just resolved, the same shape nim policy
+	// answers with the one call it just resolved, the same shape holdcall policy
 	// deny/allow/ask echoes the rule it just added.
 	Pending []PendingInfo `json:"pending,omitempty"`
 }
 
-// PendingInfo is one call on hold for a human, exactly as nim approve shows
+// PendingInfo is one call on hold for a human, exactly as holdcall approve shows
 // it: the real arguments, never a summary -- docs/decisions/0005-human-approval.md
 // is why. Arguments is raw JSON, nil when the call carried none, and this is
-// the one place on the whole daemon socket where that is deliberate: nim
+// the one place on the whole daemon socket where that is deliberate: holdcall
 // approve is the human's own inspection of the call, not a channel back to
 // the model that asked for it.
 type PendingInfo struct {
@@ -178,7 +178,7 @@ type PendingInfo struct {
 	Connector string          `json:"connector,omitempty"`
 	Arguments json.RawMessage `json:"arguments,omitempty"`
 	// ArgumentsKnown is whether the relay has reported the call's arguments
-	// yet. False means "not received yet", which nim approve says in those
+	// yet. False means "not received yet", which holdcall approve says in those
 	// words; it is not the same as a call that carries none.
 	ArgumentsKnown bool   `json:"arguments_known"`
 	StartedAt      string `json:"started_at"`
@@ -224,7 +224,7 @@ type ExplainInfo struct {
 	Reason     string    `json:"reason"`
 	Candidates int       `json:"candidates"`
 	// Budgets are every budget whose scope matches this agent, connector and
-	// tool -- shown alongside the rule so nim policy explain can answer
+	// tool -- shown alongside the rule so holdcall policy explain can answer
 	// "does a budget apply here, and what is its cap" without inventing
 	// session state it was never given: explain has no session id to weigh
 	// a count against, only a scope. See handlePolicyExplain.

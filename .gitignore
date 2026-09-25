@@ -21,10 +21,10 @@ __pycache__/
 *.pyc
 
 # Local state: this is where credentials and the journal live. Never commit it.
-.nim/
+.holdcall/
 *.db
 *.journal
-tools/relay-rig/nim-home/
+tools/relay-rig/holdcall-home/
 
 # Env
 .env

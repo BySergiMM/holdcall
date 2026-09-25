@@ -1,10 +1,10 @@
--- Applied to project rsysotrzwipxosuwndux (shared; Nim is a tenant there).
+-- Applied to project rsysotrzwipxosuwndux (shared; Holdcall is a tenant there).
 --
--- Nim shares this database with another product. Everything it owns is
+-- Holdcall shares this database with another product. Everything it owns is
 -- prefixed nim_ so it can be lifted into a dedicated project later with a
 -- schema-only dump filtered on that prefix.
 --
--- These tables are a READ MIRROR of the local SQLite journal. Nim decides
+-- These tables are a READ MIRROR of the local SQLite journal. Holdcall decides
 -- locally and always; nothing here participates in an authorization decision.
 -- Contract: never credentials, never call parameters, never response bodies.
 
@@ -18,7 +18,7 @@ create table if not exists public.nim_sessions (
     synced_at    timestamptz not null default now()
 );
 
-comment on table  public.nim_sessions is 'Nim: one run of a shim against one downstream MCP server.';
+comment on table  public.nim_sessions is 'Holdcall: one run of a shim against one downstream MCP server.';
 comment on column public.nim_sessions.machine_id is 'Opaque per-install id. Not a user, not a hostname.';
 comment on column public.nim_sessions.target     is 'Name of the downstream MCP server, e.g. "github".';
 
@@ -38,7 +38,7 @@ create table if not exists public.nim_calls (
     unique (session_id, seq)
 );
 
-comment on table  public.nim_calls is 'Nim: one tools/call, as recorded by the local daemon.';
+comment on table  public.nim_calls is 'Holdcall: one tools/call, as recorded by the local daemon.';
 comment on column public.nim_calls.params_digest is 'sha256 of the arguments. The arguments themselves never leave the machine.';
 comment on column public.nim_calls.seq           is 'Position in the local journal; makes the mirror idempotent to re-sync.';
 

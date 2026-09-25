@@ -16,7 +16,7 @@ import "net"
 //     one mechanism that actually matches darwin/linux's guarantee: kernel-
 //     verified PID, then the same open-process/compare-exe-identity check
 //     peer_darwin.go and peer_linux.go already do. This is a real
-//     architecture change, though, not a fix: Nim deliberately uses one
+//     architecture change, though, not a fix: Holdcall deliberately uses one
 //     unix-socket transport on all three platforms (see docs/milestones.md,
 //     M1's Standing Decision) specifically to avoid needing go-winio, and
 //     that decision reached every caller of this socket -- the shim, the
@@ -54,7 +54,7 @@ import "net"
 // and hold on every platform -- but none of them can verify the caller is
 // genuinely this binary. Combined with config.go's EnsureDirs gap, Windows'
 // confidentiality for this socket rests on the OS's own default directory
-// ACLs, not on anything Nim itself verifies. This is a known, real,
+// ACLs, not on anything Holdcall itself verifies. This is a known, real,
 // load-bearing gap, not a theoretical one -- see docs/milestones.md and the
 // M3 final audit report for the READY-WITH-KNOWN-LIMITATION reasoning this
 // feeds into.

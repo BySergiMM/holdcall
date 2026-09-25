@@ -53,8 +53,8 @@ decision was written for had no way to express.
 **Answered in docs/decisions/0003-allow-rules-and-precedence.md.** The
 mechanism above did not change: a session with no agent is still bound by
 the rules that name no agent, and by nothing else. What changed is what
-those rules can say. `nim policy default deny` is a deny naming no agent, so
-it binds every session, enrolled or not; `nim policy allow <tool> --agent
+those rules can say. `holdcall policy default deny` is a deny naming no agent, so
+it binds every session, enrolled or not; `holdcall policy allow <tool> --agent
 claude-code` is more specific and wins for that agent alone. An unenrolled
 program meets only the default, which grants it nothing, and is denied --
 enrolment is what grants, exactly as this section asked for.

@@ -11,14 +11,14 @@
 # running, so the rig's virtualenv and the build cache never touch the host.
 #
 # Usage: tools/ci-linux.sh [job ...]    (default: test cross-compile vuln relay-rig)
-#   env: LIMA_INSTANCE (default nim-ci), LIMA_TEMPLATE (default template://ubuntu)
+#   env: LIMA_INSTANCE (default holdcall-ci), LIMA_TEMPLATE (default template://ubuntu)
 #
 # The dashboard job is left out by default: it is platform-independent and
 # tools/ci-local.sh already runs it on the host.
 
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-INSTANCE="${LIMA_INSTANCE:-nim-ci}"
+INSTANCE="${LIMA_INSTANCE:-holdcall-ci}"
 TEMPLATE="${LIMA_TEMPLATE:-template://ubuntu}"
 GOVERSION="$(sed -n 's/^go \(.*\)$/\1/p' "$ROOT/engine/go.mod")"
 jobs=("$@"); [ ${#jobs[@]} -eq 0 ] && jobs=(test cross-compile vuln relay-rig)
@@ -50,12 +50,12 @@ fi
 GUEST
 
 # A writable copy of the working tree inside the guest, at the same commit.
-limactl shell "$INSTANCE" bash -c 'rm -rf ~/nim-ci && mkdir -p ~/nim-ci'
-limactl copy -r "$ROOT/." "$INSTANCE:nim-ci/" 2>/dev/null || {
+limactl shell "$INSTANCE" bash -c 'rm -rf ~/holdcall-ci && mkdir -p ~/holdcall-ci'
+limactl copy -r "$ROOT/." "$INSTANCE:holdcall-ci/" 2>/dev/null || {
   # limactl copy cannot always take a directory; fall back to tar over the shell.
   tar -C "$ROOT" --exclude ./dashboard/node_modules --exclude ./dashboard/out --exclude ./dashboard/.next \
-      --exclude ./tools/relay-rig/.venv --exclude ./tools/relay-rig/nim-home --exclude ./engine/bin -cf - . \
-    | limactl shell "$INSTANCE" tar -C "$HOME/nim-ci" -xf -
+      --exclude ./tools/relay-rig/.venv --exclude ./tools/relay-rig/holdcall-home --exclude ./engine/bin -cf - . \
+    | limactl shell "$INSTANCE" tar -C "$HOME/holdcall-ci" -xf -
 }
 
-limactl shell "$INSTANCE" bash -lc "cd ~/nim-ci && PATH=/usr/local/go/bin:\$PATH GO=/usr/local/go/bin/go CI_LOCAL_LOG=/tmp/nim-ci-linux tools/ci-local.sh ${jobs[*]}"
+limactl shell "$INSTANCE" bash -lc "cd ~/holdcall-ci && PATH=/usr/local/go/bin:\$PATH GO=/usr/local/go/bin/go CI_LOCAL_LOG=/tmp/holdcall-ci-linux tools/ci-local.sh ${jobs[*]}"

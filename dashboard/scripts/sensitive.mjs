@@ -25,17 +25,17 @@ export const SENSITIVE = [
   ["a Windows user path", /[A-Z]:\\Users\\[A-Za-z0-9._-]+/],
 ];
 
-// Nim's own runtime artefacts. None of these should be reachable from a build
+// Holdcall's own runtime artefacts. None of these should be reachable from a build
 // step, so a path to one in the output means something read it. The page
-// legitimately discusses them by name -- "the journal, nim.db" is the subject
+// legitimately discusses them by name -- "the journal, holdcall.db" is the subject
 // matter -- so the bare filenames are allowed and anything with a directory
 // in front is not.
 export const RUNTIME_PATHS = [
-  ["a path to the journal database", /[\w./-]*nim\.db\b/],
-  ["a path to the daemon socket", /[\w./-]*nim\.sock\b/],
+  ["a path to the journal database", /[\w./-]*holdcall\.db\b/],
+  ["a path to the daemon socket", /[\w./-]*holdcall\.sock\b/],
 ];
 
-export const ALLOWED_BARE = new Set(["nim.db", "nim.sock"]);
+export const ALLOWED_BARE = new Set(["holdcall.db", "holdcall.sock"]);
 
 // Sample values for each shape, so a test can prove every pattern bites. Not
 // real credentials: each is the shape with the payload spelled out.
@@ -50,7 +50,7 @@ export const SAMPLES = {
   "a JWT": "eyJ" + "F".repeat(12) + ".eyJ" + "G".repeat(12) + ".sig",
   "a bearer token": "Bearer " + "H".repeat(24),
   "an assignment that looks like a secret": "API_KEY=" + "I".repeat(16),
-  "an absolute macOS user path": "/Users/someone/nim",
-  "an absolute Linux user path": "/home/someone/nim",
+  "an absolute macOS user path": "/Users/someone/holdcall",
+  "an absolute Linux user path": "/home/someone/holdcall",
   "a Windows user path": "C:\\Users\\someone",
 };

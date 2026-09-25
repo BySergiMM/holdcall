@@ -9,9 +9,9 @@ const { project, derived, summary, ciSnapshot, runtime, architecture } = state;
 // decision (D-005): readable by anyone given the link, never indexed. The
 // product page at / is the one meant to be found.
 export const metadata: Metadata = {
-  title: "Nim — Control Plane",
+  title: "Holdcall — Control Plane",
   description:
-    "What Nim actually guarantees, what it does not, and what has not been tested. Built from the repository; refuses to build on an unsubstantiated claim.",
+    "What Holdcall actually guarantees, what it does not, and what has not been tested. Built from the repository; refuses to build on an unsubstantiated claim.",
   robots: { index: false, follow: false },
 };
 
@@ -20,7 +20,7 @@ const NAV = [
   ["getting-started", "Get started", ""],
   ["architecture", "Architecture", ""],
   ["guarantees", "Guarantees", `${summary.guarantees.total}`],
-  ["break", "Break Nim", `${summary.attacks.total}`],
+  ["break", "Break Holdcall", `${summary.attacks.total}`],
   ["findings", "Findings", `${summary.findings.total}`],
   ["milestones", "Milestones", `${summary.milestones.done}/${summary.milestones.total}`],
   ["decisions", "Open questions", `${summary.decisions.open}`],
@@ -34,7 +34,7 @@ export default function Page() {
     <div className="shell">
       <aside className="rail">
         <div className="rail-group">
-          <div className="rail-title">Nim</div>
+          <div className="rail-title">Holdcall</div>
           <nav>
             {NAV.map(([id, text, n]) => (
               <a key={id} href={`#${id}`}>
@@ -126,26 +126,26 @@ export default function Page() {
         <Section
           id="getting-started"
           title="Get started"
-          lede="Point a real MCP client at Nim in about five minutes."
+          lede="Point a real MCP client at Holdcall in about five minutes."
         >
           <Field k="Install">
-            <code>curl -fsSL https://raw.githubusercontent.com/BySergiMM/nim/m1-bootstrap/install.sh | sh</code>
+            <code>curl -fsSL https://raw.githubusercontent.com/BySergiMM/holdcall/m1-bootstrap/install.sh | sh</code>
           </Field>
           <Field k="Five minutes to a first decision">
             <ol style={{ margin: 0, paddingLeft: "1.1rem" }}>
               <li>
-                <code>nim init</code>, then <code>nim init --write</code>, to point Claude Code, Cursor or
-                Claude Desktop at Nim
+                <code>holdcall init</code>, then <code>holdcall init --write</code>, to point Claude Code, Cursor or
+                Claude Desktop at Holdcall
               </li>
               <li>
-                <code>nim doctor</code> to check the result
+                <code>holdcall doctor</code> to check the result
               </li>
               <li>
-                <code>nim policy deny &lt;tool-name&gt;</code> to refuse one tool
+                <code>holdcall policy deny &lt;tool-name&gt;</code> to refuse one tool
               </li>
               <li>call it from the client, and watch the call come back refused</li>
               <li>
-                <code>nim log</code> to see the decision, <code>nim console</code> to see the journal
+                <code>holdcall log</code> to see the decision, <code>holdcall console</code> to see the journal
               </li>
             </ol>
           </Field>
@@ -159,7 +159,7 @@ export default function Page() {
         <Section
           id="architecture"
           title="Architecture"
-          lede="Where Nim sits, and what each layer does or does not yet do."
+          lede="Where Holdcall sits, and what each layer does or does not yet do."
         >
           <div className="flow" style={{ marginBottom: "1.5rem" }}>
             {architecture.nodes.map((n, i) => (
@@ -248,16 +248,16 @@ export default function Page() {
         {/* ---------------------------------------------------------- break */}
         <Section
           id="break"
-          title="Break Nim"
+          title="Break Holdcall"
           count={`${summary.attacks.total} attempts · ${summary.attacks.liveBefore} once worked`}
           lede={
             <>
-              Not a list of wins. Every row is an attempt to make Nim fail, and{" "}
+              Not a list of wins. Every row is an attempt to make Holdcall fail, and{" "}
               <strong>{summary.attacks.liveBefore} of them succeeded against a real build</strong> before they were
               addressed. Rows sort worst-first. A row with no test is a written assessment, and says so.
               <br />
               <br />
-              These statuses describe <strong>macOS and Linux</strong>. Nim has never been executed on Windows, and has
+              These statuses describe <strong>macOS and Linux</strong>. Holdcall has never been executed on Windows, and has
               no peer verification there at all (F-002) — so every row in the <span className="prov">identity</span>{" "}
               category should be read as undefended on that platform.
             </>
@@ -398,12 +398,12 @@ export default function Page() {
                 </thead>
                 <tbody>
                   {[
-                    ["Daemon up / down", "nim status"],
-                    ["Journal entries and chain head", "nim log, nim verify"],
-                    ["Journal integrity right now", "nim verify --expect-head"],
-                    ["Enrolled agents", "nim agent list"],
-                    ["Registered connectors", "nim connector list"],
-                    ["Calls allowed and refused", "nim log"],
+                    ["Daemon up / down", "holdcall status"],
+                    ["Journal entries and chain head", "holdcall log, holdcall verify"],
+                    ["Journal integrity right now", "holdcall verify --expect-head"],
+                    ["Enrolled agents", "holdcall agent list"],
+                    ["Registered connectors", "holdcall connector list"],
+                    ["Calls allowed and refused", "holdcall log"],
                   ].map(([what, where]) => (
                     <tr key={what}>
                       <td>{what}</td>
@@ -501,7 +501,7 @@ export default function Page() {
               <h3 style={{ fontSize: "0.92rem", marginBottom: "0.5rem" }}>&quot;Verified&quot; means a test passes</h3>
               <p style={{ color: "var(--text-2)", fontSize: 14 }}>
                 It does not mean audited, reviewed by anyone outside this project, or proven. No third party has looked
-                at Nim. The tests were written by the same process that wrote the code they check.
+                at Holdcall. The tests were written by the same process that wrote the code they check.
               </p>
             </div>
             <div className="card">
@@ -515,7 +515,7 @@ export default function Page() {
             <div className="card">
               <h3 style={{ fontSize: "0.92rem", marginBottom: "0.5rem" }}>Windows is unrun</h3>
               <p style={{ color: "var(--text-2)", fontSize: 14 }}>
-                Nim cross-compiles for Windows and has never been executed on it. Where a platform column says
+                Holdcall cross-compiles for Windows and has never been executed on it. Where a platform column says
                 &quot;unsupported&quot;, that is a deliberate stub returning an error, not a gap someone forgot.
               </p>
             </div>
@@ -540,8 +540,8 @@ export default function Page() {
             <div className="card">
               <h3 style={{ fontSize: "0.92rem", marginBottom: "0.5rem" }}>Absence of an attack is not safety</h3>
               <p style={{ color: "var(--text-2)", fontSize: 14 }}>
-                The Break Nim table lists {summary.attacks.total} attempts someone thought of. It is not the set of
-                attacks that exist. Rows are added when a new one is imagined, which means the table grows when Nim gets
+                The Break Holdcall table lists {summary.attacks.total} attempts someone thought of. It is not the set of
+                attacks that exist. Rows are added when a new one is imagined, which means the table grows when Holdcall gets
                 more scrutiny, not when it gets worse. The same applies upward: the {summary.guarantees.total}{" "}
                 guarantees are the properties someone chose to write down, so a property nobody listed cannot appear
                 here as unverified.

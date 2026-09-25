@@ -1,4 +1,4 @@
-# 1. What Nim does when it cannot do its job
+# 1. What Holdcall does when it cannot do its job
 
 Status: accepted, integration/trunk.
 
@@ -27,8 +27,8 @@ it does with no credential support at all. **Open**, and calling this
 **2. May this call proceed?**
 
 This is the authorization question, and it is the product. If it failed open,
-`kill $(pgrep nim)` would be a universal enforcement bypass — every guarantee
-Nim makes would be one signal away from not holding, and an agent able to run
+`kill $(pgrep holdcall)` would be a universal enforcement bypass — every guarantee
+Holdcall makes would be one signal away from not holding, and an agent able to run
 a shell could always send that signal. **Closed**, on every path: no daemon, a
 slow daemon, a closed socket, a mismatched reply, a journal write that failed.
 
@@ -59,7 +59,7 @@ Refusing to spawn would be defensible, and it is what question 3 does. It is
 rejected here because it is worse for the operator without being safer. A
 client that cannot start its MCP server shows "server failed"; a client whose
 server starts but whose tools are refused shows the tool list, completes
-`initialize`, and gets an explicit refusal naming Nim on each call. The second
+`initialize`, and gets an explicit refusal naming Holdcall on each call. The second
 tells the user what is wrong. Neither leaks anything, because no credential is
 injected in either case.
 
@@ -68,17 +68,17 @@ call can be allowed, so the downstream that starts is one that can do nothing.
 
 A consequence to be aware of: if the daemon comes back, that shim keeps its
 connection state from when it started. It reconnects for decisions but was
-never given a credential, so its calls may be allowed by Nim and then rejected
+never given a credential, so its calls may be allowed by Holdcall and then rejected
 by the remote service for want of one. That is a degraded state, not an unsafe
 one, and it resolves when the session restarts.
 
 ## What is deliberately not claimed
 
 Failing closed protects the *decision*. It does not protect against an agent
-that never involves Nim at all: nothing here stops a client being reconfigured
+that never involves Holdcall at all: nothing here stops a client being reconfigured
 to spawn the MCP server directly, and no in-process shim can. That is a
-property of where Nim sits, and closing it needs the connector to be
-unreachable except through Nim — a network or sandbox boundary, not a flag.
+property of where Holdcall sits, and closing it needs the connector to be
+unreachable except through Holdcall — a network or sandbox boundary, not a flag.
 
-Nim's guarantee is about calls that go through it. It is worth stating plainly
+Holdcall's guarantee is about calls that go through it. It is worth stating plainly
 rather than implying more.

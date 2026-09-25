@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
-<title>nim console</title>
+<title>holdcall console</title>
 <style>
 /* One rule, shared with the product page: the only colours are decisions.
    allow, deny and held/rejected mean something; everything else is ink on
@@ -202,13 +202,13 @@ tbody tr.arrive{animation:arrive .35s ease-out both}
 <body>
 
 <header class="top">
-  <a class="brand" href="#overview">nim<span>console</span></a>
+  <a class="brand" href="#overview">holdcall<span>console</span></a>
   <span class="chip" id="daemon"><span class="dot"></span>daemon —</span>
   <span class="chip" id="entries">— entries</span>
   <span class="chip copy" id="head" title="the journal head; click to copy the full hash">head —</span>
   <div class="spacer"></div>
   <button class="iconbtn" id="theme" title="theme: system, light, dark">theme</button>
-  <span class="chip" title="This page only reads. It cannot change anything Nim recorded or decided.">read-only</span>
+  <span class="chip" title="This page only reads. It cannot change anything Holdcall recorded or decided.">read-only</span>
 </header>
 
 <div class="held-strip" id="held-strip">
@@ -235,17 +235,17 @@ tbody tr.arrive{animation:arrive .35s ease-out both}
       <div class="firstrun">
         <div>
           <h3>Nothing recorded yet.</h3>
-          <p class="note">Point a client at Nim, make one tool call, and it appears here as it is written. The daemon starts on its own the first time a relay needs it.</p>
-          <pre>nim init            # shows what it would rewrite
-nim init --write    # applies it, with backups
-nim doctor          # every check, with a remedy</pre>
+          <p class="note">Point a client at Holdcall, make one tool call, and it appears here as it is written. The daemon starts on its own the first time a relay needs it.</p>
+          <pre>holdcall init            # shows what it would rewrite
+holdcall init --write    # applies it, with backups
+holdcall doctor          # every check, with a remedy</pre>
         </div>
         <div>
           <h3>Then decide something.</h3>
           <p class="note">A rule is <code>deny</code>, <code>allow</code> or <code>ask</code>, scoped to a tool and, if you want, one agent and one connector. A held call shows up under <b>Held</b> with its real arguments.</p>
-          <pre>nim policy deny delete_repository
-nim policy ask force_push --connector github
-nim policy budget 20 --tool list_repos --all-tools</pre>
+          <pre>holdcall policy deny delete_repository
+holdcall policy ask force_push --connector github
+holdcall policy budget 20 --tool list_repos --all-tools</pre>
         </div>
       </div>
     </div>
@@ -403,10 +403,10 @@ function scopeText(e) { const p = []; if (e.agent) p.push("agent=" + e.agent); i
 /* ---------- theme ---------- */
 const THEMES = ["system", "light", "dark"];
 function applyTheme(t) { if (t === "system") document.documentElement.removeAttribute("data-theme"); else document.documentElement.dataset.theme = t; $("#theme").textContent = "theme: " + t; }
-let theme = "system"; try { theme = localStorage.getItem("nim.theme") || "system"; } catch {}
+let theme = "system"; try { theme = localStorage.getItem("holdcall.theme") || "system"; } catch {}
 { const q = new URLSearchParams(location.search).get("theme"); if (THEMES.includes(q)) theme = q; }
 applyTheme(theme);
-$("#theme").onclick = () => { theme = THEMES[(THEMES.indexOf(theme) + 1) % THEMES.length]; try { localStorage.setItem("nim.theme", theme); } catch {} applyTheme(theme); };
+$("#theme").onclick = () => { theme = THEMES[(THEMES.indexOf(theme) + 1) % THEMES.length]; try { localStorage.setItem("holdcall.theme", theme); } catch {} applyTheme(theme); };
 
 /* ---------- overview ---------- */
 const CHAIN_TEXT = {
@@ -453,7 +453,7 @@ function renderOverview() {
   gr.appendChild(cell(g.unfinished_sessions, "sessions unfinished", "no session.end recorded", g.unfinished_sessions ? "warn" : ""));
   gr.appendChild(cell(g.missing_call_entries, "call entries missing", "gaps in a session's seq", g.missing_call_entries ? "warn" : ""));
   gr.appendChild(cell(g.calls_without_session, "calls without a session", "decided, but their session.start never arrived", g.calls_without_session ? "warn" : ""));
-  gr.appendChild(cell(g.anomalies_total, "anomalies", Object.keys(g.anomalies || {}).sort().map(k => k + " " + g.anomalies[k]).join(", ") || "frames Nim could not account for", g.anomalies_total ? "warn" : ""));
+  gr.appendChild(cell(g.anomalies_total, "anomalies", Object.keys(g.anomalies || {}).sort().map(k => k + " " + g.anomalies[k]).join(", ") || "frames Holdcall could not account for", g.anomalies_total ? "warn" : ""));
 
   const alerts = $("#alerts"); alerts.replaceChildren();
   if (j.chain === "broken") { const a = el("div", "panel"); const b = el("div", "bd"); b.appendChild(el("h2", "bad", "Chain check failed")); b.appendChild(el("p", "note", j.problem || "")); a.appendChild(b); alerts.appendChild(a); }
@@ -494,7 +494,7 @@ function renderHeld() {
     c.appendChild(dl);
     const pre = el("pre"); pre.textContent = p.arguments_known ? prettyArgs(p.arguments) : "(arguments not received from the relay yet; the daemon refuses to approve until they are)"; c.appendChild(pre);
     const cmds = el("div", "cmds");
-    for (const [label, cmd] of [["approve", "nim approve " + p.id], ["reject", 'nim reject ' + p.id + ' --reason ""']]) {
+    for (const [label, cmd] of [["approve", "holdcall approve " + p.id], ["reject", 'holdcall reject ' + p.id + ' --reason ""']]) {
       const w = el("div", "cmd"); w.appendChild(el("code", null, cmd));
       const b = el("button", null, "copy " + label); b.onclick = () => { copy(cmd, "copied: " + cmd); b.classList.add("done"); b.textContent = "copied"; setTimeout(() => { b.classList.remove("done"); b.textContent = "copy " + label; }, 1500); };
       w.appendChild(b); cmds.appendChild(w);

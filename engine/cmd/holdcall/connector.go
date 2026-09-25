@@ -10,16 +10,16 @@ import (
 
 	"golang.org/x/term"
 
-	"github.com/BySergiMM/nim/engine/internal/config"
-	"github.com/BySergiMM/nim/engine/internal/daemon"
-	"github.com/BySergiMM/nim/engine/internal/shim"
+	"github.com/BySergiMM/holdcall/engine/internal/config"
+	"github.com/BySergiMM/holdcall/engine/internal/daemon"
+	"github.com/BySergiMM/holdcall/engine/internal/shim"
 )
 
-const connectorSetUsage = "nim connector set <target> --env KEY -- <command> [args...]"
+const connectorSetUsage = "holdcall connector set <target> --env KEY -- <command> [args...]"
 
 func runConnector(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: nim connector <set|list|remove> ...")
+		return fmt.Errorf("usage: holdcall connector <set|list|remove> ...")
 	}
 	switch args[0] {
 	case "set":
@@ -46,7 +46,7 @@ func runConnector(args []string) error {
 // Everything after -- is the downstream server this credential may be injected
 // into. It is required: a stored secret with no statement about what may
 // receive it is what let any caller name a target alongside a command of its
-// own and be handed the secret. The same -- convention as nim serve, so a
+// own and be handed the secret. The same -- convention as holdcall serve, so a
 // command with its own flags needs no quoting or escaping.
 func parseConnectorSetArgs(args []string) (target, key string, command []string, err error) {
 	for i := 0; i < len(args); i++ {
@@ -82,7 +82,7 @@ func parseConnectorSetArgs(args []string) (target, key string, command []string,
 	}
 	if len(command) == 0 {
 		return "", "", nil, fmt.Errorf(
-			"give the server this credential belongs to after --, so Nim knows what it may be "+
+			"give the server this credential belongs to after --, so Holdcall knows what it may be "+
 				"injected into.\nusage: %s", connectorSetUsage)
 	}
 	return target, key, command, nil
@@ -120,7 +120,7 @@ func runConnectorSet(args []string) error {
 
 // readSecretFromStdin never puts the secret in argv. On a terminal it prompts
 // and reads without echoing; when stdin is piped it reads one line, which
-// makes `echo "$TOKEN" | nim connector set ...` fully scriptable.
+// makes `echo "$TOKEN" | holdcall connector set ...` fully scriptable.
 func readSecretFromStdin() (string, error) {
 	fd := int(os.Stdin.Fd())
 	if term.IsTerminal(fd) {
@@ -194,7 +194,7 @@ func runConnectorRemove(args []string) error {
 	}
 	target := fs.Arg(0)
 	if target == "" {
-		return fmt.Errorf("usage: nim connector remove <target>")
+		return fmt.Errorf("usage: holdcall connector remove <target>")
 	}
 
 	conn, err := dialConnectorDaemon()
@@ -220,8 +220,8 @@ func runConnectorRemove(args []string) error {
 // has nothing sensible to fail open to: if the daemon truly cannot be reached
 // it must say so rather than silently pretend to have done nothing.
 //
-// Through shim.DialDaemon, which verifies that what answered is Nim. This
-// used to dial the path and trust it, so `nim connector set` handed the
+// Through shim.DialDaemon, which verifies that what answered is Holdcall. This
+// used to dial the path and trust it, so `holdcall connector set` handed the
 // plaintext secret to whatever had bound the socket first -- the impostor the
 // relay had learnt to refuse, still welcome on the one path that carries a
 // credential in the clear.

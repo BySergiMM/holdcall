@@ -237,11 +237,11 @@ create table if not exists nim_connectors (
 -- is the mistake internal/peer exists to avoid.
 --
 -- exec_path is kept for diagnostics only: to show the operator what they
--- enrolled and to let 'nim agent list' say when the file at that path is no
+-- enrolled and to let 'holdcall agent list' say when the file at that path is no
 -- longer the enrolled one. It is never consulted to decide whether a running
 -- process is this agent.
 --
--- No uid column. Nim runs entirely as one OS user today, so pinning an agent
+-- No uid column. Holdcall runs entirely as one OS user today, so pinning an agent
 -- to one would add a column nothing reads. It can be added when there is a
 -- reason.
 create table if not exists nim_agents (
@@ -479,7 +479,7 @@ func rebuildRulesTable(db *sql.DB) (rebuilt bool, err error) {
 // A view left over from an older build would silently keep answering with the
 // old columns, so syncViews replaces one whose definition has drifted -- but
 // only then. Recreating them unconditionally would make every open take a write
-// lock on the schema, which is a poor thing for `nim status` to do to a daemon
+// lock on the schema, which is a poor thing for `holdcall status` to do to a daemon
 // that is busy recording.
 var views = []struct{ name, ddl string }{
 	{"nim_sessions", `create view nim_sessions as
@@ -907,7 +907,7 @@ func (j *Journal) appendTx(tx *sql.Tx, e Entry) error {
 }
 
 // Head reports the length of the chain and its last hash. Both are printed by
-// `nim status`: recording them somewhere else is the only way to notice a chain
+// `holdcall status`: recording them somewhere else is the only way to notice a chain
 // that has been rewritten from the genesis.
 func (j *Journal) Head() (length int64, hash string, err error) {
 	var seq sql.NullInt64
@@ -935,7 +935,7 @@ func (j *Journal) SessionExists(id string) (bool, error) {
 	return n > 0, err
 }
 
-// CountCalls is the number of tool calls seen. Used by `nim status`.
+// CountCalls is the number of tool calls seen. Used by `holdcall status`.
 func (j *Journal) CountCalls() (int, error) {
 	var n int
 	err := j.db.QueryRow(
@@ -1198,7 +1198,7 @@ func (j *Journal) ListAgents() ([]Agent, error) {
 // false: there is no enrolment to describe removing, so nothing is recorded,
 // exactly as RemoveRule refuses a change to nothing rather than treating it as
 // a success. Unlike RemoveRule this is not an error -- the daemon's handler
-// treats found = false as the idempotent success `nim agent remove` has
+// treats found = false as the idempotent success `holdcall agent remove` has
 // always been; the caller decides what "not found" means, not this method.
 func (j *Journal) RemoveAgent(name string) (a Agent, found bool, err error) {
 	j.mu.Lock()

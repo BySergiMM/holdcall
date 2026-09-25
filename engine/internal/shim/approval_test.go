@@ -4,9 +4,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/BySergiMM/nim/engine/internal/daemon"
-	"github.com/BySergiMM/nim/engine/internal/journal"
-	"github.com/BySergiMM/nim/engine/internal/mcp"
+	"github.com/BySergiMM/holdcall/engine/internal/daemon"
+	"github.com/BySergiMM/holdcall/engine/internal/journal"
+	"github.com/BySergiMM/holdcall/engine/internal/mcp"
 )
 
 // M6, human approval: a call an "ask" rule holds gets a second, longer wait
@@ -52,7 +52,7 @@ func TestAnApprovedCallForwardsTheExactBytes(t *testing.T) {
 		t.Errorf("the connector did not receive the original bytes:\ngot  %q\nwant %q", got, frame)
 	}
 	if g.client.String() != "" {
-		t.Errorf("Nim answered a call it was told was approved: %q", g.client.String())
+		t.Errorf("Holdcall answered a call it was told was approved: %q", g.client.String())
 	}
 
 	args := g.daemon.await(t, 1, func(ev daemon.Event) bool { return ev.Kind == daemon.KindCallArguments })

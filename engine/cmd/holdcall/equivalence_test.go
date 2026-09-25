@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/BySergiMM/nim/engine/internal/console"
-	"github.com/BySergiMM/nim/engine/internal/journal"
-	"github.com/BySergiMM/nim/engine/internal/readmodel"
+	"github.com/BySergiMM/holdcall/engine/internal/console"
+	"github.com/BySergiMM/holdcall/engine/internal/journal"
+	"github.com/BySergiMM/holdcall/engine/internal/readmodel"
 )
 
 func sp(s string) *string { return &s }
@@ -26,7 +26,7 @@ func now() string         { return time.Now().UTC().Format(time.RFC3339Nano) }
 // outcome and an anomaly.
 func fixture(t *testing.T) *journal.Journal {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "nim.db")
+	path := filepath.Join(t.TempDir(), "holdcall.db")
 
 	w, err := journal.Open(path, "test-machine")
 	if err != nil {
@@ -175,7 +175,7 @@ func TestCLIAndConsoleAgree(t *testing.T) {
 
 // chain_seq orders the stream, whatever the timestamps say.
 func TestChainSeqIsTheAuthoritativeOrderOnBothSurfaces(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "nim.db")
+	path := filepath.Join(t.TempDir(), "holdcall.db")
 	w, err := journal.Open(path, "test-machine")
 	if err != nil {
 		t.Fatal(err)
@@ -233,7 +233,7 @@ func TestChainSeqIsTheAuthoritativeOrderOnBothSurfaces(t *testing.T) {
 // An empty journal must read the same on both, and as nothing rather than as
 // something that passed.
 func TestEmptyJournalAgreesOnBothSurfaces(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "nim.db")
+	path := filepath.Join(t.TempDir(), "holdcall.db")
 	w, err := journal.Open(path, "test-machine")
 	if err != nil {
 		t.Fatal(err)
@@ -272,7 +272,7 @@ func TestEmptyJournalAgreesOnBothSurfaces(t *testing.T) {
 // a rule counted twice, an enrolment's staleness computed differently -- the
 // way TestCLIAndConsoleAgree already does for the journal block.
 func TestCLIAndConsoleAgreeOnPolicyCounts(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "nim.db")
+	path := filepath.Join(t.TempDir(), "holdcall.db")
 	w, err := journal.Open(path, "test-machine")
 	if err != nil {
 		t.Fatal(err)

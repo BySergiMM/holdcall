@@ -7,8 +7,8 @@ import (
 	"net"
 	"time"
 
-	"github.com/BySergiMM/nim/engine/internal/credential"
-	"github.com/BySergiMM/nim/engine/internal/journal"
+	"github.com/BySergiMM/holdcall/engine/internal/credential"
+	"github.com/BySergiMM/holdcall/engine/internal/journal"
 )
 
 // requestKinds distinguishes a Request from an Event on the wire: both carry a
@@ -42,7 +42,7 @@ var requestKinds = map[string]bool{
 // connection commits to exactly one purpose on its first request -- asking for
 // its own target's credential, managing connectors, managing agents, managing
 // policy, or deciding held calls -- and to exactly one target if that purpose
-// is credential.get. A real shim, or a real nim command, only ever does one.
+// is credential.get. A real shim, or a real holdcall command, only ever does one.
 // Anything that mixes them, or pivots to a second target on one connection,
 // gets "unauthorized" rather than a more specific reason: specific reasons
 // are exactly the oracle an attacker iterating on this protocol wants. This
@@ -163,7 +163,7 @@ func handleRequest(
 // satisfies that by executing the binary, so on its own it authorizes nothing:
 // reproduced live, where
 //
-//	nim serve --target github -- /bin/sh -c 'echo $GITHUB_TOKEN'
+//	holdcall serve --target github -- /bin/sh -c 'echo $GITHUB_TOKEN'
 //
 // printed the real secret. Both layers passed -- the caller was genuinely this
 // binary, and the connection genuinely asked for one target and only one.
@@ -215,9 +215,9 @@ func handleCredentialGet(
 	// inject the secret into, so nothing is injected.
 	if len(info.Command) == 0 {
 		return Response{ID: req.ID, Found: true, Error: fmt.Sprintf(
-			"connector %q has no authorized command: it was registered before Nim bound credentials "+
+			"connector %q has no authorized command: it was registered before Holdcall bound credentials "+
 				"to a command. Register it again with the server it belongs to, e.g. "+
-				"nim connector set %s --env %s -- <command> [args...]",
+				"holdcall connector set %s --env %s -- <command> [args...]",
 			req.Target, req.Target, info.EnvKey)}
 	}
 	if store == nil {

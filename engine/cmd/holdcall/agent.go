@@ -6,15 +6,15 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/BySergiMM/nim/engine/internal/config"
-	"github.com/BySergiMM/nim/engine/internal/daemon"
+	"github.com/BySergiMM/holdcall/engine/internal/config"
+	"github.com/BySergiMM/holdcall/engine/internal/daemon"
 )
 
-const agentAddUsage = "nim agent add <name> <path-to-executable>"
+const agentAddUsage = "holdcall agent add <name> <path-to-executable>"
 
 func runAgent(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: nim agent <add|list|remove> ...")
+		return fmt.Errorf("usage: holdcall agent <add|list|remove> ...")
 	}
 	switch args[0] {
 	case "add":
@@ -31,7 +31,7 @@ func runAgent(args []string) error {
 // parseAgentAddArgs is split out so it can be tested without a daemon.
 //
 // Two positionals rather than a flag and a `--`: an agent is identified by one
-// executable file, not by a command line, and borrowing nim serve's `--`
+// executable file, not by a command line, and borrowing holdcall serve's `--`
 // convention would suggest arguments that are never used.
 //
 // The path is made absolute here, against the directory the operator is
@@ -80,9 +80,9 @@ func runAgentAdd(args []string) error {
 		return fmt.Errorf("%s", resp.Error)
 	}
 	fmt.Printf("agent %q enrolled (%s)\n", name, path)
-	fmt.Printf("Rules can be scoped to it now: nim policy deny|allow <tool> --agent %s\n", name)
+	fmt.Printf("Rules can be scoped to it now: holdcall policy deny|allow <tool> --agent %s\n", name)
 	fmt.Println("Every window of this program is this agent, and enrolling is as privileged as")
-	fmt.Println("running Nim; the enrolment is recorded in the journal.")
+	fmt.Println("running Holdcall; the enrolment is recorded in the journal.")
 	return nil
 }
 
@@ -123,7 +123,7 @@ func runAgentList(args []string) error {
 		fmt.Printf("%d enrolment(s) marked STALE: the file at that path is no longer the one\n", stale)
 		fmt.Println("that was enrolled, so nothing will match them. That is not a sign of tampering --")
 		fmt.Println("an application that updates itself becomes a different file, and a device number")
-		fmt.Println("can change across a reboot. Run `nim agent add` again with the same name to repair.")
+		fmt.Println("can change across a reboot. Run `holdcall agent add` again with the same name to repair.")
 	}
 	return nil
 }
@@ -135,7 +135,7 @@ func runAgentRemove(args []string) error {
 	}
 	name := fs.Arg(0)
 	if name == "" {
-		return fmt.Errorf("usage: nim agent remove <name>")
+		return fmt.Errorf("usage: holdcall agent remove <name>")
 	}
 
 	conn, err := dialConnectorDaemon()

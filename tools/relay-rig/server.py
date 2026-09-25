@@ -31,9 +31,9 @@ def explode() -> str:
 
 @mcp.tool
 def dangerous_tool() -> str:
-    """Succeed when called directly, so the rig can prove Nim -- not the
+    """Succeed when called directly, so the rig can prove Holdcall -- not the
     server -- is what refuses it once a policy names it. The rig denies this
-    tool by name before comparing, over its own NIM_HOME; it names nothing a
+    tool by name before comparing, over its own HOLDCALL_HOME; it names nothing a
     real connector would recognise."""
     return "the server ran it"
 

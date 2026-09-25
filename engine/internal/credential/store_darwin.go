@@ -10,7 +10,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/BySergiMM/nim/engine/internal/config"
+	"github.com/BySergiMM/holdcall/engine/internal/config"
 )
 
 // New returns a Store backed by the macOS keychain, via the `security`
@@ -19,11 +19,11 @@ import (
 // ships with every Mac, so this needs no new dependency.
 func New() (Store, error) {
 	sum := sha256.Sum256([]byte(config.Home()))
-	return darwinStore{service: "nim-" + hex.EncodeToString(sum[:4])}, nil
+	return darwinStore{service: "holdcall-" + hex.EncodeToString(sum[:4])}, nil
 }
 
 // darwinStore scopes every secret to this install (via the same home-hash
-// scheme defaultSocket already uses), so two NIM_HOMEs on one machine never
+// scheme defaultSocket already uses), so two HOLDCALL_HOMEs on one machine never
 // collide in the shared keychain.
 type darwinStore struct{ service string }
 

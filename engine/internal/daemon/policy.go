@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/BySergiMM/nim/engine/internal/journal"
+	"github.com/BySergiMM/holdcall/engine/internal/journal"
 )
 
 // Policy: rules the daemon reads when it decides, kept where the standing
@@ -17,7 +17,7 @@ import (
 // and the change left nothing behind. A rule here is added and removed through
 // the daemon, over the same peer-verified socket as a connector or an
 // enrolment, and each change is one transaction with its rule.add or
-// rule.remove entry, so `nim log` shows when the rules changed as it shows when
+// rule.remove entry, so `holdcall log` shows when the rules changed as it shows when
 // the calls were made.
 //
 // M4.5 adds allow rules and the precedence between them and deny --
@@ -70,7 +70,7 @@ func handlePolicyAdd(req Request, effect string, j *journal.Journal) Response {
 			return Response{ID: req.ID, Error: fmt.Sprintf("looking up agent %q: %v", *agent, err)}
 		} else if !found {
 			return Response{ID: req.ID, Error: fmt.Sprintf(
-				"no agent named %q is enrolled; enrol it first with nim agent add %s <path-to-executable>",
+				"no agent named %q is enrolled; enrol it first with holdcall agent add %s <path-to-executable>",
 				*agent, *agent)}
 		}
 	}
@@ -104,7 +104,7 @@ func handlePolicyRemove(req Request, j *journal.Journal) Response {
 	r, err := j.RemoveRule(agent, connector, tool)
 	if errors.Is(err, journal.ErrNoSuchRule) {
 		return Response{ID: req.ID, Error: fmt.Sprintf(
-			"no such rule: %s. nim policy list shows the rules that exist, with their exact scope",
+			"no such rule: %s. holdcall policy list shows the rules that exist, with their exact scope",
 			scopeDescription(agent, connector, tool))}
 	}
 	if err != nil {
@@ -126,7 +126,7 @@ func handlePolicyList(req Request, j *journal.Journal) Response {
 }
 
 // handlePolicyExplain answers "which rule decides this call, and why" --
-// nim policy explain <tool> [--agent] [--connector] -- by gathering the same
+// holdcall policy explain <tool> [--agent] [--connector] -- by gathering the same
 // candidates the decision path would and running them through journal.Decide,
 // the one implementation of the precedence. The CLI never reads nim_rules
 // itself; this is the only door to it.
@@ -146,7 +146,7 @@ func handlePolicyExplain(req Request, j *journal.Journal) Response {
 		return Response{ID: req.ID, Error: err.Error()}
 	}
 	if req.RuleTool == journal.RuleToolDefault {
-		return Response{ID: req.ID, Error: `"*" is not a tool a call names; nim policy explain takes the exact tool to ask about`}
+		return Response{ID: req.ID, Error: `"*" is not a tool a call names; holdcall policy explain takes the exact tool to ask about`}
 	}
 
 	a, c := "", ""
@@ -220,13 +220,13 @@ func ruleScope(req Request) (agent, connector *string, err error) {
 }
 
 // ruleTool resolves the tool a policy.deny/allow/remove request names:
-// RuleToolDefault for `nim policy default ...` or `nim policy remove
+// RuleToolDefault for `holdcall policy default ...` or `holdcall policy remove
 // --default`, or the validated literal tool otherwise.
 //
 // "*" is refused as an ordinary tool here, on purpose: it exists only to
 // express a default, and typing it directly through --agent/--connector
 // scoped policy deny/allow would create one by accident, indistinguishable
-// at match time from one made through nim policy default. Requiring
+// at match time from one made through holdcall policy default. Requiring
 // --default keeps there being exactly one way to ask for a default rule.
 // This has nothing to do with whether a *client* may call a tool literally
 // named "*" -- it can, and such a call matches this rule exactly as it would
@@ -242,7 +242,7 @@ func ruleTool(req Request) (string, error) {
 		return "", err
 	}
 	if req.RuleTool == journal.RuleToolDefault {
-		return "", fmt.Errorf(`tool "*" is reserved for defaults; use nim policy default deny|allow instead`)
+		return "", fmt.Errorf(`tool "*" is reserved for defaults; use holdcall policy default deny|allow instead`)
 	}
 	return req.RuleTool, nil
 }

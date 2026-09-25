@@ -11,7 +11,7 @@ import (
 	"syscall"
 	"unsafe"
 
-	"github.com/BySergiMM/nim/engine/internal/config"
+	"github.com/BySergiMM/holdcall/engine/internal/config"
 )
 
 // New returns a Store backed by DPAPI (CryptProtectData/CryptUnprotectData):
@@ -114,7 +114,7 @@ func dpapiProtect(plain []byte) ([]byte, error) {
 	in := newDataBlob(plain)
 	var out dataBlob
 	// flags = 0: user-scoped (not CRYPTPROTECT_LOCAL_MACHINE), matching the
-	// single-user-install model the rest of Nim already assumes.
+	// single-user-install model the rest of Holdcall already assumes.
 	ok, _, callErr := procCryptProtectData.Call(
 		uintptr(unsafe.Pointer(in)),
 		0, 0, 0, 0, 0,

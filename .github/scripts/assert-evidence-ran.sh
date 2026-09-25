@@ -6,7 +6,7 @@
 # This exists because of how much of this suite can quietly not run. A dozen
 # or so call sites reach for t.Skip, and they guard the load-bearing ones: the single
 # test proving peer identity survives a path swap skips if the attacker process
-# never connects, the impostor and non-Nim-process tests skip without python3,
+# never connects, the impostor and non-Holdcall-process tests skip without python3,
 # the agent derivation test skips if it cannot read its own parent. `go test`
 # without -v prints "ok" for a package where every one of those skipped, so the
 # dashboard could keep saying "verified" about a property nothing had checked

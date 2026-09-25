@@ -56,6 +56,11 @@ const CurrentSchemaVersion = SchemaVersion4
 // worth keeping the two in step: a second implementation has to reproduce these
 // bytes exactly, and it will be written from the document, not from this file.
 const (
+	// The domain strings and the genesis string are part of the on-disk
+	// format, not of the product name: they seed and separate every hash in
+	// every journal written since M1.5, so they kept "nim" when the product
+	// became Holdcall. Changing them would make every existing chain fail to
+	// verify, which is exactly what a chain must never do quietly.
 	domainV1 = "nim.journal.v1\n"
 	domainV2 = "nim.journal.v2\n"
 	domainV3 = "nim.journal.v3\n"

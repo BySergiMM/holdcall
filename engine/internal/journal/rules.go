@@ -9,7 +9,7 @@ import (
 
 // RuleToolDefault is the tool value that expresses a default: an effect for
 // every tool, for the sessions in the rule's scope. It exists only through
-// `nim policy default deny|allow` -- see
+// `holdcall policy default deny|allow` -- see
 // docs/decisions/0003-allow-rules-and-precedence.md -- and is otherwise an
 // ordinary tool name to the matching query: a client that genuinely calls a
 // tool named "*" matches this rule exactly as it would match one written for

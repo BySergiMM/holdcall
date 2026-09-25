@@ -3,8 +3,8 @@ package readmodel
 import (
 	"time"
 
-	"github.com/BySergiMM/nim/engine/internal/journal"
-	"github.com/BySergiMM/nim/engine/internal/peer"
+	"github.com/BySergiMM/holdcall/engine/internal/journal"
+	"github.com/BySergiMM/holdcall/engine/internal/peer"
 )
 
 // Rule is one rule as a reader sees it. It and journal.Rule agree on scope
@@ -46,7 +46,7 @@ func RulesFrom(rows []journal.Rule) []Rule {
 
 // Budget is one cap as a reader sees it: the scope a rule would have, and
 // the number of allowed calls one session may make within it. Found missing
-// by the M5 review: `nim policy list` showed budgets and `nim status` and
+// by the M5 review: `holdcall policy list` showed budgets and `holdcall status` and
 // the console did not, so an operator reading either would have believed a
 // session unbounded that was not.
 type Budget struct {
@@ -87,7 +87,7 @@ type Agent struct {
 	EnrolledAt string `json:"enrolled_at"`
 
 	// Current reports whether the file at ExecPath is still the one that was
-	// enrolled, computed the same way `nim agent list` computes it (see
+	// enrolled, computed the same way `holdcall agent list` computes it (see
 	// daemon.stillTheEnrolledFile) -- but through internal/peer directly
 	// rather than the daemon package, so a read-only viewer with no socket
 	// to the daemon can still say it.
@@ -177,7 +177,7 @@ func ConnectorsFrom(rows []journal.Connector) []Connector {
 // receive, what is allowed or denied, and how much of it a session may do.
 // Distinct from Snapshot, which is the record of what happened -- a rule or
 // a budget is what may happen, an enrolment is as privileged as running
-// Nim, and a connector's command is the argv authorized to receive its
+// Holdcall, and a connector's command is the argv authorized to receive its
 // credential, none of which is a fact about a call that was made.
 type Policy struct {
 	Rules      []Rule      `json:"rules"`
@@ -187,7 +187,7 @@ type Policy struct {
 }
 
 // TakePolicy reads rules, budgets, agents and connectors and projects them
-// together, so a page that shows all four -- the console's Policy tab, `nim
+// together, so a page that shows all four -- the console's Policy tab, `holdcall
 // status` -- makes one call instead of four scattered across its caller.
 func TakePolicy(src PolicySource) (Policy, error) {
 	var p Policy
@@ -219,7 +219,7 @@ func TakePolicy(src PolicySource) (Policy, error) {
 	return p, nil
 }
 
-// Explanation is what `nim policy explain` says, as a reader sees it: the
+// Explanation is what `holdcall policy explain` says, as a reader sees it: the
 // effect a call shaped like (agent, connector, tool) would get, the rule that
 // decides it when one does, every rule that matched, and the budgets that
 // would be weighed once the rules allow. Decision is what journal.Decide

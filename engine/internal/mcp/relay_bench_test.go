@@ -10,7 +10,7 @@ import (
 )
 
 // The relay's per-message cost, which every message pays whether or not it is
-// a tools/call. Nim's first duty is to be invisible, and invisible includes
+// a tools/call. Holdcall's first duty is to be invisible, and invisible includes
 // not being slow enough to notice on a 512 KiB tool result.
 //
 //	go test -bench BenchmarkRelay -benchtime 2000x ./internal/mcp/
@@ -55,7 +55,7 @@ func benchRead(b *testing.B, msg []byte) {
 func BenchmarkRelayFramingSmall(b *testing.B) { benchRead(b, smallMessage()) }
 func BenchmarkRelayFramingLarge(b *testing.B) { benchRead(b, largeMessage(512)) }
 
-// benchInspect is what Nim actually does to a message on the way past:
+// benchInspect is what Holdcall actually does to a message on the way past:
 // classify it, and for a tools/call read the tool name and digest the
 // arguments. Nothing is re-serialised, so this is the entire cost of
 // understanding a message.
@@ -89,7 +89,7 @@ func BenchmarkRelayInspectLarge(b *testing.B) {
 }
 
 // BenchmarkArgumentsDigest isolates the sha256 over params.arguments, the one
-// unavoidably size-proportional thing Nim does per call.
+// unavoidably size-proportional thing Holdcall does per call.
 func BenchmarkArgumentsDigest(b *testing.B) {
 	for _, kib := range []int{1, 64, 512} {
 		b.Run(fmt.Sprintf("%dKiB", kib), func(b *testing.B) {

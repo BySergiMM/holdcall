@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/BySergiMM/nim/engine/internal/config"
-	"github.com/BySergiMM/nim/engine/internal/daemon"
+	"github.com/BySergiMM/holdcall/engine/internal/config"
+	"github.com/BySergiMM/holdcall/engine/internal/daemon"
 )
 
 // startImpostor binds the daemon socket with a process that is not this
@@ -99,9 +99,9 @@ func TestAnImpostorOnTheSocketCannotChooseWhatIsSpawned(t *testing.T) {
 
 	inj, err := fetchConnector(cfg, "github")
 	if err == nil {
-		t.Fatal("the relay accepted a credential answer from a process that is not Nim")
+		t.Fatal("the relay accepted a credential answer from a process that is not Holdcall")
 	}
-	if !strings.Contains(err.Error(), "not Nim") {
+	if !strings.Contains(err.Error(), "not Holdcall") {
 		t.Errorf("the error should say what is wrong, got %q", err)
 	}
 	if len(inj.command) != 0 {
@@ -139,7 +139,7 @@ func TestAnImpostorCannotDecideCalls(t *testing.T) {
 	t.Cleanup(func() { r.close() })
 
 	if r.conn != nil {
-		t.Fatal("the reporter kept a connection to a process that is not Nim")
+		t.Fatal("the reporter kept a connection to a process that is not Holdcall")
 	}
 	v := r.ask(daemon.Event{Kind: daemon.KindCallRequest, SessionID: "s1", Seq: 1, Tool: "dangerous_tool"}, nil)
 	if v == verdictAllow {
@@ -148,7 +148,7 @@ func TestAnImpostorCannotDecideCalls(t *testing.T) {
 }
 
 // The management commands used to dial the socket path and trust whatever
-// answered -- and nim connector set carries the plaintext secret. Every
+// answered -- and holdcall connector set carries the plaintext secret. Every
 // command now goes through DialDaemon, which refuses a listener that is not
 // this binary before a byte is sent; this is that refusal, against the same
 // impostor the relay tests use.
@@ -159,9 +159,9 @@ func TestDialDaemonRefusesAnImpostor(t *testing.T) {
 	conn, err := DialDaemon(cfg)
 	if err == nil {
 		conn.Close()
-		t.Fatal("DialDaemon handed back a connection to a process that is not Nim")
+		t.Fatal("DialDaemon handed back a connection to a process that is not Holdcall")
 	}
-	if !strings.Contains(err.Error(), "not Nim") {
+	if !strings.Contains(err.Error(), "not Holdcall") {
 		t.Errorf("the refusal does not say what was wrong: %v", err)
 	}
 	// Nothing was said to it: a management command that had got this far

@@ -4,8 +4,8 @@ import "./landing.css";
 
 const { summary, derived } = state;
 
-// A real session, recorded by Nim on 2026-09-25 against the relay rig's
-// server: every row below is a line of `nim log`, oldest first. Nothing here
+// A real session, recorded by Holdcall on 2026-09-25 against the relay rig's
+// server: every row below is a line of `holdcall log`, oldest first. Nothing here
 // is invented, which is the only reason it belongs on the front page.
 const LEDGER = [
   { n: 6, at: "20:29:45", tool: "add", decision: "allow", what: "forwarded, answered in 63 ms" },
@@ -29,7 +29,7 @@ const DECISION_LABEL: Record<string, string> = {
 const JSON_LD = {
   "@context": "https://schema.org",
   "@type": "SoftwareApplication",
-  name: "Nim",
+  name: "Holdcall",
   applicationCategory: "DeveloperApplication",
   operatingSystem: "macOS",
   description:
@@ -43,8 +43,8 @@ export default function Landing() {
     <div className="lp">
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(JSON_LD) }} />
       <header className="lp-top">
-        <a className="lp-wordmark" href="/" aria-label="Nim, home">
-          nim
+        <a className="lp-wordmark" href="/" aria-label="Holdcall, home">
+          holdcall
         </a>
         <nav className="lp-nav" aria-label="Site">
           <a href="#how">How it works</a>
@@ -61,7 +61,7 @@ export default function Landing() {
           <p className="lp-eyebrow">For teams running agents with MCP tools</p>
           <h1 id="lp-title">The control that stays on your machine.</h1>
           <p className="lp-lede">
-            Nim sits between your agent and its MCP servers. It decides every tool call where the call happens, shows
+            Holdcall sits between your agent and its MCP servers. It decides every tool call where the call happens, shows
             you the real arguments before anything dangerous runs, and keeps a record you can verify offline. The
             arguments never leave the machine. Neither does the decision.
           </p>
@@ -74,9 +74,9 @@ export default function Landing() {
             </a>
           </div>
 
-          <figure className="lp-ledger" aria-label="A real session recorded by Nim">
+          <figure className="lp-ledger" aria-label="A real session recorded by Holdcall">
             <figcaption>
-              <span className="lp-ledger-title">nim log</span>
+              <span className="lp-ledger-title">holdcall log</span>
               <span className="lp-ledger-sub">
                 one agent, one connector, seven calls, 25 September 2026. Nothing here is a mock-up.
               </span>
@@ -114,7 +114,7 @@ export default function Landing() {
           </figure>
         </section>
 
-        <section className="lp-three" aria-label="What Nim does">
+        <section className="lp-three" aria-label="What Holdcall does">
           <div>
             <h2>Decides on the machine</h2>
             <p>
@@ -126,7 +126,7 @@ export default function Landing() {
           <div>
             <h2>Approves with the real arguments</h2>
             <p>
-              A held call waits until someone runs <code>nim approve</code> and reads exactly what the server would
+              A held call waits until someone runs <code>holdcall approve</code> and reads exactly what the server would
               receive, every byte shown as itself. Never a summary, never text the model wrote about the call.
             </p>
           </div>
@@ -134,7 +134,7 @@ export default function Landing() {
             <h2>Records what you can verify</h2>
             <p>
               Each call, decision and policy change is one entry in a hash-chained journal on disk.{" "}
-              <code>nim verify</code> checks it without a network, and the format is documented so a second program
+              <code>holdcall verify</code> checks it without a network, and the format is documented so a second program
               can check it too.
             </p>
           </div>
@@ -145,7 +145,7 @@ export default function Landing() {
             <h2 id="lp-moment-title">The moment that matters</h2>
             <p>
               The agent asked to run <code>dangerous_tool</code> on a release branch, with force. The rule for that
-              tool says <em>ask</em>. Nim held the call, the operator read the arguments and rejected it, and the
+              tool says <em>ask</em>. Holdcall held the call, the operator read the arguments and rejected it, and the
               agent was told so in words it does not retry.
             </p>
             <p className="lp-dim">
@@ -154,8 +154,8 @@ export default function Landing() {
             </p>
           </div>
           <div className="lp-terminals">
-            <pre className="lp-term" aria-label="Output of nim approve">
-              <span className="lp-prompt">$ nim approve</span>
+            <pre className="lp-term" aria-label="Output of holdcall approve">
+              <span className="lp-prompt">$ holdcall approve</span>
               {"\n"}
               {"id         483e0508febce5dcc97fb26becf27180-7\n"}
               {"age        2s\n"}
@@ -167,7 +167,7 @@ export default function Landing() {
               {'    "branch": "release/2026-09",\n'}
               {'    "force": true\n'}
               {"  }\n"}
-              <span className="lp-prompt">$ nim reject 483e0508febce5dcc97fb26becf27180-7 --reason &quot;not that branch&quot;</span>
+              <span className="lp-prompt">$ holdcall reject 483e0508febce5dcc97fb26becf27180-7 --reason &quot;not that branch&quot;</span>
               {"\n"}
               {"rejected dangerous_tool for agent claude-code on connector github (recorded in the journal)\n"}
               {"reason: not that branch"}
@@ -185,10 +185,10 @@ export default function Landing() {
           <ol className="lp-flow">
             <li>
               <span className="lp-flow-name">Your client</span>
-              <span className="lp-flow-note">Claude Code, Cursor, Claude Desktop. Pointed at Nim by <code>nim init</code>.</span>
+              <span className="lp-flow-note">Claude Code, Cursor, Claude Desktop. Pointed at Holdcall by <code>holdcall init</code>.</span>
             </li>
-            <li className="lp-flow-nim">
-              <span className="lp-flow-name">nim serve</span>
+            <li className="lp-flow-holdcall">
+              <span className="lp-flow-name">holdcall serve</span>
               <span className="lp-flow-note">
                 Relays every byte unchanged. A <code>tools/call</code> is decided before it is forwarded.
               </span>
@@ -200,7 +200,7 @@ export default function Landing() {
           </ol>
           <p className="lp-how-under">
             Under the relay, one daemon per user decides against rules and budgets in SQLite, keeps credentials in the
-            OS store bound to one command, and writes the journal. It answers only to processes that are Nim, and it
+            OS store bound to one command, and writes the journal. It answers only to processes that are Holdcall, and it
             works with no network. The agent&apos;s identity is derived from the executable that spawned the relay,
             as the kernel reports it; nothing on the wire can claim to be Claude Code.
           </p>
@@ -217,7 +217,7 @@ export default function Landing() {
               <dt>Not tamper-proof</dt>
               <dd>
                 The chain has no key. Anyone who can write the journal file can rewrite it and it will verify. What
-                turns the record into evidence is <code>nim verify --expect-head</code> against a head you recorded
+                turns the record into evidence is <code>holdcall verify --expect-head</code> against a head you recorded
                 somewhere else. We do not use the words audit log.
               </dd>
             </div>
@@ -277,7 +277,7 @@ export default function Landing() {
       </main>
 
       <footer className="lp-foot">
-        <span>Nim, {new Date(derived.commitDate).getUTCFullYear()}. Built from commit {derived.commit}.</span>
+        <span>Holdcall, {new Date(derived.commitDate).getUTCFullYear()}. Built from commit {derived.commit}.</span>
         <nav aria-label="Footer">
           <a href="/status/">Status</a>
           <a href="/status/#architecture">Architecture</a>

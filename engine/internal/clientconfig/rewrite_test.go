@@ -20,12 +20,12 @@ func writeFixture(t *testing.T, name, content string) string {
 	return path
 }
 
-// nimPathFor gives every test its own nim path string, distinct from any
+// nimPathFor gives every test its own holdcall path string, distinct from any
 // real binary: BuildResult never runs it, only compares it, so it need not
 // exist.
 func nimPathFor(t *testing.T) string {
 	t.Helper()
-	return filepath.Join(t.TempDir(), "nim")
+	return filepath.Join(t.TempDir(), "holdcall")
 }
 
 func mustBuildResult(t *testing.T, path, nimPath string) Result {
@@ -50,7 +50,7 @@ func entryByKey(t *testing.T, res Result, key string) EntryPlan {
 	return EntryPlan{}
 }
 
-// A plain stdio server gets its command replaced with the nim binary and its
+// A plain stdio server gets its command replaced with the holdcall binary and its
 // original command moved after "--", with a connector name matching its
 // mcpServers key.
 func TestInitWrapsAStdioServer(t *testing.T) {
@@ -97,9 +97,9 @@ func TestInitWrapsAStdioServer(t *testing.T) {
 	}
 }
 
-// An entry already routed through the running nim binary, at the same path,
+// An entry already routed through the running holdcall binary, at the same path,
 // must not be wrapped a second time -- doing so would nest "serve ... --
-// nim serve ... -- real-command" and never spawn the real server.
+// holdcall serve ... -- real-command" and never spawn the real server.
 func TestInitLeavesAnEntryAlreadyThroughNimAlone(t *testing.T) {
 	nimPath := nimPathFor(t)
 	path := writeFixture(t, "claude.json", `{
@@ -124,8 +124,8 @@ func TestInitLeavesAnEntryAlreadyThroughNimAlone(t *testing.T) {
 	}
 }
 
-// A second nim init run over an already-wrapped file must report no changes
-// at all -- the property that makes it safe to run nim init repeatedly.
+// A second holdcall init run over an already-wrapped file must report no changes
+// at all -- the property that makes it safe to run holdcall init repeatedly.
 func TestInitRunTwiceIsIdempotent(t *testing.T) {
 	nimPath := nimPathFor(t)
 	path := writeFixture(t, "claude.json", `{
@@ -151,7 +151,7 @@ func TestInitRunTwiceIsIdempotent(t *testing.T) {
 	}
 }
 
-// An HTTP/SSE server (a "url" entry, no "command") is not something nim can
+// An HTTP/SSE server (a "url" entry, no "command") is not something holdcall can
 // sit in front of as a stdio relay, so it must be reported and left alone.
 func TestInitLeavesHTTPServersAlone(t *testing.T) {
 	path := writeFixture(t, "claude.json", `{
@@ -173,7 +173,7 @@ func TestInitLeavesHTTPServersAlone(t *testing.T) {
 	}
 }
 
-// Keys nim init never looks at -- both alongside mcpServers and inside one
+// Keys holdcall init never looks at -- both alongside mcpServers and inside one
 // server's entry -- must come back exactly as they went in.
 func TestInitPreservesUnrelatedKeys(t *testing.T) {
 	path := writeFixture(t, "claude.json", `{
@@ -217,7 +217,7 @@ func TestInitPreservesUnrelatedKeys(t *testing.T) {
 	}
 }
 
-// The order of top-level keys is not something nim init has any business
+// The order of top-level keys is not something holdcall init has any business
 // changing; Go's own map-based JSON decoding would sort them alphabetically
 // on the way back out if this were not handled deliberately.
 func TestInitPreservesKeyOrder(t *testing.T) {
@@ -272,7 +272,7 @@ func TestInitPreservesEnvVerbatim(t *testing.T) {
 	}
 }
 
-// A server key nim init cannot use as a connector name -- the same rule the
+// A server key holdcall init cannot use as a connector name -- the same rule the
 // daemon enforces when a connector is registered -- must be reported and
 // left alone rather than silently mangled into something that fits.
 func TestInitSkipsAConnectorNameThatFailsValidation(t *testing.T) {
@@ -313,7 +313,7 @@ func TestInitRefusesAFileThatIsNotAJSONObject(t *testing.T) {
 }
 
 // A file that is simply not there yet (Cursor never installed, say) is not
-// an error: nim init has nothing to do and says so.
+// an error: holdcall init has nothing to do and says so.
 func TestInitReportsAMissingFileAsNotFound(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "does-not-exist.json")
 	res, err := BuildResult(File{Client: Cursor, Path: path, Kind: KindFlat}, nimPathFor(t), Cursor, false)
@@ -328,7 +328,7 @@ func TestInitReportsAMissingFileAsNotFound(t *testing.T) {
 	}
 }
 
-// Claude Code keeps a second copy of mcpServers under each project; nim init
+// Claude Code keeps a second copy of mcpServers under each project; holdcall init
 // must reach those too, using the project path as the connector's --client
 // label context and leaving every other project key untouched.
 func TestInitHandlesClaudeCodesPerProjectMcpServers(t *testing.T) {
@@ -385,10 +385,10 @@ func TestInitHandlesClaudeCodesPerProjectMcpServers(t *testing.T) {
 	}
 }
 
-// An entry through a nim binary at a path other than the one running now is
+// An entry through a holdcall binary at a path other than the one running now is
 // reported, not silently repointed: --repoint has to be given explicitly.
 func TestInitLeavesAStalePathAloneWithoutRepoint(t *testing.T) {
-	otherNim := filepath.Join(t.TempDir(), "nim")
+	otherNim := filepath.Join(t.TempDir(), "holdcall")
 	runningNim := nimPathFor(t)
 	path := writeFixture(t, "claude.json", `{
 		"mcpServers": {
@@ -409,10 +409,10 @@ func TestInitLeavesAStalePathAloneWithoutRepoint(t *testing.T) {
 	}
 }
 
-// With --repoint, a stale entry's command is updated to the running nim's
+// With --repoint, a stale entry's command is updated to the running holdcall's
 // path and nothing else about it changes.
 func TestInitRepointsAnEntryWrappedByADifferentNimPath(t *testing.T) {
-	otherNim := filepath.Join(t.TempDir(), "nim")
+	otherNim := filepath.Join(t.TempDir(), "holdcall")
 	runningNim := nimPathFor(t)
 	path := writeFixture(t, "claude.json", `{
 		"mcpServers": {
@@ -483,7 +483,7 @@ func TestInitNeverShowsAnEnvValue(t *testing.T) {
 }`)
 	res := mustBuildResult(t, path, nimPathFor(t))
 	e := entryByKey(t, res, "github")
-	// The number is distinctive on purpose: the preview also prints the nim
+	// The number is distinctive on purpose: the preview also prints the holdcall
 	// path, which lives under a temp directory named with random digits, and
 	// a two-digit value was found in one of those names once in five runs.
 	for _, text := range []string{e.Before, e.After} {

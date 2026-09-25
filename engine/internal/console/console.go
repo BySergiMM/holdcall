@@ -1,7 +1,7 @@
-// Package console serves a local, read-only view of what Nim has recorded.
+// Package console serves a local, read-only view of what Holdcall has recorded.
 //
 // It is an observability tool and nothing else. It does not decide anything, it
-// cannot change anything, and Nim does not know it exists: close it and the
+// cannot change anything, and Holdcall does not know it exists: close it and the
 // engine behaves identically. Everything it shows comes from the journal by way
 // of readmodel, so there is no second copy of the record to disagree with the
 // first.
@@ -15,8 +15,8 @@
 // Two reads are not from the journal, and both are still reads. The daemon
 // probe says whether the socket answers. And, since M6, the calls the daemon
 // is holding for a human are read from it and shown with their real
-// arguments, exactly as nim approve prints them -- so the person deciding can
-// see them here and decide with nim approve there. The deciding stays on the
+// arguments, exactly as holdcall approve prints them -- so the person deciding can
+// see them here and decide with holdcall approve there. The deciding stays on the
 // CLI: a browser page on loopback is reachable by every other page on this
 // machine, and an approve reachable from it would be an approve reachable
 // from a model with a browser.
@@ -34,9 +34,9 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/BySergiMM/nim/engine/internal/daemon"
-	"github.com/BySergiMM/nim/engine/internal/journal"
-	"github.com/BySergiMM/nim/engine/internal/readmodel"
+	"github.com/BySergiMM/holdcall/engine/internal/daemon"
+	"github.com/BySergiMM/holdcall/engine/internal/journal"
+	"github.com/BySergiMM/holdcall/engine/internal/readmodel"
 )
 
 //go:embed index.html
@@ -159,7 +159,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 
 // daemonState is the one thing on this page that does not come from the
 // journal. Running means the socket accepted a connection just now -- which is
-// what `nim status` means by it, and all that can be shown without asking the
+// what `holdcall status` means by it, and all that can be shown without asking the
 // daemon questions its protocol does not answer.
 type daemonState struct {
 	Running bool   `json:"running"`
@@ -255,7 +255,7 @@ func (s *Server) handlePolicy(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, pol)
 }
 
-// handleExplain serves what nim policy explain says for one call shape,
+// handleExplain serves what holdcall policy explain says for one call shape,
 // through readmodel.Explain and so through journal.Decide: the console shows
 // what the daemon would do, computed by the same function, never by a copy.
 func (s *Server) handleExplain(w http.ResponseWriter, r *http.Request) {

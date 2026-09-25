@@ -3,7 +3,7 @@
 // which is the setting most likely to break the page silently in production
 // and not at all in `next dev`.
 //
-// Binds to 127.0.0.1 only. This page is a list of Nim's weaknesses; it should
+// Binds to 127.0.0.1 only. This page is a list of Holdcall's weaknesses; it should
 // not become reachable on the local network because someone previewed it.
 
 import { createServer } from "node:http";
@@ -58,7 +58,7 @@ createServer((req, res) => {
   res.writeHead(200, { ...SECURITY, "Content-Type": TYPES[extname(path)] ?? "application/octet-stream" });
   res.end(readFileSync(path));
 }).listen(port, "127.0.0.1", () => {
-  console.log(`\n  Nim control plane, production build, local only:\n`);
+  console.log(`\n  Holdcall control plane, production build, local only:\n`);
   console.log(`      http://127.0.0.1:${port}\n`);
   console.log(`  Serving ${out}`);
   console.log(`  With the vercel.json headers applied, CSP included. Ctrl-C to stop.\n`);

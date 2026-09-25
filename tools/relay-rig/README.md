@@ -1,16 +1,16 @@
 # Relay rig
 
-The acceptance test for the one thing Nim must never get wrong: being invisible.
+The acceptance test for the one thing Holdcall must never get wrong: being invisible.
 
 It drives a real MCP client against the same server twice — once directly,
-once through `nim serve` — and compares everything the client can observe:
+once through `holdcall serve` — and compares everything the client can observe:
 the tool list, the JSON schemas, unicode round-trips, a 512 KiB payload,
 error propagation and ping. Everything must match, with two named exceptions
 that must differ in exactly one way each: a tool a policy rule denies, and a
 frame whose JSON object names `method` twice.
 
 ```bash
-cd engine && go build -o bin/nim ./cmd/nim && cd ..
+cd engine && go build -o bin/holdcall ./cmd/holdcall && cd ..
 
 # fastmcp requires Python >=3.10; if python3 on PATH is older, point this at
 # a newer interpreter instead (see "Python version" below).
@@ -22,18 +22,18 @@ tools/relay-rig/.venv/bin/python tools/relay-rig/compare.py
 
 Expected last line: `RESULT: IDENTICAL`. That covers both halves: every MATCH
 row above it matched, and every must-differ case below it differed exactly as
-required. `NIM_BINARY` overrides the binary under test.
+required. `HOLDCALL_BINARY` overrides the binary under test.
 
-The rig starts its own `nim daemon` (over its own `NIM_HOME`, at
-`tools/relay-rig/nim-home/`, gitignored) before comparing, denies one tool
-through it with `nim policy deny`, and stops that daemon again once done —
+The rig starts its own `holdcall daemon` (over its own `HOLDCALL_HOME`, at
+`tools/relay-rig/holdcall-home/`, gitignored) before comparing, denies one tool
+through it with `holdcall policy deny`, and stops that daemon again once done —
 whether or not the comparison passed.
 
 Every fastmcp transport is closed before the daemon is stopped. fastmcp keeps
 the relay subprocess alive after the client context exits (`keep_alive`
 defaults to true) and only ends it when the transport is closed or the event
 loop is torn down; a relay that outlives the daemon reports, correctly, that
-its `session.end` went unrecorded. That report is Nim working as designed,
+its `session.end` went unrecorded. That report is Holdcall working as designed,
 and the rig's job is not to provoke it.
 
 ## Python version
@@ -57,24 +57,24 @@ handshake, while the refusal does.
 ## The must-differ cases
 
 **A tool a rule denies, under both handshakes.** `dangerous_tool` succeeds
-when called directly, so a refusal through Nim proves Nim stopped it, not
-that the server had nothing to say. The rig runs `nim policy deny
+when called directly, so a refusal through Holdcall proves Holdcall stopped it, not
+that the server had nothing to say. The rig runs `holdcall policy deny
 dangerous_tool` against its own daemon before comparing, and runs this case
 twice: under `mode="legacy"` (`initialize`) and under the client's default
 `mode="auto"`, which since fastmcp 4 negotiates `server/discover` and the
 2026-07-28 revision, where every result carries a `resultType` the client
-validates strictly. A refusal is the one message Nim writes itself, so it is
-the one place a dialect mismatch can hide: before Nim answered in the
+validates strictly. A refusal is the one message Holdcall writes itself, so it is
+the one place a dialect mismatch can hide: before Holdcall answered in the
 negotiated dialect, a client in the default mode raised a local
 `ValidationError` on the refusal instead of the `ToolError` it is meant to
-read as (F-021, fixed 2026-09-15). Through Nim the call must come back as a tool error whose
-text is exactly `mcp.DeniedByPolicy`: `"Nim denied this call by policy. Do not
-retry automatically."` — it names Nim, and it says not to retry.
+read as (F-021, fixed 2026-09-15). Through Holdcall the call must come back as a tool error whose
+text is exactly `mcp.DeniedByPolicy`: `"Holdcall denied this call by policy. Do not
+retry automatically."` — it names Holdcall, and it says not to retry.
 
 **A frame with a repeated `method` key.** `{"...,"method":"ping","method":
 "tools/call",...}` is valid JSON; Python's own parser (like JavaScript's)
 keeps the last value and answers it as an ordinary `tools/call`, which is what
-the direct run gets back. Through Nim, `internal/mcp.Classify`'s exact-key
+the direct run gets back. Through Holdcall, `internal/mcp.Classify`'s exact-key
 reader refuses the frame outright — not a JSON-RPC error, not a tool result,
 nothing at all on that id, because which of the two methods to answer under is
 the very question it cannot answer safely. The rig sends this frame over a

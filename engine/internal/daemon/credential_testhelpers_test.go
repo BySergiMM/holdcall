@@ -7,15 +7,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/BySergiMM/nim/engine/internal/journal"
-	"github.com/BySergiMM/nim/engine/internal/peer"
+	"github.com/BySergiMM/holdcall/engine/internal/journal"
+	"github.com/BySergiMM/holdcall/engine/internal/peer"
 )
 
 // freshJournal is a writable journal in its own temp directory, seeded so the
 // chain has a genesis to start from.
 func freshJournal(t testing.TB) *journal.Journal {
 	t.Helper()
-	return openJournal(t, filepath.Join(t.TempDir(), "nim.db"))
+	return openJournal(t, filepath.Join(t.TempDir(), "holdcall.db"))
 }
 
 // tempSocketPath keeps the path short: an AF_UNIX address is capped near 104

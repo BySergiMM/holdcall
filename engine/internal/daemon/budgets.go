@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/BySergiMM/nim/engine/internal/journal"
+	"github.com/BySergiMM/holdcall/engine/internal/journal"
 )
 
 // Budgets: a cap on the number of ALLOWED calls one session may make,
@@ -42,7 +42,7 @@ func handleBudgetSet(req Request, j *journal.Journal) Response {
 			return Response{ID: req.ID, Error: fmt.Sprintf("looking up agent %q: %v", *agent, err)}
 		} else if !found {
 			return Response{ID: req.ID, Error: fmt.Sprintf(
-				"no agent named %q is enrolled; enrol it first with nim agent add %s <path-to-executable>",
+				"no agent named %q is enrolled; enrol it first with holdcall agent add %s <path-to-executable>",
 				*agent, *agent)}
 		}
 	}
@@ -72,7 +72,7 @@ func handleBudgetRemove(req Request, j *journal.Journal) Response {
 	b, err := j.RemoveBudget(agent, connector, tool)
 	if errors.Is(err, journal.ErrNoSuchBudget) {
 		return Response{ID: req.ID, Error: fmt.Sprintf(
-			"no such budget: %s. nim policy list shows the budgets that exist, with their exact scope",
+			"no such budget: %s. holdcall policy list shows the budgets that exist, with their exact scope",
 			budgetScopeDescription(agent, connector, tool))}
 	}
 	if err != nil {
@@ -114,7 +114,7 @@ func budgetScope(req Request) (agent, connector *string, err error) {
 }
 
 // budgetTool resolves the tool a budget.set/remove request names:
-// journal.BudgetToolAll for `nim policy budget ... --all-tools`, or the
+// journal.BudgetToolAll for `holdcall policy budget ... --all-tools`, or the
 // validated literal tool otherwise -- the same shape ruleTool resolves for
 // a rule's default.
 func budgetTool(req Request) (string, error) {
@@ -127,13 +127,13 @@ func budgetTool(req Request) (string, error) {
 	// validateTool's own empty-tool message tells the caller to write a
 	// rule; a budget request that named no tool deserves its own sentence.
 	if req.BudgetTool == "" {
-		return "", fmt.Errorf("a budget needs the tool it caps: nim policy budget <n> --tool <tool>, or --all-tools")
+		return "", fmt.Errorf("a budget needs the tool it caps: holdcall policy budget <n> --tool <tool>, or --all-tools")
 	}
 	if err := validateTool(req.BudgetTool); err != nil {
 		return "", err
 	}
 	if req.BudgetTool == journal.BudgetToolAll {
-		return "", fmt.Errorf(`tool "*" is reserved for --all-tools; use nim policy budget <n> --all-tools instead`)
+		return "", fmt.Errorf(`tool "*" is reserved for --all-tools; use holdcall policy budget <n> --all-tools instead`)
 	}
 	return req.BudgetTool, nil
 }

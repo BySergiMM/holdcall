@@ -35,12 +35,12 @@ import (
 // decision back and the client reads it. The journal write is included on
 // purpose -- the entry is durable before the answer is sent, which is what
 // makes a forwarded call a recorded call, and excluding it would measure
-// something Nim never does.
+// something Holdcall never does.
 
 // quiet silences the daemon's own logging for the duration of a benchmark.
 //
 // Not cosmetic: log writes to the same stream the benchmark reports on, and a
-// "nim daemon listening on ..." line lands in the middle of the result row,
+// "holdcall daemon listening on ..." line lands in the middle of the result row,
 // which makes the numbers unparseable by benchstat and unreadable by anyone.
 func quiet(b *testing.B) {
 	b.Helper()
@@ -221,7 +221,7 @@ func BenchmarkDecisionDenied(b *testing.B) {
 
 // BenchmarkCredentialLookup is the spawn-time round trip, measured at the
 // handler so it excludes the OS credential store: what is being checked is
-// Nim's own cost, and a real keychain read is the operating system's.
+// Holdcall's own cost, and a real keychain read is the operating system's.
 func BenchmarkCredentialLookup(b *testing.B) {
 	j := freshJournal(b)
 	store := newFakeStore()

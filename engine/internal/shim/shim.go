@@ -42,11 +42,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/BySergiMM/nim/engine/internal/config"
-	"github.com/BySergiMM/nim/engine/internal/daemon"
-	"github.com/BySergiMM/nim/engine/internal/journal"
-	"github.com/BySergiMM/nim/engine/internal/mcp"
-	"github.com/BySergiMM/nim/engine/internal/peer"
+	"github.com/BySergiMM/holdcall/engine/internal/config"
+	"github.com/BySergiMM/holdcall/engine/internal/daemon"
+	"github.com/BySergiMM/holdcall/engine/internal/journal"
+	"github.com/BySergiMM/holdcall/engine/internal/mcp"
+	"github.com/BySergiMM/holdcall/engine/internal/peer"
 )
 
 // decisionTimeout bounds how long a tools/call waits for the daemon.
@@ -89,7 +89,7 @@ type Shim struct {
 	sessionID string
 	reporter  *reporter
 
-	// out is everything Nim sends the client, from both pumps. See clientOut.
+	// out is everything Holdcall sends the client, from both pumps. See clientOut.
 	out *clientOut
 
 	mu       sync.Mutex
@@ -118,7 +118,7 @@ func (s *Shim) stop(cmd *exec.Cmd) error {
 	return s.stopErr
 }
 
-// clientOut serialises everything Nim writes to the client.
+// clientOut serialises everything Holdcall writes to the client.
 //
 // Two goroutines write here: the one relaying the server's responses, and the
 // one answering a call that was refused. A write to a pipe larger than the
@@ -148,10 +148,10 @@ func Run(opts Options) error {
 	// A configuration that cannot work is worth one line on stderr, where the
 	// client will show it, rather than a relay that quietly records nothing.
 	if err := opts.Config.Validate(); err != nil {
-		fmt.Fprintf(os.Stderr, "nim: %v\nnim: relaying anyway; calls will not be recorded\n", err)
+		fmt.Fprintf(os.Stderr, "holdcall: %v\nnim: relaying anyway; calls will not be recorded\n", err)
 	}
 	if err := opts.Config.EnsureDirs(); err != nil {
-		fmt.Fprintf(os.Stderr, "nim: %v\n", err)
+		fmt.Fprintf(os.Stderr, "holdcall: %v\n", err)
 	}
 
 	// The one blocking round-trip before anything is spawned: a connector with
@@ -172,8 +172,8 @@ func Run(opts Options) error {
 	if len(inj.command) > 0 {
 		if len(opts.Command) > 0 && !slices.Equal(opts.Command, inj.command) {
 			fmt.Fprintf(os.Stderr,
-				"nim: ignoring the command given on the command line; connector %q is registered to run %s\n"+
-					"nim: the daemon decides what a credential may be injected into, not the caller\n",
+				"holdcall: ignoring the command given on the command line; connector %q is registered to run %s\n"+
+					"holdcall: the daemon decides what a credential may be injected into, not the caller\n",
 				opts.Connector, strings.Join(inj.command, " "))
 		}
 		command = inj.command
@@ -181,7 +181,7 @@ func Run(opts Options) error {
 	if len(command) == 0 {
 		return fmt.Errorf(
 			"no downstream command: give one after --, or register one with "+
-				"nim connector set %s --env KEY -- <command> [args...]", opts.Connector)
+				"holdcall connector set %s --env KEY -- <command> [args...]", opts.Connector)
 	}
 
 	s := &Shim{
@@ -319,7 +319,7 @@ func (s *Shim) finish() {
 // pumpRequests carries client -> server, deciding every tools/call on the way.
 //
 // Three things can stop a message here, and nothing else does: a tools/call the
-// daemon refused, a batch carrying one, and a frame Nim could not read. Anything
+// daemon refused, a batch carrying one, and a frame Holdcall could not read. Anything
 // else goes on as the bytes that arrived.
 func (s *Shim) pumpRequests(in io.Reader, out io.WriteCloser) {
 	defer out.Close()
@@ -343,12 +343,12 @@ func (s *Shim) pumpRequests(in io.Reader, out io.WriteCloser) {
 
 		case anomaly != mcp.AnomalyNone:
 			// Includes an object that names a key twice. Valid JSON, but the
-			// one shape on which Nim and a server may legitimately read
+			// one shape on which Holdcall and a server may legitimately read
 			// different messages, so it is treated exactly as a frame that
 			// could not be read at all: not relayed, and not answered, because
 			// which of two ids to answer under is the same question.
 			// Unreadable, so unaccountable. Go rejects JSON that other parsers
-			// accept -- NaN is the easy example -- so a frame Nim cannot parse
+			// accept -- NaN is the easy example -- so a frame Holdcall cannot parse
 			// may still be a tools/call to the server behind it. There is no id
 			// to answer with, and guessing one would be worse than silence.
 			s.refuse(refusalName(anomaly))
@@ -388,7 +388,7 @@ func (s *Shim) pumpRequests(in io.Reader, out io.WriteCloser) {
 // rewritten on the way: a call either travels exactly as it arrived, or it does
 // not travel.
 func (s *Shim) decide(env mcp.Envelope) bool {
-	// Before a sequence number is spent or the daemon is asked: a call Nim
+	// Before a sequence number is spent or the daemon is asked: a call Holdcall
 	// cannot read as exactly one tool name is refused here, whole. The daemon
 	// would otherwise decide on "" or on whichever of two names Go's decoder
 	// preferred, and the journal would record that as what was called while
@@ -484,7 +484,7 @@ func (s *Shim) negotiated() string {
 func (s *Shim) batchMayPass(raw []byte) bool {
 	envs, ok := mcp.BatchElements(raw)
 	if !ok {
-		s.refuse("a batch Nim could not read")
+		s.refuse("a batch Holdcall could not read")
 		return false
 	}
 	if !slices.ContainsFunc(envs, mcp.Envelope.IsToolCall) {
@@ -513,7 +513,7 @@ func refusalName(a mcp.Anomaly) string {
 	return "a frame that is not valid JSON"
 }
 
-// refuse says once that Nim is dropping frames rather than relaying them.
+// refuse says once that Holdcall is dropping frames rather than relaying them.
 //
 // Once, for the same reason the loss warning is: this is on the relay's path,
 // and a line per message would bury the client's own output. The anomaly entries
@@ -521,7 +521,7 @@ func refusalName(a mcp.Anomaly) string {
 func (s *Shim) refuse(what string) {
 	s.refused.Do(func() {
 		fmt.Fprintf(os.Stderr,
-			"nim: not relaying %s\nnim: Nim cannot inspect it, and forwarding it would put a call in front of a server unchecked\n",
+			"holdcall: not relaying %s\nnim: Holdcall cannot inspect it, and forwarding it would put a call in front of a server unchecked\n",
 			what)
 	})
 }
@@ -687,7 +687,7 @@ func dialDaemon(cfg config.Config) *reporter {
 	if conn != nil {
 		if genuine, pid := daemonIsGenuine(conn); !genuine {
 			fmt.Fprintf(os.Stderr,
-				"nim: %s\nnim: refusing to take decisions from it; every tool call in this session will be denied\n",
+				"holdcall: %s\nnim: refusing to take decisions from it; every tool call in this session will be denied\n",
 				peerRefusalReason(cfg, peer.DiagnosePID(pid)))
 			conn.Close()
 			conn = nil
@@ -702,7 +702,7 @@ func dialDaemon(cfg config.Config) *reporter {
 		// be refused -- and a user who is not told that will read the refusals
 		// as the tools being broken.
 		fmt.Fprintf(os.Stderr,
-			"nim: no daemon is listening on %s\nnim: a call Nim cannot record is a call Nim will not forward, so every tool call in this session will be denied\n",
+			"holdcall: no daemon is listening on %s\nnim: a call Holdcall cannot record is a call Holdcall will not forward, so every tool call in this session will be denied\n",
 			cfg.Daemon.Socket)
 	}
 	go r.loop()
@@ -747,46 +747,46 @@ func daemonIsGenuine(conn net.Conn) (genuine bool, pid int) {
 // build of this same binary: peer.Diagnose found it running a different
 // file at exactly our own executable path, which is what an in-place
 // upgrade or a `go build` over a running daemon leaves behind (F-001). It
-// is reported apart from a peer that is simply not Nim, because the remedy
-// is different -- `nim daemon restart`, not investigating an impostor --
+// is reported apart from a peer that is simply not Holdcall, because the remedy
+// is different -- `holdcall daemon restart`, not investigating an impostor --
 // and apart from ErrDaemonNotReachable, because something IS listening and
 // answering as a daemon, just an old one. Wrapped into the errors DialDaemon
-// and DialRunningDaemon return, so a caller like nim doctor or nim status
+// and DialRunningDaemon return, so a caller like holdcall doctor or holdcall status
 // can tell the two apart with errors.Is instead of matching text.
-var ErrDaemonOlderBuild = errors.New("the daemon on the socket is an older build of Nim")
+var ErrDaemonOlderBuild = errors.New("the daemon on the socket is an older build of Holdcall")
 
 // peerRefusalReason is the sentence every caller that refuses a peer builds
 // its message from -- an error return or a line on stderr -- so an upgrade
 // gets one diagnosis, written once: the specific remedy when diag is
-// peer.SameLaunchPathOlderBuild, the unchanged "is not Nim" wording
+// peer.SameLaunchPathOlderBuild, the unchanged "is not Holdcall" wording
 // otherwise. diag is computed by the caller with a single peer.Diagnose (or
 // peer.DiagnosePID) call, never recomputed here -- see peer.Diagnose's doc
 // comment on why calling it twice on the same connection is unsafe.
 func peerRefusalReason(cfg config.Config, diag peer.Diagnosis) string {
 	if diag == peer.SameLaunchPathOlderBuild {
-		return fmt.Sprintf("the daemon on %s is an older build of Nim at the same path; run `nim daemon restart`",
+		return fmt.Sprintf("the daemon on %s is an older build of Holdcall at the same path; run `holdcall daemon restart`",
 			cfg.Daemon.Socket)
 	}
-	return fmt.Sprintf("the process listening on %s is not Nim", cfg.Daemon.Socket)
+	return fmt.Sprintf("the process listening on %s is not Holdcall", cfg.Daemon.Socket)
 }
 
 // peerRefusalError is peerRefusalReason for a caller that returns an error
 // rather than printing to stderr: the SameLaunchPathOlderBuild case wraps
 // ErrDaemonOlderBuild so it can be matched with errors.Is; every other case
-// keeps the "is not Nim; <suffix>" wording callers used before Diagnose
+// keeps the "is not Holdcall; <suffix>" wording callers used before Diagnose
 // existed, with suffix naming what that particular caller was about to do.
 func peerRefusalError(cfg config.Config, diag peer.Diagnosis, suffix string) error {
 	if diag == peer.SameLaunchPathOlderBuild {
 		return fmt.Errorf("%w: %s", ErrDaemonOlderBuild, peerRefusalReason(cfg, diag))
 	}
-	return fmt.Errorf("the process listening on %s is not Nim; %s", cfg.Daemon.Socket, suffix)
+	return fmt.Errorf("the process listening on %s is not Holdcall; %s", cfg.Daemon.Socket, suffix)
 }
 
 // PeerPID connects to the daemon socket and reports the pid of whatever is
-// listening, together with whether it is confirmably Nim: either this exact
+// listening, together with whether it is confirmably Holdcall: either this exact
 // build, or an older build at this binary's own path (peer.Diagnose's
-// SameLaunchPathOlderBuild). Exported for `nim daemon restart`, which needs
-// the pid to signal but must never signal a process it cannot tell is Nim
+// SameLaunchPathOlderBuild). Exported for `holdcall daemon restart`, which needs
+// the pid to signal but must never signal a process it cannot tell is Holdcall
 // at all -- unlike DialDaemon and DialRunningDaemon, which only need to
 // refuse to talk to such a peer, this hands the caller the one fact it
 // needs to act on it instead.
@@ -886,7 +886,7 @@ func (r *reporter) exchange(it item) verdict {
 	}
 	v, ok := verdictFor(d.Decision)
 	if !ok {
-		r.drop("the daemon sent a decision Nim does not understand")
+		r.drop("the daemon sent a decision Holdcall does not understand")
 		return verdictNoDecision
 	}
 	return v
@@ -965,7 +965,7 @@ func (r *reporter) awaitApproval(it item) verdict {
 	}
 	v, ok := verdictFor(d.Decision)
 	if !ok {
-		r.drop("the daemon sent a decision Nim does not understand")
+		r.drop("the daemon sent a decision Holdcall does not understand")
 		return verdictNoDecision
 	}
 	return v
@@ -1058,7 +1058,7 @@ func (r *reporter) miss(reason string) {
 
 	if first {
 		fmt.Fprintf(os.Stderr,
-			"nim: not recording every call -- %s\nnim: the relay is unaffected; the journal for this session will be incomplete\n",
+			"holdcall: not recording every call -- %s\nnim: the relay is unaffected; the journal for this session will be incomplete\n",
 			reason)
 	}
 }
@@ -1070,7 +1070,7 @@ func (r *reporter) summarise() {
 	if lost == 0 {
 		return
 	}
-	fmt.Fprintf(os.Stderr, "nim: %d event(s) went unrecorded this session (%s)\n",
+	fmt.Fprintf(os.Stderr, "holdcall: %d event(s) went unrecorded this session (%s)\n",
 		lost, strings.Join(causes, "; then "))
 }
 
@@ -1112,15 +1112,15 @@ func StartDaemon() bool {
 		return false
 	}
 	// The log lives in the home directory, which on a fresh install does not
-	// exist yet when `nim connector set` is the first thing run. Opening the
+	// exist yet when `holdcall connector set` is the first thing run. Opening the
 	// file then failed, the error was dropped, and the daemon's first words
 	// -- the ones that explain why it did not start -- went nowhere.
 	if err := os.MkdirAll(config.Home(), 0o700); err != nil {
-		fmt.Fprintf(os.Stderr, "nim: cannot create %s for the daemon's log: %v\n", config.Home(), err)
+		fmt.Fprintf(os.Stderr, "holdcall: cannot create %s for the daemon's log: %v\n", config.Home(), err)
 	}
 	log, err := os.OpenFile(config.LogPath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "nim: cannot open %s: the daemon will start with no log: %v\n", config.LogPath(), err)
+		fmt.Fprintf(os.Stderr, "holdcall: cannot open %s: the daemon will start with no log: %v\n", config.LogPath(), err)
 		log = nil
 	}
 	return startDaemonProcess(self, log) == nil
@@ -1128,11 +1128,11 @@ func StartDaemon() bool {
 
 // DialDaemon connects for one request/response exchange -- a connector, an
 // enrolment or a rule -- starting the daemon if it is not running, and
-// refusing to hand back a connection to anything that is not Nim.
+// refusing to hand back a connection to anything that is not Holdcall.
 //
 // The refusal is the point. The relay verified the daemon before sending it a
 // byte, but the management commands dialled the socket path and trusted
-// whatever answered: `nim connector set` would have written the plaintext
+// whatever answered: `holdcall connector set` would have written the plaintext
 // secret to any process that had bound the path first. Exported so every
 // command that talks to the daemon goes through the one check.
 func DialDaemon(cfg config.Config) (net.Conn, error) {
@@ -1149,9 +1149,9 @@ func DialDaemon(cfg config.Config) (net.Conn, error) {
 }
 
 // ErrDaemonNotReachable means nothing answered the daemon's socket within the
-// timeout -- as opposed to something answering that is not Nim, which
+// timeout -- as opposed to something answering that is not Holdcall, which
 // DialRunningDaemon reports as a different error entirely. The distinction
-// matters to a caller like nim doctor: the first is the ordinary state of an
+// matters to a caller like holdcall doctor: the first is the ordinary state of an
 // install nobody has started yet, worth a WARN; the second means something is
 // impersonating the daemon, worth a FAIL.
 var ErrDaemonNotReachable = errors.New("no daemon reachable")
@@ -1162,7 +1162,7 @@ var ErrDaemonNotReachable = errors.New("no daemon reachable")
 // Unlike DialDaemon, which brings the daemon up when nothing answers because
 // that is the right thing for a command that needs a decision, this is for a
 // caller whose whole job is reporting what is true right now: starting the
-// thing being checked would make "is it running" unanswerable. nim doctor is
+// thing being checked would make "is it running" unanswerable. holdcall doctor is
 // the one caller today, and it opens one of these per check, exactly as
 // DialDaemon's callers open one connection per request kind.
 func DialRunningDaemon(cfg config.Config, timeout time.Duration) (net.Conn, error) {
@@ -1246,7 +1246,7 @@ func fetchConnector(cfg config.Config, connector string) (injection, error) {
 	defer conn.Close()
 
 	// Whoever is on the other end of this decides what command receives a
-	// credential, so it has to be Nim. Refusing to spawn is the only safe
+	// credential, so it has to be Holdcall. Refusing to spawn is the only safe
 	// answer here: an impostor's answer is worse than no answer.
 	if genuine, pid := daemonIsGenuine(conn); !genuine {
 		return injection{}, peerRefusalError(cfg, peer.DiagnosePID(pid), "refusing to ask it for a credential or a command")

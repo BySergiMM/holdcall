@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/BySergiMM/nim/engine/internal/daemon"
-	"github.com/BySergiMM/nim/engine/internal/journal"
-	"github.com/BySergiMM/nim/engine/internal/mcp"
+	"github.com/BySergiMM/holdcall/engine/internal/daemon"
+	"github.com/BySergiMM/holdcall/engine/internal/journal"
+	"github.com/BySergiMM/holdcall/engine/internal/mcp"
 )
 
 // The tests below drive the relay's two pumps directly rather than through Run,
@@ -49,7 +49,7 @@ type fakeDaemon struct {
 func newDaemon(t *testing.T) *fakeDaemon {
 	t.Helper()
 	path := filepath.Join(os.TempDir(),
-		fmt.Sprintf("nim-enforce-%d.sock", time.Now().UnixNano()%1e9))
+		fmt.Sprintf("holdcall-enforce-%d.sock", time.Now().UnixNano()%1e9))
 	ln, err := net.Listen("unix", path)
 	if err != nil {
 		t.Fatalf("listening: %v", err)
@@ -192,7 +192,7 @@ type rig struct {
 	shim      *Shim
 	daemon    *fakeDaemon
 	connector *syncBuf // what the downstream server received
-	client    *syncBuf // what the client received from Nim itself
+	client    *syncBuf // what the client received from Holdcall itself
 }
 
 // newRig wires a relay to a fake daemon. Pass nil to leave it with no daemon at
@@ -273,7 +273,7 @@ func decodeResponse(t *testing.T, line []byte) struct {
 		} `json:"result"`
 	}
 	if err := json.Unmarshal(line, &got); err != nil {
-		t.Fatalf("what Nim sent the client is not valid JSON: %v\n%s", err, line)
+		t.Fatalf("what Holdcall sent the client is not valid JSON: %v\n%s", err, line)
 	}
 	return got
 }
@@ -301,7 +301,7 @@ func TestAnAllowedCallReachesTheConnectorByteForByte(t *testing.T) {
 		}
 	}
 	if g.client.String() != "" {
-		t.Errorf("Nim answered a call it allowed: %q", g.client.String())
+		t.Errorf("Holdcall answered a call it allowed: %q", g.client.String())
 	}
 
 	calls := g.daemon.calls()
@@ -619,10 +619,10 @@ func TestResponsesAreRelayedByteForByte(t *testing.T) {
 	}
 }
 
-// ---------- 11. frames Nim cannot read ----------
+// ---------- 11. frames Holdcall cannot read ----------
 
 // The reason this rule is categorical. Go rejects NaN and Infinity; Python
-// accepts both, so a frame Nim calls malformed is a working tools/call to a
+// accepts both, so a frame Holdcall calls malformed is a working tools/call to a
 // FastMCP server. The third case defeats any heuristic that looks for the
 // literal string "tools/call" in the bytes.
 func TestUnreadableFramesAreNotRelayed(t *testing.T) {
@@ -640,10 +640,10 @@ func TestUnreadableFramesAreNotRelayed(t *testing.T) {
 		t.Fatalf("an unreadable frame reached the connector: %q", g.connector.String())
 	}
 	if s := g.client.String(); s != "" {
-		t.Errorf("Nim invented an answer to a frame it could not read: %q", s)
+		t.Errorf("Holdcall invented an answer to a frame it could not read: %q", s)
 	}
 	if n := len(g.daemon.calls()); n != 0 {
-		t.Errorf("the daemon was asked about %d frames Nim could not parse", n)
+		t.Errorf("the daemon was asked about %d frames Holdcall could not parse", n)
 	}
 
 	got := g.daemon.await(t, len(frames), anomalyOf(mcp.AnomalyMalformedJSON))
@@ -666,7 +666,7 @@ func TestABatchCarryingAToolCallIsRefusedWhole(t *testing.T) {
 		t.Fatalf("part of a refused batch reached the connector: %q", g.connector.String())
 	}
 	// No call.request, no seq: the record has no shape for a batch element, and
-	// inventing one would put a call in the journal that Nim never decided.
+	// inventing one would put a call in the journal that Holdcall never decided.
 	if n := len(g.daemon.calls()); n != 0 {
 		t.Errorf("the daemon was asked about %d batch elements", n)
 	}
@@ -704,7 +704,7 @@ func TestABatchWithoutAToolCallIsRelayedByteForByte(t *testing.T) {
 		t.Errorf("a harmless batch was altered or dropped\n got %q\nwant %q", got, frame)
 	}
 	if g.client.String() != "" {
-		t.Errorf("Nim answered a batch it relayed: %q", g.client.String())
+		t.Errorf("Holdcall answered a batch it relayed: %q", g.client.String())
 	}
 }
 
@@ -743,23 +743,23 @@ func TestOnlyToolCallsConsultTheDaemon(t *testing.T) {
 	g.relay(frames...)
 
 	if got := g.connector.String(); got != want {
-		t.Errorf("a method that is not Nim's business was altered or held up\n got %q\nwant %q",
+		t.Errorf("a method that is not Holdcall's business was altered or held up\n got %q\nwant %q",
 			got, want)
 	}
 	if n := len(g.daemon.calls()); n != 0 {
 		t.Errorf("the daemon was asked about %d messages that were not tools/call", n)
 	}
 	if g.client.String() != "" {
-		t.Errorf("Nim answered something it should only have relayed: %q", g.client.String())
+		t.Errorf("Holdcall answered something it should only have relayed: %q", g.client.String())
 	}
 }
 
 // ---------- 17. a failing tool is not a refusal ----------
 
 // MCP reports a tool that raised as a successful response carrying
-// result.isError -- the same shape Nim uses to refuse. The difference is who
+// result.isError -- the same shape Holdcall uses to refuse. The difference is who
 // wrote it, and the record has to keep them apart: one is a connector saying the
-// work failed, the other is Nim saying the work never happened.
+// work failed, the other is Holdcall saying the work never happened.
 func TestAConnectorErrorIsNotANimRefusal(t *testing.T) {
 	g := newRig(t, newDaemon(t))
 
@@ -831,7 +831,7 @@ var _ io.WriteCloser = (*syncBuf)(nil)
 
 // ---------- 16. objects that do not mean one thing ----------
 
-// answers reads every message Nim itself sent the client, in order.
+// answers reads every message Holdcall itself sent the client, in order.
 func answers(t *testing.T, client *syncBuf) []struct {
 	ID     json.RawMessage `json:"id"`
 	Result struct {
@@ -865,7 +865,7 @@ func answers(t *testing.T, client *syncBuf) []struct {
 			} `json:"result"`
 		}
 		if err := json.Unmarshal([]byte(line), &a); err != nil {
-			t.Fatalf("Nim sent the client something that is not JSON-RPC: %v\n%s", err, line)
+			t.Fatalf("Holdcall sent the client something that is not JSON-RPC: %v\n%s", err, line)
 		}
 		out = append(out, a)
 	}
@@ -891,12 +891,12 @@ func TestAToolCallHiddenBehindARepeatedKeyIsRefused(t *testing.T) {
 		t.Fatalf("a frame naming a key twice reached the connector: %q", g.connector.String())
 	}
 	if n := len(g.daemon.calls()); n != 0 {
-		t.Errorf("the daemon was asked to decide %d frames Nim could not read as one message", n)
+		t.Errorf("the daemon was asked to decide %d frames Holdcall could not read as one message", n)
 	}
 	// Not answered: with the id itself among the keys that may repeat, which
 	// id to answer under is the same question as which method was meant.
 	if s := g.client.String(); s != "" {
-		t.Errorf("Nim invented an answer to a frame it could not read: %q", s)
+		t.Errorf("Holdcall invented an answer to a frame it could not read: %q", s)
 	}
 	if got := g.daemon.await(t, len(frames), anomalyOf(mcp.AnomalyDuplicateKey)); len(got) != len(frames) {
 		t.Errorf("recorded %d duplicate_key anomalies, want %d", len(got), len(frames))
@@ -904,7 +904,7 @@ func TestAToolCallHiddenBehindARepeatedKeyIsRefused(t *testing.T) {
 }
 
 // A key in a different case is a different key -- to a server, and now to
-// Nim. `"Method":"ping"` used to win over `"method":"tools/call"` in Go's
+// Holdcall. `"Method":"ping"` used to win over `"method":"tools/call"` in Go's
 // decoder, `"Name":"list_repos"` over `"name":"delete_repository"`, and
 // `"ID":9` over `"id":1`: the daemon decided on one tool while the connector
 // ran another, and the journal said the harmless one had been called.
@@ -936,7 +936,7 @@ func TestACaseVariantKeyCannotRenameTheCall(t *testing.T) {
 	}
 }
 
-// A tools/call Nim cannot read as exactly one tool name is refused before a
+// A tools/call Holdcall cannot read as exactly one tool name is refused before a
 // sequence number is spent or the daemon is asked. The daemon used to be asked
 // about tool "" for every one of these, and allowed it.
 func TestACallWithoutAReadableNameIsRefusedBeforeAnyDecision(t *testing.T) {
@@ -951,10 +951,10 @@ func TestACallWithoutAReadableNameIsRefusedBeforeAnyDecision(t *testing.T) {
 	g.relay(frames...)
 
 	if n := len(g.connector.Bytes()); n != 0 {
-		t.Fatalf("a call Nim could not name reached the connector: %q", g.connector.String())
+		t.Fatalf("a call Holdcall could not name reached the connector: %q", g.connector.String())
 	}
 	if n := len(g.daemon.calls()); n != 0 {
-		t.Errorf("the daemon was asked to decide %d calls Nim could not name", n)
+		t.Errorf("the daemon was asked to decide %d calls Holdcall could not name", n)
 	}
 	if g.shim.seq != 0 {
 		t.Errorf("seq advanced to %d for calls that were never decided", g.shim.seq)

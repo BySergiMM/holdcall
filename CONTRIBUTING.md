@@ -1,6 +1,6 @@
 # Contributing
 
-Nim is pre-alpha and built in the open about what it does and does not do.
+Holdcall is pre-alpha and built in the open about what it does and does not do.
 The bar for a change is the same one the dashboard enforces on the project's
 own claims: nothing is stated without a test behind it.
 
@@ -31,7 +31,7 @@ point.
 - `CHANGELOG.md` under *Unreleased*.
 - If it closes or opens a finding, or changes what a guarantee claims,
   `dashboard/data/state.json` says so, with the test names.
-- Nothing from a real installation: every test sets `NIM_HOME` and `HOME` to
+- Nothing from a real installation: every test sets `HOLDCALL_HOME` and `HOME` to
   a temporary directory, and so should any script you add.
 
 Security reports go through `SECURITY.md`, not the issue tracker.

@@ -1,11 +1,11 @@
-// Command nim is the local engine: a relay a client spawns, and a daemon that
+// Command holdcall is the local engine: a relay a client spawns, and a daemon that
 // keeps the record.
 //
-//	nim serve --connector github -- npx -y @modelcontextprotocol/server-github
-//	nim daemon
-//	nim status
-//	nim log
-//	nim verify
+//	holdcall serve --connector github -- npx -y @modelcontextprotocol/server-github
+//	holdcall daemon
+//	holdcall status
+//	holdcall log
+//	holdcall verify
 package main
 
 import (
@@ -23,12 +23,12 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/BySergiMM/nim/engine/internal/config"
-	"github.com/BySergiMM/nim/engine/internal/console"
-	"github.com/BySergiMM/nim/engine/internal/daemon"
-	"github.com/BySergiMM/nim/engine/internal/journal"
-	"github.com/BySergiMM/nim/engine/internal/readmodel"
-	"github.com/BySergiMM/nim/engine/internal/shim"
+	"github.com/BySergiMM/holdcall/engine/internal/config"
+	"github.com/BySergiMM/holdcall/engine/internal/console"
+	"github.com/BySergiMM/holdcall/engine/internal/daemon"
+	"github.com/BySergiMM/holdcall/engine/internal/journal"
+	"github.com/BySergiMM/holdcall/engine/internal/readmodel"
+	"github.com/BySergiMM/holdcall/engine/internal/shim"
 )
 
 // Set by the release workflow with -ldflags "-X main.xxx=...". A build made
@@ -83,100 +83,100 @@ func main() {
 		os.Exit(2)
 	}
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "nim:", err)
+		fmt.Fprintln(os.Stderr, "holdcall:", err)
 		os.Exit(1)
 	}
 }
 
-// versionString is what `nim version` prints. It is a function rather than a
+// versionString is what `holdcall version` prints. It is a function rather than a
 // literal Println call so a test can check the shape without spawning the
 // binary or depending on the ldflags a particular build was made with.
 func versionString() string {
-	return fmt.Sprintf("nim %s (%s, built %s, %s/%s, %s)",
+	return fmt.Sprintf("holdcall %s (%s, built %s, %s/%s, %s)",
 		version, commit, builtAt, runtime.GOOS, runtime.GOARCH, runtime.Version())
 }
 
 func usage() {
-	fmt.Fprint(os.Stderr, `nim - a record of what agents did through MCP
+	fmt.Fprint(os.Stderr, `holdcall - a record of what agents did through MCP
 
-  nim serve --connector <name> [--client <name>] -- <command> [args...]
+  holdcall serve --connector <name> [--client <name>] -- <command> [args...]
         Relay one MCP server. This is what your client spawns.
 
-  nim daemon
+  holdcall daemon
         Run the shared daemon. Started automatically when needed.
 
-  nim daemon restart
+  holdcall daemon restart
         Ask the running daemon to exit and start a new one from this
         binary. The remedy for F-001: replacing the binary while a daemon
         runs otherwise leaves the old daemon and every new client refusing
         each other, since the socket is exactly what an older build cannot
         answer for a new client. Not supported on Windows.
 
-  nim status
+  holdcall status
         Where state lives, and what the record says about itself.
 
-  nim log [-n <count>]
+  holdcall log [-n <count>]
         The calls that have been seen, newest first.
 
-  nim log --follow [--json] [--since <chain_seq>]
+  holdcall log --follow [--json] [--since <chain_seq>]
         Every journal entry in the order it was written, as it arrives.
 
-  nim verify [--expect-head <hash>]
+  holdcall verify [--expect-head <hash>]
         Walk the journal's hash chain.
 
-  nim console [--addr 127.0.0.1:7717]
+  holdcall console [--addr 127.0.0.1:7717]
         Serve a local, read-only view of what has been recorded.
 
-  nim connector set <name> --env KEY -- <command> [args...]
-  nim connector list | remove <name>
+  holdcall connector set <name> --env KEY -- <command> [args...]
+  holdcall connector list | remove <name>
         Hold a downstream server's credential, bound to the one command it
         may be injected into. The secret is read from stdin, never argv.
 
-  nim agent add <name> <path-to-executable>
-  nim agent list | remove <name>
+  holdcall agent add <name> <path-to-executable>
+  holdcall agent list | remove <name>
         Enrol a client program, identified by the file it executes.
 
-  nim policy deny|allow|ask <tool> [--agent <name>] [--connector <name>]
-  nim policy default deny|allow|ask [--agent <name>] [--connector <name>]
-  nim policy remove <tool>|--default [--agent <name>] [--connector <name>]
-  nim policy list
-  nim policy explain <tool> [--agent <name>] [--connector <name>]
+  holdcall policy deny|allow|ask <tool> [--agent <name>] [--connector <name>]
+  holdcall policy default deny|allow|ask [--agent <name>] [--connector <name>]
+  holdcall policy remove <tool>|--default [--agent <name>] [--connector <name>]
+  holdcall policy list
+  holdcall policy explain <tool> [--agent <name>] [--connector <name>]
         Deny, allow or ask about a tool, for every session or for one agent
         or connector. No matching rule is allow; among rules that match, the
         most specific wins and a tie goes to deny, then ask, then allow --
-        see nim policy explain. "default" sets one across every tool. Every
+        see holdcall policy explain. "default" sets one across every tool. Every
         change is an entry in the journal.
 
-  nim approve
+  holdcall approve
         List every call currently held by an ask rule, with its real
         arguments.
 
-  nim approve <id>
-  nim reject <id> [--reason <text>]
+  holdcall approve <id>
+  holdcall reject <id> [--reason <text>]
         Approve or refuse one held call. Recorded in the journal before the
         client that made the call is told; --reason is logged and printed
         here, never sent to the client or the journal.
 
-  nim policy budget <n> --tool <tool>|--all-tools [--agent <name>] [--connector <name>]
-  nim policy budget remove --tool <tool>|--all-tools [--agent <name>] [--connector <name>]
+  holdcall policy budget <n> --tool <tool>|--all-tools [--agent <name>] [--connector <name>]
+  holdcall policy budget remove --tool <tool>|--all-tools [--agent <name>] [--connector <name>]
         Cap the number of ALLOWED calls one session may make, decremented at
         authorization time. Per session: session.start to session.end, so a
         client that restarts its relay starts fresh. A budget never grants
         -- it only lowers what the rules already allow. Every change is an
         entry in the journal.
 
-  nim init [--client <name>] [--config <path>] [--write] [--repoint]
-        Rewrite MCP client configs so every stdio server goes through Nim.
+  holdcall init [--client <name>] [--config <path>] [--write] [--repoint]
+        Rewrite MCP client configs so every stdio server goes through Holdcall.
         Without --write this only prints what would change.
 
-  nim init --undo <backup file>
-        Restore a config file from a backup nim init --write made.
+  holdcall init --undo <backup file>
+        Restore a config file from a backup holdcall init --write made.
 
-  nim doctor
+  holdcall doctor
         A read-only health check: one line per check, OK/WARN/FAIL and a
         remedy for anything not OK. Exits 1 only if something FAILed.
 
-  nim version
+  holdcall version
 
 `)
 }
@@ -218,7 +218,7 @@ func runDaemon() error {
 	return daemon.Run(cfg)
 }
 
-// runDaemonCmd dispatches `nim daemon`'s one subcommand. Kept separate from
+// runDaemonCmd dispatches `holdcall daemon`'s one subcommand. Kept separate from
 // runDaemon, which is also what a detached daemon process re-execs itself
 // into (see shim.StartDaemon: `<self> daemon`, no further arguments) --
 // that call must keep working exactly as it does today.
@@ -229,17 +229,17 @@ func runDaemonCmd(args []string) error {
 	if args[0] == "restart" {
 		return runDaemonRestart(args[1:])
 	}
-	return fmt.Errorf("nim daemon: unknown argument %q (did you mean `nim daemon restart`?)", args[0])
+	return fmt.Errorf("holdcall daemon: unknown argument %q (did you mean `holdcall daemon restart`?)", args[0])
 }
 
-// restartTimeout bounds how long `nim daemon restart` waits for the old
+// restartTimeout bounds how long `holdcall daemon restart` waits for the old
 // daemon to exit after SIGTERM, and separately for the new one to answer.
 // Generous next to the p99 numbers in docs/benchmarks.md for an ordinary
 // request; a daemon that has not managed either in this long is worth
 // reporting as stuck rather than waiting longer.
 const restartTimeout = 5 * time.Second
 
-// runDaemonRestart is F-001's remedy: `nim daemon restart` asks the running
+// runDaemonRestart is F-001's remedy: `holdcall daemon restart` asks the running
 // daemon to exit and starts a new one from this binary, so replacing the
 // binary while a daemon runs no longer leaves an operator with a daemon and
 // a client that can only refuse each other with no way forward.
@@ -249,18 +249,18 @@ const restartTimeout = 5 * time.Second
 // the whole problem this command exists to fix. SIGTERM goes to the pid the
 // socket itself reports -- read from the kernel via peer.PIDOf, not
 // self-reported -- and only once shim.PeerPID has confirmed that pid is
-// genuinely Nim, either this exact build or an older one at this binary's
+// genuinely Holdcall, either this exact build or an older one at this binary's
 // own path. Anything else on the socket is left alone: signalling a process
-// this cannot confirm is Nim is not this command's call to make.
+// this cannot confirm is Holdcall is not this command's call to make.
 func runDaemonRestart(args []string) error {
 	fs := flag.NewFlagSet("daemon restart", flag.ExitOnError)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if runtime.GOOS == "windows" {
-		return fmt.Errorf("nim daemon restart is not supported on windows: peer identity has no way " +
-			"to confirm the process on the socket is Nim (see docs/security.md) -- end the daemon " +
-			"process yourself (Task Manager, or `taskkill /PID <pid> /F`), then run `nim daemon`")
+		return fmt.Errorf("holdcall daemon restart is not supported on windows: peer identity has no way " +
+			"to confirm the process on the socket is Holdcall (see docs/security.md) -- end the daemon " +
+			"process yourself (Task Manager, or `taskkill /PID <pid> /F`), then run `holdcall daemon`")
 	}
 
 	cfg, err := config.Load()
@@ -271,15 +271,15 @@ func runDaemonRestart(args []string) error {
 	pid, confirmed, err := shim.PeerPID(cfg, dialTimeout)
 	switch {
 	case errors.Is(err, shim.ErrDaemonNotReachable):
-		fmt.Println("nim: no daemon was running")
+		fmt.Println("holdcall: no daemon was running")
 	case err != nil:
 		return err
 	case !confirmed:
 		return fmt.Errorf(
-			"something other than Nim is listening on %s; refusing to signal it -- stop it yourself, then run this again",
+			"something other than Holdcall is listening on %s; refusing to signal it -- stop it yourself, then run this again",
 			cfg.Daemon.Socket)
 	default:
-		fmt.Printf("nim: stopping the daemon (pid %d)\n", pid)
+		fmt.Printf("holdcall: stopping the daemon (pid %d)\n", pid)
 		if err := stopDaemonPID(pid); err != nil {
 			return fmt.Errorf("could not signal pid %d: %w", pid, err)
 		}
@@ -294,7 +294,7 @@ func runDaemonRestart(args []string) error {
 	if !waitDaemonRunning(cfg, restartTimeout) {
 		return fmt.Errorf("the new daemon did not come up at %s -- see %s", cfg.Daemon.Socket, config.LogPath())
 	}
-	fmt.Println("nim: daemon restarted and answering at", cfg.Daemon.Socket)
+	fmt.Println("holdcall: daemon restarted and answering at", cfg.Daemon.Socket)
 	return nil
 }
 
@@ -345,7 +345,7 @@ func runStatus() error {
 
 	// Whether the daemon answers is the question that matters: a relay with no
 	// daemon behind it records nothing while looking perfectly healthy. And
-	// whether what answers is Nim matters as much: this line is what an
+	// whether what answers is Holdcall matters as much: this line is what an
 	// operator trusts, and "running" for whatever happens to be bound on the
 	// socket would report an impostor as the daemon (impostor_test.go is the
 	// attack). So the same verification every relay performs, not a bare
@@ -364,11 +364,11 @@ func runStatus() error {
 	case errors.Is(err, shim.ErrDaemonOlderBuild):
 		// F-001: the daemon on the socket is provably this same binary, just
 		// an older file at the same path -- an in-place upgrade or rebuild
-		// while it was running. Not an impostor, so not NOT NIM; a specific
+		// while it was running. Not an impostor, so not NOT HOLDCALL; a specific
 		// line with the one-command fix instead.
-		fmt.Println("daemon   OLDER BUILD -- run nim daemon restart")
+		fmt.Println("daemon   OLDER BUILD -- run holdcall daemon restart")
 	default:
-		fmt.Println("daemon   NOT NIM --", err)
+		fmt.Println("daemon   NOT HOLDCALL --", err)
 		fmt.Println("         something else is bound on the socket; every relay will refuse its answers")
 	}
 
@@ -445,9 +445,9 @@ func renderStatus(w io.Writer, snap readmodel.Snapshot) {
 	fmt.Fprintln(w, "somewhere else and check it later with:")
 	fmt.Fprintln(w)
 	if snap.Journal.Head != "" {
-		fmt.Fprintln(w, "    nim verify --expect-head", snap.Journal.Head)
+		fmt.Fprintln(w, "    holdcall verify --expect-head", snap.Journal.Head)
 	} else {
-		fmt.Fprintln(w, "    nim verify --expect-head <hash>")
+		fmt.Fprintln(w, "    holdcall verify --expect-head <hash>")
 	}
 	if !snap.Journal.VerificationMaterial {
 		fmt.Fprintln(w)
@@ -771,7 +771,7 @@ func runConsole(args []string) error {
 	srv := console.New(j, cfg.Daemon.Socket)
 	// The one thing the console reads from the daemon rather than the
 	// journal: the calls held for a human, with their real arguments, so
-	// they can be seen here and decided with nim approve. Through the same
+	// they can be seen here and decided with holdcall approve. Through the same
 	// verified dial every command uses; a purpose of its own on the socket.
 	srv.Pending = func() ([]daemon.PendingInfo, error) {
 		conn, err := shim.DialRunningDaemon(cfg, dialTimeout)
@@ -789,9 +789,9 @@ func runConsole(args []string) error {
 		return resp.Pending, nil
 	}
 
-	fmt.Println("nim console on http://" + listener.Addr().String())
+	fmt.Println("holdcall console on http://" + listener.Addr().String())
 	fmt.Println("reading", cfg.DatabasePath())
-	fmt.Println("read-only: this cannot change anything Nim recorded.")
+	fmt.Println("read-only: this cannot change anything Holdcall recorded.")
 	return http.Serve(listener, srv.Handler())
 }
 
@@ -808,7 +808,7 @@ func runVerify(args []string) error {
 	}
 	defer j.Close()
 
-	// The same four-way reading of the chain the console and `nim status` use.
+	// The same four-way reading of the chain the console and `holdcall status` use.
 	state, err := readmodel.Check(j, *expect)
 	if err != nil {
 		return err

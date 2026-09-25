@@ -10,13 +10,13 @@
 // it does not pass through at all.
 //
 // Nothing is assumed about a message beyond JSON-RPC's own envelope. A method
-// Nim does not know is still relayed: only tools/call is Nim's business, and
+// Holdcall does not know is still relayed: only tools/call is Holdcall's business, and
 // the rest of the protocol must keep working as the specification evolves.
 //
-// What is no longer true is that everything is relayed. A frame Nim cannot
+// What is no longer true is that everything is relayed. A frame Holdcall cannot
 // parse may still be a tools/call to a more forgiving parser downstream -- Go
 // rejects NaN where Python accepts it, which is enough to put a call in front
-// of a server that Nim never saw -- so from M2 an unreadable frame is refused
+// of a server that Holdcall never saw -- so from M2 an unreadable frame is refused
 // instead of forwarded. Classify names the shapes; what happens to them is the
 // relay's decision, not this package's.
 package mcp
@@ -32,7 +32,7 @@ import (
 	"io"
 )
 
-// MethodToolsCall is the only method Nim acts on.
+// MethodToolsCall is the only method Holdcall acts on.
 const MethodToolsCall = "tools/call"
 
 // MethodInitialize carries the negotiated protocol version, which decides
@@ -65,9 +65,9 @@ func ResultsCarryType(version string) bool {
 	return version >= resultTypeSince
 }
 
-// Anomaly names a message Nim relayed without being able to account for it.
+// Anomaly names a message Holdcall relayed without being able to account for it.
 //
-// These are not errors in Nim and not, yet, anything it acts on. They are the
+// These are not errors in Holdcall and not, yet, anything it acts on. They are the
 // shapes that would let a message reach a server without passing inspection,
 // which makes them worth a number rather than a shrug.
 type Anomaly string
@@ -79,25 +79,25 @@ const (
 	// expects an object, so a tools/call inside an array is not seen at all.
 	AnomalyBatch Anomaly = "batch"
 
-	// AnomalyMalformedJSON is a frame that is not JSON. Nim cannot tell what it
+	// AnomalyMalformedJSON is a frame that is not JSON. Holdcall cannot tell what it
 	// asks for, so it cannot tell whether it mattered.
 	AnomalyMalformedJSON Anomaly = "malformed_json"
 
 	// AnomalyFraming is more than one JSON value in a single frame. The
 	// transport is one message per line; a reader that accumulates instead
-	// would see different messages than Nim did.
+	// would see different messages than Holdcall did.
 	AnomalyFraming Anomaly = "framing"
 
-	// AnomalyDuplicateKey is an object, at a level Nim reads, that carries the
+	// AnomalyDuplicateKey is an object, at a level Holdcall reads, that carries the
 	// same key twice. Valid JSON, and the one shape on which parsers
 	// legitimately disagree: Go's typed decoder, Python and JavaScript each
 	// pick a value by their own rule, so `"method":5,"method":"tools/call"` is
 	// a tools/call to a server and was, until this existed, nothing at all to
-	// Nim -- relayed with no decision, no entry and no anomaly. Reproduced
+	// Holdcall -- relayed with no decision, no entry and no anomaly. Reproduced
 	// against the real relay before it was closed.
 	AnomalyDuplicateKey Anomaly = "duplicate_key"
 
-	// AnomalyUnreadableCall is a tools/call whose params, or whose name, Nim
+	// AnomalyUnreadableCall is a tools/call whose params, or whose name, Holdcall
 	// could not read as exactly one string. No server executes a tool it
 	// cannot name either, but the daemon would have decided on a name of ""
 	// and the journal would have recorded it, which is a decision about
@@ -105,7 +105,7 @@ const (
 	AnomalyUnreadableCall Anomaly = "unreadable_call"
 )
 
-// The two ways a frame Nim reads can fail to mean one thing.
+// The two ways a frame Holdcall reads can fail to mean one thing.
 var (
 	ErrDuplicateKey   = errors.New("an object carries the same key twice")
 	ErrUnreadableCall = errors.New("the tools/call cannot be read as a single tool name")
@@ -113,7 +113,7 @@ var (
 
 // Classify parses a message and names what is odd about it.
 //
-// A frame Nim cannot parse into an object is not automatically an anomaly:
+// A frame Holdcall cannot parse into an object is not automatically an anomaly:
 // `null`, a bare number and a string are all valid JSON that no server treats
 // as a request, and reporting them would bury the shapes that do matter.
 //
@@ -134,7 +134,7 @@ func Classify(raw []byte) (Envelope, Anomaly) {
 		return Envelope{}, AnomalyMalformedJSON
 	}
 
-	// Anything after the first complete value means Nim and the server may not
+	// Anything after the first complete value means Holdcall and the server may not
 	// agree on how many messages arrived. Decoder.More is not enough to notice:
 	// it answers for array and object iteration, so a stray `}` looks like the
 	// end of something rather than leftovers.
@@ -153,7 +153,7 @@ func Classify(raw []byte) (Envelope, Anomaly) {
 	// `null`, a bare number or a string is valid JSON that no server treats as
 	// a request; it is relayed as it always was. An object is read strictly:
 	// by exact key, refusing a key that appears twice. Nothing else can be
-	// trusted to name the same message to Nim and to the server.
+	// trusted to name the same message to Holdcall and to the server.
 	fields, err := objectFields(value)
 	if errors.Is(err, ErrDuplicateKey) {
 		return Envelope{}, AnomalyDuplicateKey
@@ -238,7 +238,7 @@ func envelopeOf(fields map[string]json.RawMessage) Envelope {
 // through travels as the bytes that arrived.
 //
 // ok is false when the frame is not an array, or when any element is not
-// something an envelope can be read from. A batch Nim cannot read completely is
+// something an envelope can be read from. A batch Holdcall cannot read completely is
 // one it cannot say anything safe about, and the caller is expected to treat
 // that as a refusal rather than as an empty batch.
 func BatchElements(raw []byte) ([]Envelope, bool) {
@@ -281,7 +281,7 @@ func (r *Reader) ReadRaw() ([]byte, error) {
 	return nil, err
 }
 
-// Envelope is the small part of a message Nim looks at. Every field is
+// Envelope is the small part of a message Holdcall looks at. Every field is
 // optional: absence is normal, not an error.
 type Envelope struct {
 	ID     json.RawMessage `json:"id"`
@@ -291,7 +291,7 @@ type Envelope struct {
 	Result json.RawMessage `json:"result"`
 }
 
-// Parse reports what little Nim understands about a message. ok is false when
+// Parse reports what little Holdcall understands about a message. ok is false when
 // the bytes are not a JSON object that names each key once, in which case the
 // caller still forwards them.
 func Parse(raw []byte) (Envelope, bool) {
@@ -442,7 +442,7 @@ type ToolCall struct {
 	Arguments json.RawMessage
 }
 
-// Call reads the tools/call out of a request Nim has already recognised as
+// Call reads the tools/call out of a request Holdcall has already recognised as
 // one.
 //
 // Read strictly, and refused rather than approximated when it cannot be:

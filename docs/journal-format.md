@@ -47,7 +47,7 @@ chain, not the content.
 -- deny, allow or ask -- for `tool`, for the sessions in its scope. They
 carry the scope in `agent` (null: every session) and `connector` (null:
 every connector), the tool in `tool`, and the effect in `decision`. `tool` is
-either an exact name or `*`, which means a default set by `nim policy
+either an exact name or `*`, which means a default set by `holdcall policy
 default deny|allow|ask` -- see
 docs/decisions/0003-allow-rules-and-precedence.md and its 2026-09-15
 addendum -- never a pattern or a prefix. Before M4.5 `decision` on these two
@@ -79,7 +79,7 @@ are written.
 of ALLOWED calls one session may make, for the sessions in its scope. They
 carry the scope in `agent` (null: every session) and `connector` (null:
 every connector), the tool in `tool` -- an exact name or `*`, meaning every
-tool, through `nim policy budget <n> --all-tools` and nowhere else, the same
+tool, through `holdcall policy budget <n> --all-tools` and nowhere else, the same
 convention `RuleToolDefault` uses for a rule -- and the cap in
 `budget_calls`. `budget.add` carries the budget being set; `budget.remove`
 carries the one being removed, not nulls, so the chain says what stopped
@@ -119,7 +119,7 @@ means* below.
 rather than relaying them: a frame that is not JSON, a frame carrying two
 messages, an object naming a key twice, a call with no readable tool name, and
 a batch carrying a `tools/call`. A batch carrying none and a reused in-flight
-id are relayed and counted. `nim status` prints which beside each count.
+id are relayed and counted. `holdcall status` prints which beside each count.
 
 Fields absent for a kind are NULL, and NULL is encoded distinctly from an empty
 string.
@@ -306,21 +306,21 @@ Those questions are real, but they belong to two other places:
 - **Anomaly detection** — batch, malformed JSON and framing are counted and
   recorded as `anomaly` entries, and from M2 the frames that could hide a
   `tools/call` are refused rather than relayed. They are not canonicalised.
-  **Duplicate object keys are detected**, at the two levels Nim reads: the
+  **Duplicate object keys are detected**, at the two levels Holdcall reads: the
   top-level object and `params`. An earlier version of this paragraph said
   they were not, and understated the consequence -- `"method":5,"method":
   "tools/call"` did not merely record the wrong name, it put a `tools/call` in
   front of the connector with no decision at all, because Go's typed decoder
   read the frame as nothing (F-013). Objects are now read key by key, by the
-  exact bytes of each key; a key that appears twice at a level Nim reads is
+  exact bytes of each key; a key that appears twice at a level Holdcall reads is
   refused as a `duplicate_key` anomaly, and a key that differs only in case is
-  a different key, to Nim exactly as to a server. Keys inside
+  a different key, to Holdcall exactly as to a server. Keys inside
   `params.arguments` are the tool's business: they are digested as bytes and
   never interpreted, so a repeat there is not one.
-- **Request canonicalisation (not in this milestone)** — when NIM starts
+- **Request canonicalisation (not in this milestone)** — when HOLDCALL starts
   deciding, the message it authorises must be the message it emits, which needs
   JCS-style canonical JSON with NFC and rejection of duplicate keys. That work
-  belongs with enforcement, because canonicalising a request NIM merely forwards
+  belongs with enforcement, because canonicalising a request HOLDCALL merely forwards
   would change bytes for no benefit.
 
 `params_digest` is therefore still `sha256` over the raw `params.arguments`
@@ -329,7 +329,7 @@ bytes at all (`e3b0c442…`); when it is present and `null`, of the four bytes
 `null`. A reader comparing digests has to know that "no arguments" has a fixed
 value. A call whose `params` cannot be read as an object with a string `name`
 is refused before any digest is taken, so a digest always belongs to a call
-Nim read. Digests written under `schema_version` 1 are **not** comparable with
+Holdcall read. Digests written under `schema_version` 1 are **not** comparable with
 digests written under any later version that canonicalises first. The version
 field is what makes that safe.
 
@@ -358,7 +358,7 @@ The genesis is per-install, so two installs do not produce the same chain from
 the same entries and their journals stay distinguishable when they eventually
 share one table.
 
-`nim verify` checks, in order: contiguity of `chain_seq` from 1; that every
+`holdcall verify` checks, in order: contiguity of `chain_seq` from 1; that every
 `schema_version` is known; that each `prev_hash` equals the previous entry's
 `hash`; and that each `hash` equals the recomputation above. It reports the
 first `chain_seq` that fails.
@@ -395,12 +395,12 @@ An event passes through three states, and only the last leaves a record:
 
 Losses between 1 and 2 usually leave a shape, and the shim always says so on
 stderr as it happens. Afterwards the journal shows a session that never ended,
-or a per-session `seq` that skips, and `nim status` reports both.
+or a per-session `seq` that skips, and `holdcall status` reports both.
 
 Usually, not always: if the daemon was never reachable at all, nothing was
 written, so there is no session to be unfinished and no sequence to skip. That
 run leaves no trace in the journal — only the warning the shim printed at the
-time, and `nim status` reporting that the daemon is not running.
+time, and `holdcall status` reporting that the daemon is not running.
 
 **Losses between 2 and 3 leave nothing, except for `call.request`.** If the
 daemon accepts an event and then cannot write it, the shim is never told and the
@@ -420,7 +420,7 @@ gap check to find a hole in.
 
 So, precisely:
 
-> Nim records the events it observed, and reports the losses that leave
+> Holdcall records the events it observed, and reports the losses that leave
 > detectable evidence in the journal. A `call.request` that was not written
 > cannot have been forwarded. For every other kind, reporting is asynchronous and
 > one-way, so a failure on the daemon's write path can be indistinguishable from
@@ -496,7 +496,7 @@ The chain detects corruption, partial writes, and modification by anything that
 does not know the chain exists. That is worth having and it is all that is
 being claimed.
 
-**It does not detect a local attacker who can write to `nim.db`.** Nothing in
+**It does not detect a local attacker who can write to `holdcall.db`.** Nothing in
 this construction is secret, so anyone able to edit a row is equally able to
 recompute every hash from the genesis onwards, and the result verifies cleanly.
 Truncating the tail and recomputing is likewise undetectable.
@@ -509,15 +509,15 @@ which is a thin thing for a durability property to rest on; pinning it belongs
 with the milestone that decides what a commit on the critical path may cost.
 
 The seed is not part of the journal. If `machine-id` goes missing, the first
-entry cannot be checked against anything, and `nim verify` says so rather than
+entry cannot be checked against anything, and `holdcall verify` says so rather than
 reporting a mismatch: missing verification material is not evidence that the
 thing being verified is wrong. Everything from the second entry on is still
 checked, and restoring the file restores the rest.
 
 Two things would change that, and neither is in this milestone:
 
-- **Recording the head elsewhere.** `nim status` prints the head hash and the
-  chain length, and `nim verify --expect-head <hash>` checks against a head you
+- **Recording the head elsewhere.** `holdcall status` prints the head hash and the
+  chain length, and `holdcall verify --expect-head <hash>` checks against a head you
   recorded earlier. Anything committed before that head cannot be rewritten
   without the mismatch showing. This is manual on purpose: automatic anchoring
   needs somewhere off the machine to anchor to.

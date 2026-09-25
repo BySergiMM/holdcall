@@ -1,6 +1,6 @@
 package readmodel
 
-import "github.com/BySergiMM/nim/engine/internal/journal"
+import "github.com/BySergiMM/holdcall/engine/internal/journal"
 
 // ChainState is what can be said about the chain, and no more.
 //
@@ -71,7 +71,7 @@ type Gaps struct {
 }
 
 // AnomalyDisposition says what the relay did with a message of this anomaly
-// kind: refused it, or relayed it and merely counted it. One place, so `nim
+// kind: refused it, or relayed it and merely counted it. One place, so `holdcall
 // status` and the console cannot describe the same number differently -- they
 // did, for a while, both saying "relayed without inspection" about frames the
 // relay had refused since M2.
@@ -104,7 +104,7 @@ type Snapshot struct {
 // Check walks the chain and says which of the four things happened.
 //
 // This is the one place the verifier's report becomes a state, so that
-// everything showing it -- the console, `nim status`, `nim verify` -- draws the
+// everything showing it -- the console, `holdcall status`, `holdcall verify` -- draws the
 // same conclusion from the same evidence. Three callers reaching their own
 // verdict from the same report is how they end up disagreeing.
 //
@@ -187,7 +187,7 @@ func Take(src SnapshotSource) (Snapshot, error) {
 // Derived, never stored. A call is two entries, and what it means depends on
 // which of them are there: the same missing outcome is a call still running, or
 // a call that was refused and never had one to miss. Deriving it in one place is
-// the only way `nim log` and the console can agree on which.
+// the only way `holdcall log` and the console can agree on which.
 type CallState string
 
 const (
@@ -250,7 +250,7 @@ type Session struct {
 	EndedAt   *string      `json:"ended_at,omitempty"`
 
 	// Connector and Client are what the shim reported for itself. Self-asserted
-	// labels, never facts Nim established.
+	// labels, never facts Holdcall established.
 	Connector *string `json:"connector,omitempty"`
 	Client    *string `json:"client,omitempty"`
 	// Agent is the opposite kind of thing from Client: the enrolled program

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/BySergiMM/nim/engine/internal/peer"
+	"github.com/BySergiMM/holdcall/engine/internal/peer"
 )
 
 // The property this step exists for: an agent cannot be claimed.
@@ -47,7 +47,7 @@ func TestNoWireFieldCanSetTheAgent(t *testing.T) {
 // What a caller sends as `client` is recorded, and is not the agent. The two
 // sit next to each other on purpose: one is a claim, the other is derived.
 func TestTheClientLabelIsNotTheAgent(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "nim.db")
+	path := filepath.Join(t.TempDir(), "holdcall.db")
 	j := openJournal(t, path)
 
 	if err := apply(Event{
@@ -68,7 +68,7 @@ func TestTheClientLabelIsNotTheAgent(t *testing.T) {
 
 // The derived agent is what lands on the entry, whatever the caller said.
 func TestTheDerivedAgentIsRecordedOnSessionStart(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "nim.db")
+	path := filepath.Join(t.TempDir(), "holdcall.db")
 	j := openJournal(t, path)
 
 	if err := apply(Event{
@@ -91,7 +91,7 @@ func TestTheDerivedAgentIsRecordedOnSessionStart(t *testing.T) {
 // does: it is a property of the session. Repeating it on every call entry
 // would let two immutable entries describing one session disagree.
 func TestTheAgentIsNotRepeatedOnCallEntries(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "nim.db")
+	path := filepath.Join(t.TempDir(), "holdcall.db")
 	j := openJournal(t, path)
 
 	stamp := now()
@@ -124,7 +124,7 @@ func TestTheAgentIsNotRepeatedOnCallEntries(t *testing.T) {
 // something decides on it, an unknown agent must cost nothing -- refusing a
 // session because a pid could not be read would turn a record into an outage.
 func TestAnUndeterminedAgentIsRecordedAsAbsentNotRefused(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "nim.db")
+	path := filepath.Join(t.TempDir(), "holdcall.db")
 	j := openJournal(t, path)
 
 	if err := apply(Event{
@@ -142,7 +142,7 @@ func TestAnUndeterminedAgentIsRecordedAsAbsentNotRefused(t *testing.T) {
 // the chain from a connection. A net.Pipe is not a unix socket, so the kernel
 // has nothing to say about a peer -- the same shape as Windows.
 func TestDeriveAgentOnAnUninspectableConnectionYieldsNoAgent(t *testing.T) {
-	j := openJournal(t, filepath.Join(t.TempDir(), "nim.db"))
+	j := openJournal(t, filepath.Join(t.TempDir(), "holdcall.db"))
 	client, server := net.Pipe()
 	defer client.Close()
 	defer server.Close()
@@ -157,7 +157,7 @@ func TestDeriveAgentOnAnUninspectableConnectionYieldsNoAgent(t *testing.T) {
 // its parent is `go test`, so enrolling the parent's own executable must be
 // what deriveAgent finds -- and enrolling something else must not.
 func TestDeriveAgentMatchesTheEnrolledParent(t *testing.T) {
-	j := openJournal(t, filepath.Join(t.TempDir(), "nim.db"))
+	j := openJournal(t, filepath.Join(t.TempDir(), "holdcall.db"))
 
 	sock := tempSocketPath(t)
 	ln, err := net.Listen("unix", sock)

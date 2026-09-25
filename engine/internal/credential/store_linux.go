@@ -10,7 +10,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/BySergiMM/nim/engine/internal/config"
+	"github.com/BySergiMM/holdcall/engine/internal/config"
 )
 
 // New returns a Store backed by the freedesktop Secret Service (GNOME
@@ -23,21 +23,21 @@ func New() (Store, error) {
 	if _, err := exec.LookPath("secret-tool"); err != nil {
 		return nil, fmt.Errorf(
 			"no OS credential store available: secret-tool (libsecret) is not installed, " +
-				"and Nim will not fall back to storing secrets in plaintext")
+				"and Holdcall will not fall back to storing secrets in plaintext")
 	}
 	sum := sha256.Sum256([]byte(config.Home()))
-	return linuxStore{service: "nim-" + hex.EncodeToString(sum[:4])}, nil
+	return linuxStore{service: "holdcall-" + hex.EncodeToString(sum[:4])}, nil
 }
 
 // linuxStore scopes every secret to this install (the same home-hash scheme
-// defaultSocket already uses), so two NIM_HOMEs on one machine never collide
+// defaultSocket already uses), so two HOLDCALL_HOMEs on one machine never collide
 // in the shared keyring.
 type linuxStore struct{ service string }
 
 func (s linuxStore) Set(target, secret string) error {
 	// secret-tool reads the secret from stdin, never from argv.
 	cmd := exec.Command("secret-tool", "store",
-		"--label", "Nim connector: "+target,
+		"--label", "Holdcall connector: "+target,
 		"service", s.service, "account", target)
 	cmd.Stdin = strings.NewReader(secret)
 	if err := cmd.Run(); err != nil {

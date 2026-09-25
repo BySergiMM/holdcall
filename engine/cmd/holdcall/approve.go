@@ -11,20 +11,20 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/BySergiMM/nim/engine/internal/config"
-	"github.com/BySergiMM/nim/engine/internal/daemon"
-	"github.com/BySergiMM/nim/engine/internal/journal"
-	"github.com/BySergiMM/nim/engine/internal/shim"
+	"github.com/BySergiMM/holdcall/engine/internal/config"
+	"github.com/BySergiMM/holdcall/engine/internal/daemon"
+	"github.com/BySergiMM/holdcall/engine/internal/journal"
+	"github.com/BySergiMM/holdcall/engine/internal/shim"
 )
 
-// nim approve and nim reject are the human side of an "ask" rule:
+// holdcall approve and holdcall reject are the human side of an "ask" rule:
 //
-//	nim approve                  lists every call currently held
-//	nim approve <id>              approves one
-//	nim reject <id> [--reason]    refuses one
+//	holdcall approve                  lists every call currently held
+//	holdcall approve <id>              approves one
+//	holdcall reject <id> [--reason]    refuses one
 //
 // Both talk to the daemon under its own purpose -- approval.list and
-// approval.decide -- exactly as nim policy talks to it under "policy".
+// approval.decide -- exactly as holdcall policy talks to it under "policy".
 // docs/decisions/0005-human-approval.md is the design: what is shown is the
 // real arguments a call carried, never a model-generated summary, because a
 // summary is something the model that asked for the call could have written
@@ -37,16 +37,16 @@ func runApprove(args []string) error {
 	case 1:
 		return decideApproval(args[0], journal.DecisionApproved, "")
 	default:
-		return fmt.Errorf("usage: nim approve [<id>]")
+		return fmt.Errorf("usage: holdcall approve [<id>]")
 	}
 }
 
-// runReject parses `nim reject <id> [--reason <text>]` by hand, the same
+// runReject parses `holdcall reject <id> [--reason <text>]` by hand, the same
 // reason parsePolicyArgs does rather than the standard flag package: the id
 // comes first, and flag.Parse stops at the first non-flag argument it sees
 // rather than looking past it for --reason.
 func runReject(args []string) error {
-	const usage = "usage: nim reject <id> [--reason <text>]"
+	const usage = "usage: holdcall reject <id> [--reason <text>]"
 	var id, reason string
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -104,7 +104,7 @@ func listPending() error {
 	return nil
 }
 
-// printPending shows one held call exactly as nim approve promises: the
+// printPending shows one held call exactly as holdcall approve promises: the
 // real params.arguments, pretty-printed, never a summary and never
 // anything a model wrote -- the whole point of docs/decisions/0005-human-approval.md.
 func printPending(out io.Writer, p daemon.PendingInfo) {
@@ -119,7 +119,7 @@ func printPending(out io.Writer, p daemon.PendingInfo) {
 		// Not the same as a call with no arguments: the relay has not
 		// reported them yet, and the daemon refuses to approve until it
 		// has. Saying so is what stops a human approving a tool name.
-		fmt.Fprintln(out, "arguments: (not received from the relay yet -- run nim approve again in a moment)")
+		fmt.Fprintln(out, "arguments: (not received from the relay yet -- run holdcall approve again in a moment)")
 		return
 	}
 	fmt.Fprintln(out, "arguments:")
@@ -130,7 +130,7 @@ func printPending(out io.Writer, p daemon.PendingInfo) {
 // program: indented JSON, or a plain statement that there were none. A call
 // listed in the instant between the daemon holding it and the relay's
 // call.arguments reaching it reads the same way a call with no arguments
-// does -- both are "nothing here yet" -- and nim approve is meant to be run
+// does -- both are "nothing here yet" -- and holdcall approve is meant to be run
 // by someone looking at a specific call, not raced against the network.
 func prettyArguments(raw json.RawMessage) string {
 	if len(raw) == 0 {

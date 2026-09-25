@@ -106,7 +106,7 @@
 .lp-flow li + li::before { content: "\2192"; position: absolute; left: -1.75rem; top: 50%; transform: translateY(-50%); color: var(--text-3); font-family: var(--mono); font-size: 1.1rem; }
 .lp-flow .lp-flow-name { font-family: var(--mono); font-weight: 600; }
 .lp-flow .lp-flow-note { color: var(--text-2); font-size: 0.92rem; }
-.lp-flow-nim { border-width: 2px; border-color: var(--text); }
+.lp-flow-holdcall { border-width: 2px; border-color: var(--text); }
 .lp-how-under { max-width: 66ch; color: var(--text-2); margin-bottom: 2rem; }
 .lp-shot { margin: 0; }
 .lp-shot img { display: block; width: 100%; height: auto; border: 1px solid var(--border-strong); border-radius: var(--radius); }

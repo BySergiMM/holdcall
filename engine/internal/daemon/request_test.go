@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/BySergiMM/nim/engine/internal/credential"
+	"github.com/BySergiMM/holdcall/engine/internal/credential"
 )
 
 // fakeStore is an in-memory credential.Store for daemon-level tests: real
@@ -115,7 +115,7 @@ func TestHandleCredentialGetOnBrokenSecretIsFailClosed(t *testing.T) {
 	}
 	store := newFakeStore()
 	// Deliberately no store.Set: the connector is configured in the journal
-	// but its secret is missing from the store, e.g. deleted outside Nim.
+	// but its secret is missing from the store, e.g. deleted outside Holdcall.
 
 	resp := handleCredentialGet(Request{ID: "1", Kind: KindCredentialGet, Target: "github"}, unverifiedState(), j, store, newTargetLocks())
 	if !resp.Found {

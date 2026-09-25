@@ -35,10 +35,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/BySergiMM/nim/engine/internal/config"
-	"github.com/BySergiMM/nim/engine/internal/credential"
-	"github.com/BySergiMM/nim/engine/internal/journal"
-	"github.com/BySergiMM/nim/engine/internal/peer"
+	"github.com/BySergiMM/holdcall/engine/internal/config"
+	"github.com/BySergiMM/holdcall/engine/internal/credential"
+	"github.com/BySergiMM/holdcall/engine/internal/journal"
+	"github.com/BySergiMM/holdcall/engine/internal/peer"
 )
 
 // Event is one report from a shim.
@@ -133,7 +133,7 @@ type Decision struct {
 	Seq       int    `json:"seq"`
 	Decision  string `json:"decision"`
 	Reason    string `json:"reason,omitempty"`
-	// Hold is set only on a DecisionPending reply: the id nim approve lists
+	// Hold is set only on a DecisionPending reply: the id holdcall approve lists
 	// this call under. Session and seq already correlate the eventual
 	// answer, so nothing on the wire needs to echo it back; it travels here
 	// so the two names for one call -- what decides it and what lists it --
@@ -164,7 +164,7 @@ func Run(cfg config.Config) error {
 
 	// A daemon another shim starts detaches from every terminal and process
 	// group precisely so a client's own signal does not take it down (see
-	// shim.StartDaemon) -- but `nim daemon restart` still needs a way to ask
+	// shim.StartDaemon) -- but `holdcall daemon restart` still needs a way to ask
 	// this exact process to stop, and the socket is exactly what an older
 	// build refuses to answer a new client on (F-001), so it cannot be a
 	// request sent there. SIGTERM is that way instead: closing ln unblocks
@@ -208,7 +208,7 @@ func Run(cfg config.Config) error {
 			}
 		default:
 			log.Printf("machine-id is missing from %s; entries are still recorded and chained "+
-				"to each other, but `nim verify` cannot check the first one until it is restored",
+				"to each other, but `holdcall verify` cannot check the first one until it is restored",
 				config.MachineIDPath())
 		}
 	}
@@ -230,13 +230,13 @@ func Run(cfg config.Config) error {
 	approvals := newPendingRegistry()
 	approvalTimeout := cfg.ApprovalTimeoutOrDefault()
 
-	log.Printf("nim daemon listening on %s (journal: %s)", cfg.Daemon.Socket, cfg.DatabasePath())
+	log.Printf("holdcall daemon listening on %s (journal: %s)", cfg.Daemon.Socket, cfg.DatabasePath())
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
 			select {
 			case <-shuttingDown:
-				// Our own SIGTERM handler closed ln; this is `nim daemon
+				// Our own SIGTERM handler closed ln; this is `holdcall daemon
 				// restart` doing its job, not a failure. Returning nil lets
 				// the caller (main.go's runDaemon) exit 0, and the defers
 				// above still close the journal and remove the socket file.
@@ -257,8 +257,8 @@ func Run(cfg config.Config) error {
 // a second connection could announce a start under an id another connection
 // was already using, be given its own claim on the same id, and from then on
 // report calls, outcomes and an end into the first one's session. Peer
-// identity keeps everything that is not Nim off the socket, but session
-// ownership is meant to hold on its own -- it is what tells two runs of Nim
+// identity keeps everything that is not Holdcall off the socket, but session
+// ownership is meant to hold on its own -- it is what tells two runs of Holdcall
 // apart, which peer identity cannot -- and it did not.
 //
 // An id is refused if it is live on any connection, or if the journal has
@@ -402,7 +402,7 @@ func handle(
 	// milestone that enforces is worse than it was on one that only observed:
 	// a caller could not merely fabricate a record, it could open sessions
 	// and drive the decision path. Ported from the branch where credentials
-	// forced the question. It answers "is the caller Nim", not "is the caller
+	// forced the question. It answers "is the caller Holdcall", not "is the caller
 	// a shim the operator meant to run" -- anything able to execute this
 	// binary still passes -- so it is a floor, not the authorization model.
 	//
@@ -413,7 +413,7 @@ func handle(
 	if supported, isSelf, pid := peer.IsSelfPID(conn); supported && !isSelf {
 		// Told apart from an ordinary impostor for F-001: a peer at our own
 		// executable path running a different file is not an attacker, it is
-		// the new build of Nim an operator just installed over this running
+		// the new build of Holdcall an operator just installed over this running
 		// process. The trust boundary does not move either way -- this
 		// connection is refused exactly as it always was -- but the log line
 		// now says which case it was, and names the remedy for the one that
@@ -427,8 +427,8 @@ func handle(
 		// peer.IsSelfPID's doc comment.
 		if peer.DiagnosePID(pid) == peer.SameLaunchPathOlderBuild {
 			self, _ := os.Executable()
-			log.Printf("refusing a connection from a different build of Nim at %s; "+
-				"this daemon is the older one, restart it with nim daemon restart", self)
+			log.Printf("refusing a connection from a different build of Holdcall at %s; "+
+				"this daemon is the older one, restart it with holdcall daemon restart", self)
 		} else {
 			log.Printf("refusing a connection from an unverified peer")
 		}
@@ -493,7 +493,7 @@ func handle(
 		}
 
 		// A connection may only speak about sessions it opened. Peer identity
-		// cannot tell one run of Nim from another, so without this any shim
+		// cannot tell one run of Holdcall from another, so without this any shim
 		// could report calls -- and receive decisions -- under a session
 		// another one opened.
 		//
@@ -601,7 +601,7 @@ func handle(
 // a rule that already denied -- docs/decisions/0004-budgets.md.
 //
 // The order is the point. If the entry cannot be written the answer is deny,
-// because allowing a call Nim failed to record would break the one thing this
+// because allowing a call Holdcall failed to record would break the one thing this
 // milestone guarantees: that a call which reached a connector is a call the
 // journal knows about. A rule lookup or a budget lookup that fails is the same
 // shape -- the daemon could not decide -- and is answered as undecided, not as

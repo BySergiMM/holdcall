@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/BySergiMM/nim/engine/internal/journal"
-	"github.com/BySergiMM/nim/engine/internal/mcp"
+	"github.com/BySergiMM/holdcall/engine/internal/journal"
+	"github.com/BySergiMM/holdcall/engine/internal/mcp"
 )
 
 // ask sends one call.request and reads the answer.
@@ -139,7 +139,7 @@ func TestTheEntryIsWrittenBeforeTheAnswerIsSent(t *testing.T) {
 // If the entry cannot be written the answer is deny. An allow that nothing
 // recorded is the one answer this milestone must never give.
 func TestAnUnwritableJournalRefuses(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "nim.db")
+	path := filepath.Join(t.TempDir(), "holdcall.db")
 	w, err := journal.Open(path, "test-machine")
 	if err != nil {
 		t.Fatal(err)
@@ -247,7 +247,7 @@ func TestARefusedCallIsNotAGap(t *testing.T) {
 // The property M4 exists to establish: two agents against one connector
 // receive different verdicts, and the record distinguishes them. Here the
 // derivation is stood in for -- answer() is given the agent the daemon would
-// have derived -- and cmd/nim's end-to-end test does it with two real client
+// have derived -- and cmd/holdcall's end-to-end test does it with two real client
 // programs.
 func TestTwoAgentsAgainstOneConnectorReceiveDifferentVerdicts(t *testing.T) {
 	cfg, dbPath := start(t)
@@ -382,7 +382,7 @@ func TestARuleCannotNameAnUnenrolledAgentAndPolicyIsItsOwnPurpose(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.Error == "" || !strings.Contains(resp.Error, "nim agent add") {
+	if resp.Error == "" || !strings.Contains(resp.Error, "holdcall agent add") {
 		t.Fatalf("a rule for an unenrolled agent was accepted or badly refused: %q", resp.Error)
 	}
 	for _, bad := range []Request{
@@ -512,7 +512,7 @@ func TestAnUnnumberedCallIsRefused(t *testing.T) {
 // checks M4's: a default deny closes everything, and an agent-scoped allow
 // is the enrolment that reopens one tool for one agent -- exactly the "only
 // Claude Code may touch github" shape 0002 said needed its own answer.
-// cmd/nim's TestTwoRealAgentsAgainstOneConnectorReceiveDifferentVerdicts-style
+// cmd/holdcall's TestTwoRealAgentsAgainstOneConnectorReceiveDifferentVerdicts-style
 // end-to-end test proves the same thing with real processes.
 func TestDefaultDenyDeniesAnUnknownAgentWhileAnAgentScopedAllowAdmitsAnEnrolledOne(t *testing.T) {
 	cfg, dbPath := start(t)

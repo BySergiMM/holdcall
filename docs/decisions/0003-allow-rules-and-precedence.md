@@ -21,10 +21,10 @@ model needs it would be choosing syntax with nothing yet to say.
 ## The model
 
 `effect` is `deny` or `allow`. `tool` is either an exact name or `*`, and `*`
-means only one thing: a default, for every tool, set by `nim policy default
+means only one thing: a default, for every tool, set by `holdcall policy default
 deny|allow` and nothing else. It is not a wildcard or a prefix -- there is no
 matching shorter than the whole tool name, anywhere in this model, before or
-after this milestone. `nim policy deny <tool>`, `allow <tool>` and the exact
+after this milestone. `holdcall policy deny <tool>`, `allow <tool>` and the exact
 match at decision time are unchanged from M4 except that "*" is refused there
 as an ordinary tool name, so there remains exactly one way to write a rule
 that matches more than one tool.
@@ -57,7 +57,7 @@ A tie that survives both of those -- two rules of equal specificity and
 equal effect, naming different things, both matching one call -- cannot
 change the decision, because they agree on it. It is broken only for
 determinism (the lower id, the rule added first), so that two evaluations of
-the same rule set, and `nim policy explain`, never disagree about which rule
+the same rule set, and `holdcall policy explain`, never disagree about which rule
 was "the" reason.
 
 `journal.Decide` takes the candidate rules and nothing else -- no database,
@@ -78,7 +78,7 @@ deny already exists for the same `(agent, connector, tool)` is refused the
 same way adding a second deny always was: `ErrRuleExists`. This is
 deliberate. A scope that could hold both an allow and a deny would need its
 own second precedence, invented for a case an operator can already express
-by removing the old rule first. `nim policy remove` does not need to know
+by removing the old rule first. `holdcall policy remove` does not need to know
 which effect it is removing, for the same reason: a scope and tool name at
 most one rule regardless of effect.
 
@@ -100,8 +100,8 @@ nothing else. That has not changed. What changed is what those rules can
 say.**
 
 An allow-list per agent -- "only claude-code may touch github" -- is now
-`nim policy default deny` (a deny naming no agent, so it binds every
-session, enrolled or not) plus `nim policy allow <tool> --agent claude-code`
+`holdcall policy default deny` (a deny naming no agent, so it binds every
+session, enrolled or not) plus `holdcall policy allow <tool> --agent claude-code`
 (more specific than the default, so it wins for that agent alone). An
 unenrolled program meets only the default -- there is no rule naming no
 agent that grants it anything -- and is denied. Enrolment is what grants,
@@ -118,17 +118,17 @@ Tested at the answer level --
 `TestDefaultDenyDeniesAnUnknownAgentWhileAnAgentScopedAllowAdmitsAnEnrolledOne`,
 `internal/daemon/decide_test.go` -- and end to end with real processes --
 `TestADefaultDenyClosesEverythingAndAnAgentScopedAllowReopensOneToolForOneAgent`,
-`cmd/nim/e2e_test.go` -- following the shape
+`cmd/holdcall/e2e_test.go` -- following the shape
 `TestTwoRealAgentsAgainstOneConnectorReceiveDifferentVerdicts` set for M4.
 
-## `nim policy explain`
+## `holdcall policy explain`
 
-The precedence is meant to be inspectable, not just correct: `nim policy
+The precedence is meant to be inspectable, not just correct: `holdcall policy
 explain <tool> [--agent] [--connector]` asks the daemon, through
 `policy.explain`, which rule would decide a call shaped like that, and why.
 The CLI never reads `nim_rules` itself -- every rule-shaped answer comes
 through the daemon, over the same peer-verified socket as everything else,
-exactly as `nim policy list` already did. The explanation is computed by
+exactly as `holdcall policy list` already did. The explanation is computed by
 calling `journal.Decide` on the real candidates, never a second copy of the
 precedence, so what it says can never drift from what a real call would get.
 
@@ -151,8 +151,8 @@ Human approval needed a rule that neither decides in advance nor is
 unreachable to write: "hold this one for a human" is a third answer to the
 same question deny and allow already answer, not a new kind of question. So
 `effect` gains a third value, `ask`, through exactly the mechanism this
-document set up for the second one -- `nim policy ask <tool> [--agent]
-[--connector]` and `nim policy default ask`, `nim_rules`'s `effect` CHECK
+document set up for the second one -- `holdcall policy ask <tool> [--agent]
+[--connector]` and `holdcall policy default ask`, `nim_rules`'s `effect` CHECK
 widened from `('deny','allow')` to `('deny','allow','ask')` by the same
 rebuild-on-open `rebuildRulesTable` already used to grow it from `('deny')`,
 and the decision column on `rule.add`/`rule.remove` (which already had to
@@ -185,7 +185,7 @@ written once a human decides it or the wait runs out.
 addendum is only the precedence's part of it, which is exactly as small as
 adding one more thing two rules can be compared on.
 
-**`nim policy explain` needed nothing changed.** It already calls the one
+**`holdcall policy explain` needed nothing changed.** It already calls the one
 `Decide` implementation on the real candidates and prints whichever effect
 wins, so a scope whose winning rule is `ask` explains itself the same way a
 deny or an allow does -- naming the rule and why it is the most specific

@@ -1,4 +1,4 @@
--- Applied to nothing yet. Nim's mirror has never received a row (M8 is blocked
+-- Applied to nothing yet. Holdcall's mirror has never received a row (M8 is blocked
 -- on D-004), and this file exists so the mirror's schema does not fall behind
 -- the local one it would copy from.
 --

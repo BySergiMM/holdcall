@@ -3,14 +3,14 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"github.com/BySergiMM/nim/engine/internal/daemon"
+	"github.com/BySergiMM/holdcall/engine/internal/daemon"
 	"strings"
 	"testing"
 )
 
 // The arguments a human approves are the model's to write, and a terminal
 // obeys escape sequences and bidirectional overrides wherever they appear.
-// What nim approve prints must show every byte as itself, or the human
+// What holdcall approve prints must show every byte as itself, or the human
 // approves what they saw rather than what was there.
 func TestApproveShowsEveryByteOfTheArgumentsAsItself(t *testing.T) {
 	// A well-formed argument: JSON already keeps the ESC escaped, and the
@@ -46,7 +46,7 @@ func TestApproveShowsEveryByteOfTheArgumentsAsItself(t *testing.T) {
 }
 
 // A call whose arguments the relay has not reported yet is not a call with
-// no arguments, and nim approve must not let a human mistake one for the
+// no arguments, and holdcall approve must not let a human mistake one for the
 // other: the daemon refuses to approve the first, and the text says why.
 func TestApproveSaysWhenTheArgumentsHaveNotArrived(t *testing.T) {
 	var out bytes.Buffer

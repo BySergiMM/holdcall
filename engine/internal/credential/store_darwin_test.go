@@ -6,7 +6,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/BySergiMM/nim/engine/internal/config"
+	"github.com/BySergiMM/holdcall/engine/internal/config"
 )
 
 // These exercise the real macOS keychain. If the environment cannot reach it

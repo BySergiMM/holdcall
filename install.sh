@@ -1,5 +1,5 @@
 #!/bin/sh
-# install.sh -- download, verify and install a nim release binary.
+# install.sh -- download, verify and install a holdcall release binary.
 #
 #   curl -fsSL https://raw.githubusercontent.com/BySergiMM/holdcall/m1-bootstrap/install.sh | sh
 #
@@ -7,15 +7,15 @@
 # in, so it avoids bashisms rather than assuming bash is what is reading it.
 #
 # Safe by construction, not just by convention:
-#   - never sudo, and never writes outside $NIM_INSTALL_DIR
+#   - never sudo, and never writes outside $HOLDCALL_INSTALL_DIR
 #   - the archive's SHA-256 is checked against SHA256SUMS before anything is
 #     extracted or copied; a mismatch is a hard refusal, not a warning
 #   - every step is printed, so piping this into `sh` is not a leap of faith
 #
-# NIM_VERSION=vX.Y.Z   pin a release instead of installing the latest
-# NIM_INSTALL_DIR       where the binary goes (default: $HOME/.local/bin)
-# NIM_REPO               owner/repo releases are published from (see below)
-# NIM_DOWNLOAD_BASE     override where archives are fetched from -- exists so
+# HOLDCALL_VERSION=vX.Y.Z   pin a release instead of installing the latest
+# HOLDCALL_INSTALL_DIR       where the binary goes (default: $HOME/.local/bin)
+# HOLDCALL_REPO               owner/repo releases are published from (see below)
+# HOLDCALL_DOWNLOAD_BASE     override where archives are fetched from -- exists so
 #                       tools/install-rig/test.sh can point this at a local
 #                       server instead of the real network
 
@@ -23,11 +23,11 @@ set -eu
 
 # The repository this script downloads from. A variable, not a literal baked
 # into every curl call below, so a fork only has to change this one line.
-REPO="${NIM_REPO:-BySergiMM/holdcall}"
+REPO="${HOLDCALL_REPO:-BySergiMM/holdcall}"
 
-VERSION="${NIM_VERSION:-}"
-INSTALL_DIR="${NIM_INSTALL_DIR:-$HOME/.local/bin}"
-DOWNLOAD_BASE="${NIM_DOWNLOAD_BASE:-}"
+VERSION="${HOLDCALL_VERSION:-}"
+INSTALL_DIR="${HOLDCALL_INSTALL_DIR:-$HOME/.local/bin}"
+DOWNLOAD_BASE="${HOLDCALL_DOWNLOAD_BASE:-}"
 
 say() {
     echo "install.sh: $*" >&2
@@ -39,7 +39,7 @@ die() {
 }
 
 # ---- os/arch detection ----------------------------------------------------
-# nim ships darwin/arm64, darwin/amd64, linux/amd64 and linux/arm64 archives.
+# holdcall ships darwin/arm64, darwin/amd64, linux/amd64 and linux/arm64 archives.
 # windows/amd64 exists too, but this script targets `sh`; a Windows user
 # takes the zip from the release page directly.
 
@@ -49,7 +49,7 @@ arch="$(uname -m)"
 case "$os" in
     Darwin) goos="darwin" ;;
     Linux) goos="linux" ;;
-    *) die "unsupported OS '$os' -- nim ships darwin and linux archives; grab the windows zip from https://github.com/$REPO/releases instead" ;;
+    *) die "unsupported OS '$os' -- holdcall ships darwin and linux archives; grab the windows zip from https://github.com/$REPO/releases instead" ;;
 esac
 
 case "$arch" in
@@ -80,7 +80,7 @@ else
     base="https://github.com/$REPO/releases/download/$VERSION"
 fi
 
-archive="nim_${VERSION}_${goos}_${goarch}.tar.gz"
+archive="holdcall_${VERSION}_${goos}_${goarch}.tar.gz"
 work_dir="$(mktemp -d)"
 trap 'rm -rf "$work_dir"' EXIT INT TERM
 
@@ -116,17 +116,17 @@ say "checksum verified: $actual"
 # ---- install ------------------------------------------------------------
 # Never sudo, and never writes anywhere but INSTALL_DIR: whether that
 # directory needs root is the caller's decision, made by the value of
-# NIM_INSTALL_DIR, not this script's.
+# HOLDCALL_INSTALL_DIR, not this script's.
 
 tar -xzf "$work_dir/$archive" -C "$work_dir"
-extracted="$work_dir/nim_${VERSION}_${goos}_${goarch}"
-[ -f "$extracted/nim" ] || die "archive did not contain a nim binary at the expected path"
+extracted="$work_dir/holdcall_${VERSION}_${goos}_${goarch}"
+[ -f "$extracted/holdcall" ] || die "archive did not contain a holdcall binary at the expected path"
 
 mkdir -p "$INSTALL_DIR"
-cp "$extracted/nim" "$INSTALL_DIR/nim"
-chmod 755 "$INSTALL_DIR/nim"
+cp "$extracted/holdcall" "$INSTALL_DIR/holdcall"
+chmod 755 "$INSTALL_DIR/holdcall"
 
-say "installed nim $VERSION to $INSTALL_DIR/nim"
+say "installed holdcall $VERSION to $INSTALL_DIR/holdcall"
 
 case ":$PATH:" in
     *":$INSTALL_DIR:"*) ;;

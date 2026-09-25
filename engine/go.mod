@@ -1,4 +1,4 @@
-module github.com/BySergiMM/nim/engine
+module github.com/BySergiMM/holdcall/engine
 
 go 1.26.6
 

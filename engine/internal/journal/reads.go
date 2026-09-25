@@ -40,7 +40,7 @@ type LossReport struct {
 	// never written. session.start is one-way, so the daemon can accept it and
 	// fail to commit it, then recover and record every call that follows; those
 	// calls are real and decided, but belong to a session the journal has no
-	// start for. They used to be invisible to nim log and the console while the
+	// start for. They used to be invisible to holdcall log and the console while the
 	// totals still counted them.
 	CallsWithoutSession int
 }
@@ -84,7 +84,7 @@ func (j *Journal) Loss() (LossReport, error) {
 	return r, err
 }
 
-// Anomalies counts the messages Nim saw and could not account for. Since M2
+// Anomalies counts the messages Holdcall saw and could not account for. Since M2
 // most of them are refused rather than relayed -- a frame that is not JSON, a
 // frame carrying two messages, an object naming a key twice, a call with no
 // readable tool name, and a batch carrying a tools/call -- while a batch with
@@ -282,7 +282,7 @@ func (j *Journal) SessionEntries(id string, limit int) ([]Entry, error) {
 	return out, rows.Err()
 }
 
-// CallRow is one line of `nim log`.
+// CallRow is one line of `holdcall log`.
 type CallRow struct {
 	ChainSeq   int64
 	OccurredAt string
@@ -321,7 +321,7 @@ func (j *Journal) RecentCalls(limit int) ([]CallRow, error) {
 		// Nullable, all of them. A tools/call with no params.name records no
 		// tool, a session that reported no connector records none, most
 		// sessions derive no agent, and scanning any of those into a string
-		// turns `nim log` into an error message about SQL. The decision is null
+		// turns `holdcall log` into an error message about SQL. The decision is null
 		// only in journals older than M2.
 		var connector, agent, tool, decision sql.NullString
 		var ok sql.NullBool
@@ -342,7 +342,7 @@ func (j *Journal) RecentCalls(limit int) ([]CallRow, error) {
 	return out, rows.Err()
 }
 
-// ToolTotals is the summary line of `nim log`: how often each tool was seen.
+// ToolTotals is the summary line of `holdcall log`: how often each tool was seen.
 func (j *Journal) ToolTotals() (map[string]int, error) {
 	rows, err := j.db.Query(
 		`select tool, count(*) from nim_journal where kind = ? group by tool order by count(*) desc`,

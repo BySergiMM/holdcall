@@ -1,15 +1,15 @@
-"""Drive a real MCP client twice: straight to the server, then through Nim.
+"""Drive a real MCP client twice: straight to the server, then through Holdcall.
 
 The relay passes only if two things are both true: every ordinary exchange is
 byte-for-byte indistinguishable (the MATCH cases), and the handful of things
-Nim is supposed to change come back changed in exactly the documented way
+Holdcall is supposed to change come back changed in exactly the documented way
 (the DIFFERS cases, asserted precisely rather than merely noticed).
 
 The MATCH cases run under Client(..., mode="legacy"), the classic
 `initialize` handshake. The must-differ policy case runs twice: once under
 that handshake and once under the client's default, which since fastmcp 4
 negotiates `server/discover` and the 2026-07-28 revision, where every result
-carries a `resultType` the client validates strictly. Nim answers a refusal
+carries a `resultType` the client validates strictly. Holdcall answers a refusal
 in whichever dialect the session negotiated (internal/mcp/deny.go); before it
 did, a client in the default mode could not parse the refusal at all and
 raised a local ValidationError instead of the ToolError it is meant to read
@@ -35,13 +35,13 @@ from fastmcp.client.transports import StdioTransport
 
 RIG = Path(__file__).parent
 SERVER = str(RIG / "server.py")
-NIM = os.environ.get(
-    "NIM_BINARY",
-    str(RIG.parent.parent / "engine" / "bin" / ("nim.exe" if os.name == "nt" else "nim")),
+HOLDCALL = os.environ.get(
+    "HOLDCALL_BINARY",
+    str(RIG.parent.parent / "engine" / "bin" / ("holdcall.exe" if os.name == "nt" else "holdcall")),
 )
 
 # The tool a rule denies, for the policy-refusal case below. Real, callable,
-# and answers directly -- so a refusal through Nim proves Nim stopped it,
+# and answers directly -- so a refusal through Holdcall proves Holdcall stopped it,
 # rather than the server having nothing to say.
 DENIED_TOOL = "dangerous_tool"
 
@@ -83,16 +83,16 @@ async def _drive(transport):
 
 
 def run_nim(*args, env, timeout=15):
-    """Run the built nim binary for one CLI command and return (ok, stdout)."""
+    """Run the built holdcall binary for one CLI command and return (ok, stdout)."""
     proc = subprocess.run(
-        [NIM, *args], env=env, capture_output=True, text=True, timeout=timeout
+        [HOLDCALL, *args], env=env, capture_output=True, text=True, timeout=timeout
     )
     return proc.returncode == 0, proc.stdout + proc.stderr
 
 
 def start_daemon(env):
-    """Start `nim daemon` as a foreground child this process controls, and
-    wait for it to answer `nim status` before returning.
+    """Start `holdcall daemon` as a foreground child this process controls, and
+    wait for it to answer `holdcall status` before returning.
 
     Not StartDaemon()'s own auto-spawn (which detaches and outlives its
     caller by design): the rig needs a handle it can stop deterministically
@@ -100,7 +100,7 @@ def start_daemon(env):
     end-to-end tests' stack.daemon() does.
     """
     proc = subprocess.Popen(
-        [NIM, "daemon"], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        [HOLDCALL, "daemon"], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
     )
     deadline = time.time() + 10
     while time.time() < deadline:
@@ -108,7 +108,7 @@ def start_daemon(env):
         if ok and "daemon   running" in out:
             return proc
         if proc.poll() is not None:
-            raise RuntimeError("nim daemon exited before it came up")
+            raise RuntimeError("holdcall daemon exited before it came up")
         time.sleep(0.1)
     proc.kill()
     proc.wait()
@@ -178,10 +178,10 @@ class RawSession:
 
 async def check_policy_denial(env, mode) -> tuple[bool, str]:
     """MUST DIFFER: a tool a rule denies. Direct, the server just runs it.
-    Through Nim, with the rule in place, it must come back as a tool error
-    whose text names Nim and says not to retry -- mcp.DeniedByPolicy,
+    Through Holdcall, with the rule in place, it must come back as a tool error
+    whose text names Holdcall and says not to retry -- mcp.DeniedByPolicy,
     verbatim, per engine/internal/mcp/deny.go -- and it must come back as
-    exactly that under both handshakes: the refusal is the one message Nim
+    exactly that under both handshakes: the refusal is the one message Holdcall
     writes itself, so it is the one place a dialect mismatch can hide.
 
     mode is a fastmcp Client mode: "legacy" for the initialize handshake,
@@ -196,7 +196,7 @@ async def check_policy_denial(env, mode) -> tuple[bool, str]:
         await direct.close()
 
     through = StdioTransport(
-        command=NIM,
+        command=HOLDCALL,
         args=["serve", "--connector", "rig", "--client", "test-rig", "--", sys.executable, SERVER],
         env=env,
     )
@@ -217,14 +217,14 @@ async def check_policy_denial(env, mode) -> tuple[bool, str]:
         problems.append(f"direct call to {DENIED_TOOL} did not succeed as it should have with no rule: "
                          f"is_error={direct_error} data={direct_text!r}")
     if raised is None:
-        problems.append(f"through nim, {DENIED_TOOL} was not refused -- the rule did not bite")
+        problems.append(f"through holdcall, {DENIED_TOOL} was not refused -- the rule did not bite")
     elif raised != "ToolError":
         # A ValidationError here is F-021: the client could not read the
         # refusal at all, which is not a refusal from where the model sits.
-        problems.append(f"through nim, the refusal did not read as a tool error but raised {raised}: {denial_text!r}")
+        problems.append(f"through holdcall, the refusal did not read as a tool error but raised {raised}: {denial_text!r}")
     else:
-        if "Nim" not in denial_text:
-            problems.append(f"the refusal does not name Nim: {denial_text!r}")
+        if "Holdcall" not in denial_text:
+            problems.append(f"the refusal does not name Holdcall: {denial_text!r}")
         if "retry" not in denial_text.lower():
             problems.append(f"the refusal does not say not to retry: {denial_text!r}")
 
@@ -257,7 +257,7 @@ def check_duplicate_method_is_refused(env) -> tuple[bool, str]:
         direct.close()
 
     through = RawSession(
-        NIM,
+        HOLDCALL,
         ["serve", "--connector", "rig", "--client", "test-rig", "--", sys.executable, SERVER],
         env,
     )
@@ -277,24 +277,24 @@ def check_duplicate_method_is_refused(env) -> tuple[bool, str]:
     if not direct_line or '"dup-key-attack"' not in direct_line:
         problems.append(f"direct did not answer the duplicate-key frame as an ordinary call: {direct_line!r}")
     if nim_line is not None:
-        problems.append(f"through nim, the duplicate-key frame got an answer instead of silence: {nim_line!r}")
+        problems.append(f"through holdcall, the duplicate-key frame got an answer instead of silence: {nim_line!r}")
     if not alive_line or '"still-alive"' not in alive_line:
         problems.append(f"the relay did not survive to answer the next frame: {alive_line!r}")
 
     if problems:
         return False, "; ".join(problems)
-    return True, "direct answered it; through nim, silence -- the frame was refused, not merely unlucky"
+    return True, "direct answered it; through holdcall, silence -- the frame was refused, not merely unlucky"
 
 
 async def main() -> int:
-    home = RIG / "nim-home"
+    home = RIG / "holdcall-home"
     if home.exists():
         shutil.rmtree(home)
     env = dict(os.environ)
-    env["NIM_HOME"] = str(home)
+    env["HOLDCALL_HOME"] = str(home)
 
-    print(f"NIM_BINARY: {NIM}")
-    print(f"NIM_HOME:   {home}")
+    print(f"HOLDCALL_BINARY: {HOLDCALL}")
+    print(f"HOLDCALL_HOME:   {home}")
     print()
 
     daemon = start_daemon(env)
@@ -306,15 +306,15 @@ async def main() -> int:
 
         direct = StdioTransport(command=sys.executable, args=[SERVER], env=env)
         through = StdioTransport(
-            command=NIM,
+            command=HOLDCALL,
             args=["serve", "--connector", "rig", "--client", "test-rig", "--", sys.executable, SERVER],
             env=env,
         )
 
         a = await drive(direct, "direct")
-        b = await drive(through, "through nim")
+        b = await drive(through, "through holdcall")
 
-        print(f"{'check':<12} {'direct':<28} {'through nim':<28} verdict")
+        print(f"{'check':<12} {'direct':<28} {'through holdcall':<28} verdict")
         print("-" * 84)
         match_failures = 0
         for key in a:

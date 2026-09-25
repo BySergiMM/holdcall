@@ -52,7 +52,7 @@ func isSelfImpl(conn net.Conn) (supported, same bool, pid int) {
 	// difference between checking the running image and checking a filename:
 	// the file at a path belongs to whoever owns the directory, so an earlier
 	// readlink-then-stat was defeated with no race at all -- launch from a
-	// path you control, replace the file there with a link to nim, connect.
+	// path you control, replace the file there with a link to holdcall, connect.
 	// Demonstrated in pathswap_test.go, which runs on both unix platforms.
 	peerImage, err := ImageOf(pid)
 	if err != nil {

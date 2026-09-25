@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/BySergiMM/nim/engine/internal/journal"
-	"github.com/BySergiMM/nim/engine/internal/peer"
+	"github.com/BySergiMM/holdcall/engine/internal/journal"
+	"github.com/BySergiMM/holdcall/engine/internal/peer"
 )
 
 // Enrolment: binding a name the operator chose to the executable a client
@@ -25,11 +25,11 @@ import (
 //
 // What this establishes and what it does not: two different client programs
 // are different agents. Two windows of the same program are the same agent,
-// because they run the same file, and nothing available to Nim distinguishes
+// because they run the same file, and nothing available to Holdcall distinguishes
 // them. That is a real limit of the model, not an omission in the code.
 //
 // One property this shares with connector registration and should be read
-// alongside it: enrolling is as privileged as running Nim. Anything that can
+// alongside it: enrolling is as privileged as running Holdcall. Anything that can
 // execute this binary as this user can enrol an agent or replace an existing
 // enrolment, exactly as it can register a connector. That is a property of
 // running everything as one user, and it is the reason the step that adds
@@ -77,7 +77,7 @@ func handleAgentAdd(req Request, j *journal.Journal) Response {
 			other, _, _ := j.AgentByImage(dev, ino)
 			return Response{ID: req.ID, Error: fmt.Sprintf(
 				"%s is already enrolled as %q, and one executable is one agent. "+
-					"Reuse that name, or remove it first with nim agent remove %s",
+					"Reuse that name, or remove it first with holdcall agent remove %s",
 				req.AgentPath, other, other)}
 		}
 		return Response{ID: req.ID, Error: fmt.Sprintf("recording the enrolment: %v", err)}

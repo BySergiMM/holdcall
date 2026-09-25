@@ -45,7 +45,7 @@ import (
 // What this establishes: the peer's main mapped image is the same file as
 // ours, by device and inode. It is executable identity, kernel-provided. It is
 // NOT code-signing identity: it says nothing about who signed the binary, and
-// a rebuild of Nim is a different inode and so a different process as far as
+// a rebuild of Holdcall is a different inode and so a different process as far as
 // this is concerned -- the same property os.SameFile already gave.
 
 // Layout constants.

@@ -1,7 +1,7 @@
 # Architecture
 
-How Nim is put together, layer by layer, and what one tool call goes
-through. `README.md` says what Nim guarantees; `docs/security.md` says what
+How Holdcall is put together, layer by layer, and what one tool call goes
+through. `README.md` says what Holdcall guarantees; `docs/security.md` says what
 it defends against and what it does not; this file says where each of those
 lives in the code. Sizes on 2026-09-16: about 13,600 lines of Go outside
 tests and 16,400 in tests, in ten packages under `engine/internal`.
@@ -12,21 +12,21 @@ tests and 16,400 in tests, in ten packages under `engine/internal`.
  MCP client (Claude Desktop, Claude Code, Cursor)
       │  stdio, JSON-RPC frames                 
       ▼
- nim serve  ── the relay ──────────────────────────► downstream MCP server
+ holdcall serve  ── the relay ──────────────────────────► downstream MCP server
   (internal/shim)      forwards every byte unchanged      (the "connector")
       │                except a tools/call it refuses
       │  unix socket, one connection per relay run
       ▼
- nim daemon  (internal/daemon)      one process per user, the only writer
+ holdcall daemon  (internal/daemon)      one process per user, the only writer
    ├─ peer identity: is the caller this same binary?      (internal/peer)
    ├─ agent identity: which enrolled program spawned it?  (internal/peer)
    ├─ decision: rules, budgets, ask                       (internal/journal)
    ├─ credentials: OS store, bound to a connector's argv  (internal/credential)
-   ├─ approvals: calls held for nim approve, memory only  (approval.go)
+   ├─ approvals: calls held for holdcall approve, memory only  (approval.go)
    └─ journal: SQLite, append-only, hash-chained           (internal/journal)
                      │
-       nim status / log / verify / console / policy / agent / connector
-                     │                       (cmd/nim, internal/readmodel)
+       holdcall status / log / verify / console / policy / agent / connector
+                     │                       (cmd/holdcall, internal/readmodel)
        dashboard/    a static page about the repository, not about runtime
 ```
 
@@ -34,8 +34,8 @@ Nothing hosted decides anything. The engine works with no network.
 
 ## Layer 1: the relay (`internal/shim`, `internal/mcp`)
 
-A client is pointed at `nim serve --connector <name> -- <command>` instead
-of at the MCP server directly (`nim init` rewrites the client's config to
+A client is pointed at `holdcall serve --connector <name> -- <command>` instead
+of at the MCP server directly (`holdcall init` rewrites the client's config to
 do that, `internal/clientconfig`). The relay spawns the server with the
 command the daemon registered for that connector, or the one given, and
 pumps stdio both ways.
@@ -45,7 +45,7 @@ by their exact bytes, an object naming a key twice is refused, and a
 `tools/call` whose tool name cannot be read as exactly one string is refused
 before anyone is asked. Everything that is not a `tools/call` goes through as
 the bytes that arrived; the relay is invisible to a client by test
-(`tools/relay-rig`, a real client run direct and through Nim).
+(`tools/relay-rig`, a real client run direct and through Holdcall).
 
 A `tools/call` is the exception. The relay asks the daemon over its socket
 (`call.request`, with the tool name and a digest of the arguments, never the
@@ -55,28 +55,28 @@ outcome (deny, no daemon, a slow daemon, a closed socket, an answer to a
 different question, a journal write that failed) is a denial, answered to
 the client as a tool error in the dialect the session negotiated
 (`internal/mcp/deny.go`; both the `initialize` and the `server/discover`
-handshake are watched). A refused call never leaves Nim.
+handshake are watched). A refused call never leaves Holdcall.
 
 The relay also reports `session.start`, `session.end`, `call.outcome` (did
 the server answer, how long it took) and `anomaly` (a frame it could not
-account for). It verifies that what answered on the socket is Nim before it
+account for). It verifies that what answered on the socket is Holdcall before it
 sends a byte, and refuses to take decisions from anything else.
 
 ## Layer 2: the daemon (`internal/daemon`)
 
 One per user, started on demand by the first relay and detached from any
-terminal. It listens on a unix socket whose path is derived from the Nim
-home (`~/Library/Application Support/nim` on macOS, `$XDG_RUNTIME_DIR` or
+terminal. It listens on a unix socket whose path is derived from the Holdcall
+home (`~/Library/Application Support/holdcall` on macOS, `$XDG_RUNTIME_DIR` or
 the temp dir elsewhere). Two things happen at accept, before a byte is read:
 
 - **Peer identity** (`internal/peer`): the kernel is asked which executable
   the connecting process is running (dev/ino of its main image on macOS via
   `proc_info`, `/proc/<pid>/exe` on Linux; unsupported on Windows). Anything
-  that is not this same binary is refused. An older build of Nim at the same
-  path is refused too, but named as such, and `nim daemon restart` is the
+  that is not this same binary is refused. An older build of Holdcall at the same
+  path is refused too, but named as such, and `holdcall daemon restart` is the
   remedy.
 - **Agent identity**: the relay's parent process is resolved the same way
-  and matched against the enrolments in `nim_agents` (`nim agent add <name>
+  and matched against the enrolments in `nim_agents` (`holdcall agent add <name>
   <path>`). The result is bound to the session at `session.start` and never
   re-derived. Nothing on the wire names an agent; a client cannot claim one.
 
@@ -96,14 +96,14 @@ still carries policy is refused).
 - **Rules** (`nim_rules`): effect `deny`, `allow` or `ask`, scoped to a tool
   or `*`, optionally one agent and one connector. `journal.Decide` picks the
   most specific matching rule; at equal specificity deny beats ask beats
-  allow; no matching rule is allow. `nim policy explain` runs the same
+  allow; no matching rule is allow. `holdcall policy explain` runs the same
   function. `docs/decisions/0002` and `0003`.
 - **Budgets** (`nim_budgets`): a cap on allowed calls per session, scoped like
   a rule, consulted only once the rules allow. A budget narrows, never
   grants; it counts decisions, not outcomes. `docs/decisions/0004`.
 - **Ask** (M6): the daemon answers `pending`, keeps the call in memory with
   the real arguments the relay then sends once, and a human decides with
-  `nim approve <id>` or `nim reject <id>` after seeing those arguments, every
+  `holdcall approve <id>` or `holdcall reject <id>` after seeing those arguments, every
   byte shown as itself. The decision is journaled before the relay is told;
   a session ending, the connection dropping or the timer
   (`[daemon] approval_timeout`, default 2m) all reject. An approve is refused
@@ -124,18 +124,18 @@ Kinds: `session.start`, `call.request`, `call.outcome`, `session.end`,
 `anomaly`, plus the policy kinds. What is never in it: credentials, call
 arguments (a digest only), response bodies.
 
-`nim verify` walks the chain; `--expect-head` compares it with a head you
+`holdcall verify` walks the chain; `--expect-head` compares it with a head you
 recorded elsewhere, which is the one check that covers rewriting, because
 the chain is unkeyed (F-003, accepted; `docs/decisions/0006`). Tables an
 older build created are rebuilt on open with every row copied verbatim.
 
-`internal/readmodel` is the one projection every reader uses: `nim status`,
-`nim log`, the console and the sessions view all draw their meaning from it,
+`internal/readmodel` is the one projection every reader uses: `holdcall status`,
+`holdcall log`, the console and the sessions view all draw their meaning from it,
 so a count cannot mean one thing in the terminal and another in a browser.
 
 ## Layer 5: credentials (`internal/credential`)
 
-`nim connector set <name> --env KEY -- <command>` reads a secret from stdin
+`holdcall connector set <name> --env KEY -- <command>` reads a secret from stdin
 and stores it in the OS store: the macOS Keychain through `security`, the
 Secret Service through `secret-tool` on Linux, DPAPI on Windows. The daemon
 records which env var name and which argv may receive it. A relay asks for
@@ -144,15 +144,15 @@ decides what gets spawned, not the caller, and injects the value into the
 connector's environment only. The value is never in argv, never in SQLite,
 never in the console.
 
-## Layer 6: the operator's surfaces (`cmd/nim`, `internal/console`)
+## Layer 6: the operator's surfaces (`cmd/holdcall`, `internal/console`)
 
-- `nim init` and `nim doctor`: point a client's config at Nim (backups,
+- `holdcall init` and `holdcall doctor`: point a client's config at Holdcall (backups,
   atomic writes, env values never printed) and check the result.
-- `nim status`, `nim log`, `nim verify`: the journal from the terminal.
-- `nim policy`, `nim agent`, `nim connector`, `nim approve`, `nim reject`,
-  `nim daemon restart`: policy and lifecycle, all through the daemon's
+- `holdcall status`, `holdcall log`, `holdcall verify`: the journal from the terminal.
+- `holdcall policy`, `holdcall agent`, `holdcall connector`, `holdcall approve`, `holdcall reject`,
+  `holdcall daemon restart`: policy and lifecycle, all through the daemon's
   verified socket.
-- `nim console`: a read-only page on loopback only (`Host` must be a
+- `holdcall console`: a read-only page on loopback only (`Host` must be a
   loopback name), with `/api/snapshot`, `/api/events`, `/api/sessions/<id>`,
   `/api/policy`, `/api/explain?tool=&agent=&connector=` (the daemon's own
   `journal.Decide`, applied to the rules as they stand) and `/api/pending`

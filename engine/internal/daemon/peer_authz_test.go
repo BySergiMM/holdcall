@@ -20,7 +20,7 @@ func requirePython(t *testing.T) {
 	}
 }
 
-// attack runs script against sock as a genuinely separate, non-nim process
+// attack runs script against sock as a genuinely separate, non-holdcall process
 // and returns whatever it printed.
 //
 // A non-zero exit is not a test failure. The daemon closes an unverified
@@ -39,7 +39,7 @@ func attack(t *testing.T, sock, script string) string {
 // On a milestone that enforces this is worse than it was on one that only
 // observed. The journal is what the decision is written to, and a chain that
 // covers forged entries laundered the forgery rather than detecting it: the
-// daemon chains whatever it is given, so `nim verify` reported the result as
+// daemon chains whatever it is given, so `holdcall verify` reported the result as
 // sound.
 func TestANonNimProcessCannotWriteToTheJournal(t *testing.T) {
 	if runtime.GOOS == "windows" {
@@ -73,7 +73,7 @@ s.close()
 		t.Fatalf("Head: %v", err)
 	}
 	if after != before {
-		t.Fatalf("a non-nim process appended %d entries to the journal", after-before)
+		t.Fatalf("a non-holdcall process appended %d entries to the journal", after-before)
 	}
 }
 
@@ -81,7 +81,7 @@ s.close()
 //
 // The daemon answers call.request, so an unauthenticated caller could not
 // merely fabricate a record: it could drive the decision path and read back
-// what Nim would allow. That turns the socket into an oracle for the policy
+// what Holdcall would allow. That turns the socket into an oracle for the policy
 // as well as a way to write to the record.
 func TestANonNimProcessCannotObtainADecision(t *testing.T) {
 	if runtime.GOOS == "windows" {
@@ -168,8 +168,8 @@ func TestAnUnauthenticatedConnectionCannotExhaustMemory(t *testing.T) {
 }
 
 // A connection may only report on sessions it opened. Peer identity narrows
-// a caller to "something running Nim's code", which any local process can be
-// by executing the binary; it cannot tell one run of Nim from another.
+// a caller to "something running Holdcall's code", which any local process can be
+// by executing the binary; it cannot tell one run of Holdcall from another.
 func TestAConnectionCannotSpeakForAnotherConnectionsSession(t *testing.T) {
 	cfg, dbPath := start(t)
 	j := openJournal(t, dbPath)

@@ -7,7 +7,7 @@ M8 as planned work with a narrower contract than the one first written.
 
 M8 was blocked on something more basic than itself. The journal's chain is
 unkeyed (F-003, accepted): nothing in it is secret, so anyone able to write
-`nim.db` can recompute every hash from the genesis and a rewritten history
+`holdcall.db` can recompute every hash from the genesis and a rewritten history
 verifies cleanly. A mirror that copied such a record to a hosted page and
 called it evidence would export a liability. D-004 offered two ways out:
 give the journal a key the agent cannot reach, or present the mirror as
@@ -21,12 +21,12 @@ row.** The journal does not get a key before M8.
 
 The key was the more attractive answer and it is not available. A key the
 agent cannot reach has to live under a principal the agent is not: a second
-OS user, a hardware token, or an enclave. Nim runs as the operator's own
+OS user, a hardware token, or an enclave. Holdcall runs as the operator's own
 user on the operator's own machine, and the agent -- the model driving an
 MCP client -- runs there too, with the same identity. Every place a key
 could be put, the process that would sign with it and the process that
 would forge with it are the same user. This is the same wall F-006 stands
-against ("enrolment is as privileged as running Nim"): a second principal is
+against ("enrolment is as privileged as running Holdcall"): a second principal is
 what closes both, and it is a deployment decision for the machine, not a
 change this repository can make on its own. Pretending otherwise -- a key
 in the credential store, say -- would produce signatures the agent could
@@ -38,7 +38,7 @@ say exactly what was verified and nothing more. A hosted mirror may say:
 
 - these rows are what the machine named here reported, in this order, at
   these times, and the chain it reported links as shown;
-- `nim verify --expect-head` on that machine, against a head recorded
+- `holdcall verify --expect-head` on that machine, against a head recorded
   elsewhere, is what turns the record into evidence -- the mirror can hold
   such heads, and can show where the local chain diverges from one, but it
   cannot stand in for that check.
@@ -60,13 +60,13 @@ and the link hashes. Three things are added by this decision:
    came from and the head the machine reported at sync time, and the viewer
    labels the table "reported by <machine>", never "recorded".
 2. **Heads as the one strong claim.** The mirror stores heads the operator
-   pins from the machine (`nim verify --expect-head` material) separately
+   pins from the machine (`holdcall verify --expect-head` material) separately
    from the rows the sync writes, under a different write path, so a sync
    that rewrites rows cannot also rewrite what they are compared against.
    The viewer shows agreement or divergence between the two; it does not
    average them.
 3. **The engine never depends on the mirror.** The sync is a separate,
-   opt-in command (`nim sync`, not the daemon), off by default, so a machine
+   opt-in command (`holdcall sync`, not the daemon), off by default, so a machine
    with no network and no account behaves exactly as today. Nothing hosted
    decides anything, as the milestone already said.
 

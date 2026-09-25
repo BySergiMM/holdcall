@@ -6,7 +6,7 @@
 #
 # Every entry here traces to the same root cause, in one of two shapes:
 #
-#   Nim never implemented a kernel-verified peer identity for Windows'
+#   Holdcall never implemented a kernel-verified peer identity for Windows'
 #   AF_UNIX (afunix.sys exposes no SO_PEERCRED/LOCAL_PEERPID equivalent),
 #   and said so rather than ship an unverified one -- see
 #   engine/internal/peer/peer_windows.go and image_windows.go. Production
@@ -37,4 +37,4 @@ TestAReplacedFileIsReportedStaleRatherThanFailing	agent enrolment resolves ident
 TestTheDaemonsCommandIsSpawnedNotTheCallersEndToEnd	fixture hardcodes /bin/echo and /bin/sh -c, neither of which exists at that path on windows; not a peer-identity gap, a fixture one
 TestWithNoConnectorTheCallersCommandRuns	fixture hardcodes /bin/echo, which does not exist at that path on windows; not a peer-identity gap, a fixture one
 TestStatusDoesNotCallAnImpostorTheDaemon	peer identity is unsupported on windows, so status cannot tell an impostor apart there; the same gap the Known gaps table records
-TestAnInPlaceUpgradeIsDiagnosedAndDaemonRestartFixesIt	peer identity is unsupported on windows, so an older build cannot be told apart from anything; and nim daemon restart is not supported there
+TestAnInPlaceUpgradeIsDiagnosedAndDaemonRestartFixesIt	peer identity is unsupported on windows, so an older build cannot be told apart from anything; and holdcall daemon restart is not supported there

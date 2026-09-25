@@ -3,7 +3,7 @@ package readmodel
 import (
 	"testing"
 
-	"github.com/BySergiMM/nim/engine/internal/journal"
+	"github.com/BySergiMM/holdcall/engine/internal/journal"
 )
 
 // The whole table, written out. Every cell is a claim about what the journal
@@ -46,7 +46,7 @@ func TestCallStateTable(t *testing.T) {
 }
 
 // A refusal is never pending and never a gap. Those are the two readings that
-// would turn "Nim did its job" into "Nim lost something".
+// would turn "Holdcall did its job" into "Holdcall lost something".
 func TestARefusalIsNeitherPendingNorMissing(t *testing.T) {
 	if s := CallStateOf(journal.DecisionDeny, false); s == CallPending {
 		t.Error("a refused call reads as still running")

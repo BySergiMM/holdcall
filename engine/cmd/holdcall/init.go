@@ -8,15 +8,15 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/BySergiMM/nim/engine/internal/clientconfig"
+	"github.com/BySergiMM/holdcall/engine/internal/clientconfig"
 )
 
-// resolveNimPath is what nim init writes into a rewritten entry's "command",
+// resolveNimPath is what holdcall init writes into a rewritten entry's "command",
 // and what it compares an already-wrapped entry's command against.
 //
-// It resolves through symlinks so that a client invoking a symlinked nim
+// It resolves through symlinks so that a client invoking a symlinked holdcall
 // (e.g. one on PATH pointing at an install elsewhere) and one invoking the
-// real path are recognised as the same binary, rather than nim init offering
+// real path are recognised as the same binary, rather than holdcall init offering
 // to "repoint" an entry that was already correct.
 func resolveNimPath() (string, error) {
 	self, err := os.Executable()
@@ -27,7 +27,7 @@ func resolveNimPath() (string, error) {
 		return resolved, nil
 	}
 	// A broken symlink or an unusual filesystem: fall back to the
-	// unresolved path rather than failing nim init outright over something
+	// unresolved path rather than failing holdcall init outright over something
 	// that does not stop the binary from actually running.
 	return self, nil
 }
@@ -36,9 +36,9 @@ func runInit(args []string) error {
 	fs := flag.NewFlagSet("init", flag.ExitOnError)
 	configOverride := fs.String("config", "", "override the discovered config file path (needs --client; mainly for tests)")
 	clientFilter := fs.String("client", "", "only touch this client: claude-code, cursor, or claude-desktop")
-	write := fs.Bool("write", false, "apply the changes; without this, nim init only prints what it would do")
-	repoint := fs.Bool("repoint", false, "repoint entries already wrapped by a nim binary at a different path")
-	undo := fs.String("undo", "", "restore a backup written by an earlier nim init --write, and exit")
+	write := fs.Bool("write", false, "apply the changes; without this, holdcall init only prints what it would do")
+	repoint := fs.Bool("repoint", false, "repoint entries already wrapped by a holdcall binary at a different path")
+	undo := fs.String("undo", "", "restore a backup written by an earlier holdcall init --write, and exit")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -54,7 +54,7 @@ func runInit(args []string) error {
 
 	nimPath, err := resolveNimPath()
 	if err != nil {
-		return fmt.Errorf("resolving the running nim binary: %w", err)
+		return fmt.Errorf("resolving the running holdcall binary: %w", err)
 	}
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -133,13 +133,13 @@ func printResult(w io.Writer, res clientconfig.Result) {
 func printEntry(w io.Writer, e clientconfig.EntryPlan) {
 	switch e.Status {
 	case clientconfig.StatusWrapped:
-		fmt.Fprintf(w, "    %s: route through Nim\n", e.Key)
+		fmt.Fprintf(w, "    %s: route through Holdcall\n", e.Key)
 		printDiff(w, e.Before, e.After)
 	case clientconfig.StatusRepointed:
 		fmt.Fprintf(w, "    %s: %s\n", e.Key, e.Detail)
 		printDiff(w, e.Before, e.After)
 	case clientconfig.StatusAlreadyNim:
-		fmt.Fprintf(w, "    %s: already through Nim\n", e.Key)
+		fmt.Fprintf(w, "    %s: already through Holdcall\n", e.Key)
 	case clientconfig.StatusStalePath:
 		fmt.Fprintf(w, "    %s: %s\n", e.Key, e.Detail)
 	case clientconfig.StatusHTTPSkipped:
@@ -159,11 +159,11 @@ func printDiff(w io.Writer, before, after string) {
 }
 
 // printManualInstructions is shown every run, dry or not: an operator on a
-// client nim init does not know about has no other way to find out how to do
+// client holdcall init does not know about has no other way to find out how to do
 // this by hand.
 func printManualInstructions(w io.Writer) {
 	fmt.Fprintln(w, "For any other MCP client, edit its config by hand: change a stdio server's")
-	fmt.Fprintln(w, `"command" to the absolute path of the nim binary shown above, and its "args" to`)
+	fmt.Fprintln(w, `"command" to the absolute path of the holdcall binary shown above, and its "args" to`)
 	fmt.Fprintln(w, `  ["serve", "--connector", "<server-name>", "--client", "<your-client-name>",`)
 	fmt.Fprintln(w, `   "--", <original command>, <original args...>]`)
 	fmt.Fprintln(w, `Leave "env" exactly as it was.`)

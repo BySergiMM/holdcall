@@ -27,7 +27,7 @@ const (
 	MaxTargetLen = 128
 	MaxEnvKeyLen = 128
 	// MaxSecretLen is generous for any real API token, certificate, or key
-	// material Nim is likely to inject, without allowing unbounded growth.
+	// material Holdcall is likely to inject, without allowing unbounded growth.
 	MaxSecretLen = 32 * 1024
 	// MaxCommandArgs and MaxCommandArgLen bound a connector's registered
 	// argv. Both are far past any real MCP server invocation
@@ -68,9 +68,9 @@ func validateTarget(target string) error {
 // ValidConnectorTarget reports whether name would be accepted as a connector
 // target, by the rule validateTarget enforces.
 //
-// Exported so `nim init` can reject an MCP server key before ever writing it
+// Exported so `holdcall init` can reject an MCP server key before ever writing it
 // into a client config as a --connector name: a key that would fail here
-// should not be offered as something nim init "will fix later" at
+// should not be offered as something holdcall init "will fix later" at
 // connector-registration time. The regex itself stays unexported and defined
 // once, here, so the two checks can never drift apart.
 func ValidConnectorTarget(name string) bool {
@@ -97,8 +97,8 @@ func validateEnvKey(key string) error {
 func validateCommand(command []string) error {
 	if len(command) == 0 {
 		return fmt.Errorf(
-			"a connector needs the command it belongs to, so Nim knows what its credential may be injected into: " +
-				"nim connector set <target> --env KEY -- <command> [args...]")
+			"a connector needs the command it belongs to, so Holdcall knows what its credential may be injected into: " +
+				"holdcall connector set <target> --env KEY -- <command> [args...]")
 	}
 	if len(command) > MaxCommandArgs {
 		return fmt.Errorf("command has %d arguments, over the %d limit", len(command), MaxCommandArgs)
@@ -158,7 +158,7 @@ func validateAgentName(name string) error {
 // operator meant and is not something they can see.
 func validateAgentPath(path string) error {
 	if path == "" {
-		return fmt.Errorf("an agent needs the executable to identify it by: nim agent add <name> <path>")
+		return fmt.Errorf("an agent needs the executable to identify it by: holdcall agent add <name> <path>")
 	}
 	if len(path) > MaxAgentPathLen {
 		return fmt.Errorf("agent path is %d bytes, over the %d limit", len(path), MaxAgentPathLen)
@@ -182,7 +182,7 @@ const MaxToolLen = 256
 // No trimming and no case folding, here or at match time.
 func validateTool(tool string) error {
 	if tool == "" {
-		return fmt.Errorf("a rule needs the tool it refuses: nim policy deny <tool>")
+		return fmt.Errorf("a rule needs the tool it refuses: holdcall policy deny <tool>")
 	}
 	if len(tool) > MaxToolLen {
 		return fmt.Errorf("tool name is %d bytes, over the %d limit", len(tool), MaxToolLen)
@@ -210,7 +210,7 @@ const MaxBudgetCalls = 1_000_000
 func validateBudgetCalls(n int) error {
 	if n <= 0 {
 		return fmt.Errorf(
-			"a budget's calls must be a positive integer: nim policy budget <n> --tool <tool>|--all-tools")
+			"a budget's calls must be a positive integer: holdcall policy budget <n> --tool <tool>|--all-tools")
 	}
 	if n > MaxBudgetCalls {
 		return fmt.Errorf("budget calls is %d, over the %d limit", n, MaxBudgetCalls)

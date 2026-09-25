@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/BySergiMM/nim/engine/internal/config"
-	"github.com/BySergiMM/nim/engine/internal/daemon"
+	"github.com/BySergiMM/holdcall/engine/internal/config"
+	"github.com/BySergiMM/holdcall/engine/internal/daemon"
 )
 
 // stubDaemon answers credential.get with resp and then swallows the events
@@ -101,7 +101,7 @@ func runShim(t *testing.T, opts Options) (stdout string, err error) {
 //
 // The original reproduction ran the real binary:
 //
-//	nim serve --target github -- /bin/sh -c 'echo $GITHUB_TOKEN'
+//	holdcall serve --target github -- /bin/sh -c 'echo $GITHUB_TOKEN'
 //
 // and the secret was printed, because Run spawned whatever its caller named
 // and injected the credential into it. Here the caller asks for the same

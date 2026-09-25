@@ -4,8 +4,8 @@ import (
 	"log"
 	"net"
 
-	"github.com/BySergiMM/nim/engine/internal/journal"
-	"github.com/BySergiMM/nim/engine/internal/peer"
+	"github.com/BySergiMM/holdcall/engine/internal/journal"
+	"github.com/BySergiMM/holdcall/engine/internal/peer"
 )
 
 // deriveAgent works out which enrolled client program is behind a connection.
@@ -30,7 +30,7 @@ import (
 // to any launcher that re-execs -- an application bundle's outer stub, a shell
 // script, a version manager. Nothing here can see through that, and an
 // enrolment that names a launcher will simply never match, which is why
-// `nim agent list` reports what it resolved rather than only what was typed.
+// `holdcall agent list` reports what it resolved rather than only what was typed.
 //
 // An empty name is the ordinary answer, not a failure. It means no enrolment
 // matched: nobody has enrolled an agent, or the program spawning relays is not

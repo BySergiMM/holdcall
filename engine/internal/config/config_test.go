@@ -9,9 +9,9 @@ import (
 
 // A deep install directory silently broke the daemon with "bind: invalid
 // argument", and the relay reported nothing wrong. The socket must stay short
-// no matter where the user puts NIM_HOME.
+// no matter where the user puts HOLDCALL_HOME.
 func TestSocketStaysWithinTheAfUnixLimit(t *testing.T) {
-	deep := "C:\\Users\\someone\\AppData\\Local\\Temp\\" + strings.Repeat("a-long-directory-name\\", 8) + "nim"
+	deep := "C:\\Users\\someone\\AppData\\Local\\Temp\\" + strings.Repeat("a-long-directory-name\\", 8) + "holdcall"
 	t.Setenv(HomeEnvVar, deep)
 
 	cfg, err := Load()
@@ -127,7 +127,7 @@ func TestAConfigWithAPolicySectionIsRefused(t *testing.T) {
 	if err == nil {
 		t.Fatal("a config.toml with a [policy] section was accepted")
 	}
-	if !strings.Contains(err.Error(), "nim policy deny") {
+	if !strings.Contains(err.Error(), "holdcall policy deny") {
 		t.Errorf("the error does not say where policy went: %v", err)
 	}
 }
@@ -152,11 +152,11 @@ func TestUnknownKeysAreRefused(t *testing.T) {
 		}
 	}
 	// And the file that is right still loads.
-	if err := os.WriteFile(Path(), []byte("[daemon]\ndata_dir = \"/tmp/nim-data\"\n"), 0o600); err != nil {
+	if err := os.WriteFile(Path(), []byte("[daemon]\ndata_dir = \"/tmp/holdcall-data\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := Load()
-	if err != nil || cfg.Daemon.DataDir != "/tmp/nim-data" {
+	if err != nil || cfg.Daemon.DataDir != "/tmp/holdcall-data" {
 		t.Fatalf("a valid file failed to load: %v (%+v)", err, cfg)
 	}
 }

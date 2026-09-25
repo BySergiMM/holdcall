@@ -11,7 +11,7 @@ import (
 
 // backupMarker separates an original path from the timestamp in a backup
 // file's name, and is how RestoreBackup recovers that original path.
-const backupMarker = ".nim-backup-"
+const backupMarker = ".holdcall-backup-"
 
 // BackupPath is where Apply would back up path up before writing to it.
 // Exported so callers can report it before Apply is actually called.
@@ -26,7 +26,7 @@ func BackupPath(path string) string {
 // original bytes to a timestamped backup.
 //
 // It refuses a Result that was never going to change anything: backing up
-// and rewriting a file nim init would not have touched serves no purpose and
+// and rewriting a file holdcall init would not have touched serves no purpose and
 // would only leave a spurious backup behind.
 func Apply(res Result) (backupFilePath string, err error) {
 	if !res.Found {
@@ -36,7 +36,7 @@ func Apply(res Result) (backupFilePath string, err error) {
 		return "", fmt.Errorf("%s needs no changes", res.File.Path)
 	}
 
-	// 0600: a client config file can hold nothing secret itself (Nim moved
+	// 0600: a client config file can hold nothing secret itself (Holdcall moved
 	// credentials out of these files), but the backup is still a full copy
 	// of it and there is no reason to leave it more open than that. O_EXCL:
 	// a backup is never overwritten; if the name is somehow taken, the next
@@ -58,12 +58,12 @@ func Apply(res Result) (backupFilePath string, err error) {
 
 // RestoreBackup writes a backup's contents back to the path it was copied
 // from, atomically. The original path is recovered from the backup's own
-// name rather than asked for separately, so `nim init --undo` needs only the
+// name rather than asked for separately, so `holdcall init --undo` needs only the
 // one argument a user actually has in hand.
 func RestoreBackup(backupFilePath string) (restoredPath string, err error) {
 	i := strings.LastIndex(backupFilePath, backupMarker)
 	if i < 0 {
-		return "", fmt.Errorf("%s does not look like a nim backup (missing %q)", backupFilePath, backupMarker)
+		return "", fmt.Errorf("%s does not look like a holdcall backup (missing %q)", backupFilePath, backupMarker)
 	}
 	restoredPath = backupFilePath[:i]
 
@@ -109,13 +109,13 @@ func writeNewFile(path string, data []byte, perm fs.FileMode) (string, error) {
 // A path that is a symlink is written through, not replaced: the rename
 // lands on the file the link points at, and the link stays. Otherwise a
 // config kept in a dotfiles repository and linked into place would silently
-// become a plain file the next time nim init ran.
+// become a plain file the next time holdcall init ran.
 func writeAtomic(path string, data []byte, perm fs.FileMode) error {
 	if target, err := filepath.EvalSymlinks(path); err == nil {
 		path = target
 	}
 	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, ".nim-init-tmp-*")
+	tmp, err := os.CreateTemp(dir, ".holdcall-init-tmp-*")
 	if err != nil {
 		return err
 	}

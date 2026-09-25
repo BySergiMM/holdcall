@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/BySergiMM/nim/engine/internal/daemon"
-	"github.com/BySergiMM/nim/engine/internal/journal"
-	"github.com/BySergiMM/nim/engine/internal/peer"
-	"github.com/BySergiMM/nim/engine/internal/readmodel"
+	"github.com/BySergiMM/holdcall/engine/internal/daemon"
+	"github.com/BySergiMM/holdcall/engine/internal/journal"
+	"github.com/BySergiMM/holdcall/engine/internal/peer"
+	"github.com/BySergiMM/holdcall/engine/internal/readmodel"
 )
 
 func sp(s string) *string { return &s }
@@ -23,7 +23,7 @@ func bp(v bool) *bool     { return &v }
 // it: read-only.
 func serve(t *testing.T, write func(*journal.Journal)) (*httptest.Server, string) {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "nim.db")
+	path := filepath.Join(t.TempDir(), "holdcall.db")
 
 	w, err := journal.Open(path, "test-machine")
 	if err != nil {
@@ -288,7 +288,7 @@ func TestEmptyJournalReportsEmpty(t *testing.T) {
 // Missing verification material is a statement about what could be read, and
 // the API must carry it as such rather than as a verdict on the journal.
 func TestMissingSeedIsReportedAsMissingMaterial(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "nim.db")
+	path := filepath.Join(t.TempDir(), "holdcall.db")
 	w, err := journal.Open(path, "the-machine")
 	if err != nil {
 		t.Fatal(err)
@@ -373,7 +373,7 @@ func TestIndexIsServedOnlyAtRoot(t *testing.T) {
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("root returned %d", res.StatusCode)
 	}
-	if !strings.Contains(string(body), "nim console") {
+	if !strings.Contains(string(body), "holdcall console") {
 		t.Error("the console page was not served")
 	}
 	if ct := res.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
@@ -447,7 +447,7 @@ func TestTheConsoleAnswersOnlyToALoopbackName(t *testing.T) {
 		}
 	}
 
-	for _, host := range []string{"attacker.example:7717", "nim.internal", "127.0.0.1.attacker.example:7717", "10.0.0.5:7717"} {
+	for _, host := range []string{"attacker.example:7717", "holdcall.internal", "127.0.0.1.attacker.example:7717", "10.0.0.5:7717"} {
 		for _, path := range []string{"/", "/api/snapshot", "/api/events", "/api/sessions/s1", "/api/policy", "/api/explain?tool=rm", "/api/pending"} {
 			req, _ := http.NewRequest(http.MethodGet, srv.URL+path, nil)
 			req.Host = host
@@ -631,7 +631,7 @@ func TestExplainNamesTheDecidingRule(t *testing.T) {
 }
 
 // Held calls are read from the daemon and shown with their real arguments,
-// as nim approve prints them; when nothing can ask the daemon the page is
+// as holdcall approve prints them; when nothing can ask the daemon the page is
 // told so, never an empty list that looks like "nothing is held".
 func TestPendingSaysWhetherTheDaemonCouldBeAsked(t *testing.T) {
 	srv, _ := serve(t, nil)
@@ -650,7 +650,7 @@ func TestPendingSaysWhetherTheDaemonCouldBeAsked(t *testing.T) {
 }
 
 func TestPendingShowsWhatTheDaemonHolds(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "nim.db")
+	path := filepath.Join(t.TempDir(), "holdcall.db")
 	w, err := journal.Open(path, "test-machine")
 	if err != nil {
 		t.Fatal(err)

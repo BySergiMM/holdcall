@@ -4,19 +4,19 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"github.com/BySergiMM/nim/engine/internal/config"
+	"github.com/BySergiMM/holdcall/engine/internal/config"
 	"log"
 	"net"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/BySergiMM/nim/engine/internal/journal"
-	"github.com/BySergiMM/nim/engine/internal/mcp"
+	"github.com/BySergiMM/holdcall/engine/internal/journal"
+	"github.com/BySergiMM/holdcall/engine/internal/mcp"
 )
 
 // M6, human approval: a rule whose effect is ask holds a call in memory
-// rather than deciding it, and a human -- through nim approve/nim reject --
+// rather than deciding it, and a human -- through holdcall approve/holdcall reject --
 // or the approval timer settles it. docs/decisions/0005-human-approval.md is
 // the design; these are its regression tests.
 
@@ -39,7 +39,7 @@ func TestTheDaemonAnswersPendingAndJournalsNothingUntilAHumanDecides(t *testing.
 		t.Fatalf("decided %q, want %q", d.Decision, DecisionPending)
 	}
 	if d.Hold == "" {
-		t.Error("a pending decision named no hold id for nim approve to list it under")
+		t.Error("a pending decision named no hold id for holdcall approve to list it under")
 	}
 
 	send(t, conn, Event{Kind: KindCallArguments, SessionID: "s1", Seq: 1, Arguments: json.RawMessage(`{"to":"ceo@example.com"}`)})
@@ -56,7 +56,7 @@ func TestTheDaemonAnswersPendingAndJournalsNothingUntilAHumanDecides(t *testing.
 		t.Errorf("%d call.request entries journaled before a human decided", n)
 	}
 
-	// A human approves it, as nim approve <id> would, over its own connection.
+	// A human approves it, as holdcall approve <id> would, over its own connection.
 	admin, err := net.Dial("unix", cfg.Daemon.Socket)
 	if err != nil {
 		t.Fatal(err)
@@ -201,7 +201,7 @@ func TestRejectingACallWritesRejectedBeforeTellingTheRelay(t *testing.T) {
 
 // The journal never holds a call that was neither approved nor rejected:
 // nobody deciding within approval_timeout rejects it just as an explicit
-// nim reject would.
+// holdcall reject would.
 func TestAnApprovalTimeoutRejectsAndJournalsTheCall(t *testing.T) {
 	cfg, dbPath := startWithApprovalTimeout(t, 150*time.Millisecond)
 	askRule(t, cfg, "send_email", "", "")
@@ -300,7 +300,7 @@ func TestAConnectionThatDropsWhilePendingRejectsWhatItLeftPending(t *testing.T) 
 	}
 }
 
-// The whole point of holding the call rather than digesting it: nim approve
+// The whole point of holding the call rather than digesting it: holdcall approve
 // shows the real arguments. Checked against what approval.list actually
 // returns, not against what the daemon merely accepted.
 func TestApprovalListShowsTheRealArguments(t *testing.T) {

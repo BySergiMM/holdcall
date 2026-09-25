@@ -8,24 +8,24 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/BySergiMM/nim/engine/internal/daemon"
+	"github.com/BySergiMM/holdcall/engine/internal/daemon"
 )
 
-// EntryStatus classifies one mcpServers entry against what nim init does to
+// EntryStatus classifies one mcpServers entry against what holdcall init does to
 // it.
 type EntryStatus string
 
 const (
-	StatusWrapped      EntryStatus = "wrapped"      // a stdio entry now routed through nim
-	StatusAlreadyNim   EntryStatus = "already"      // already through this running nim, unchanged
-	StatusRepointed    EntryStatus = "repointed"    // was through a different nim path; repointed
-	StatusStalePath    EntryStatus = "stale_path"   // through a different nim path; left alone (no --repoint)
+	StatusWrapped      EntryStatus = "wrapped"      // a stdio entry now routed through holdcall
+	StatusAlreadyNim   EntryStatus = "already"      // already through this running holdcall, unchanged
+	StatusRepointed    EntryStatus = "repointed"    // was through a different holdcall path; repointed
+	StatusStalePath    EntryStatus = "stale_path"   // through a different holdcall path; left alone (no --repoint)
 	StatusHTTPSkipped  EntryStatus = "http"         // has "url"; left alone
 	StatusInvalidName  EntryStatus = "invalid_name" // the server key fails the connector-name rule
 	StatusUnrecognized EntryStatus = "unrecognized" // neither "command" nor "url"
 )
 
-// EntryPlan is one mcpServers entry, before and after whatever nim init
+// EntryPlan is one mcpServers entry, before and after whatever holdcall init
 // would do to it. Before and After are equal, pretty-printed JSON when the
 // entry is left alone.
 type EntryPlan struct {
@@ -45,9 +45,9 @@ type Group struct {
 }
 
 // Result is what BuildResult found in one file, and what the file would look
-// like after every change nim init would make.
+// like after every change holdcall init would make.
 //
-// Rewritten is computed unconditionally, whether or not nim init was asked
+// Rewritten is computed unconditionally, whether or not holdcall init was asked
 // to --write: a dry run and a real run take the exact same path through this
 // package, so they can never disagree about what would happen.
 type Result struct {
@@ -63,7 +63,7 @@ type Result struct {
 
 // BuildResult reads file (if it exists), classifies every mcpServers entry
 // it finds across every group the file's Kind says to look in, and computes
-// the file's content after nim init's changes.
+// the file's content after holdcall init's changes.
 func BuildResult(file File, nimPath, clientLabel string, repoint bool) (Result, error) {
 	res := Result{File: file}
 
@@ -107,7 +107,7 @@ func BuildResult(file File, nimPath, clientLabel string, repoint bool) (Result, 
 			// A malformed or unexpected "projects" value is left exactly as
 			// it was read (top.values["projects"] is untouched): this file
 			// may simply not be Claude Code's, and guessing at its shape
-			// would risk corrupting something nim init was never meant to
+			// would risk corrupting something holdcall init was never meant to
 			// touch.
 		}
 	}
@@ -227,11 +227,11 @@ func rewriteEntry(key string, raw json.RawMessage, nimPath, clientLabel string, 
 
 	if isNimCommand(command) && len(args) > 0 && args[0] == "serve" {
 		if pathsEquivalent(command, nimPath) {
-			return unchanged(StatusAlreadyNim, "already through Nim")
+			return unchanged(StatusAlreadyNim, "already through Holdcall")
 		}
 		if !repoint {
 			return unchanged(StatusStalePath, fmt.Sprintf(
-				"routed through a nim binary at a different path (%s); re-run with --repoint to fix", command))
+				"routed through a holdcall binary at a different path (%s); re-run with --repoint to fix", command))
 		}
 		entry = entry.set("command", rawString(nimPath))
 		newRaw, err := entry.marshalIndent()
@@ -262,19 +262,19 @@ func rewriteEntry(key string, raw json.RawMessage, nimPath, clientLabel string, 
 	}, true, nil
 }
 
-// isNimCommand reports whether command names a nim binary, by its base name
+// isNimCommand reports whether command names a holdcall binary, by its base name
 // alone -- the same shallow check idempotence has to make, since a config
 // file only ever records a path, not which binary is "really" running.
 func isNimCommand(command string) bool {
 	base := strings.TrimSuffix(filepath.Base(command), ".exe")
-	return base == "nim"
+	return base == "holdcall"
 }
 
 // pathsEquivalent compares two paths the way this package needs to: after
 // cleaning, not after resolving symlinks. nimPath is always the resolved,
-// absolute path of the running binary (see resolveNimPath in cmd/nim), but a
+// absolute path of the running binary (see resolveNimPath in cmd/holdcall), but a
 // command already sitting in a config file may not be, and re-resolving a
-// path nim init did not write itself risks failing on a file that no longer
+// path holdcall init did not write itself risks failing on a file that no longer
 // exists.
 func pathsEquivalent(a, b string) bool {
 	return filepath.Clean(a) == filepath.Clean(b)
@@ -282,7 +282,7 @@ func pathsEquivalent(a, b string) bool {
 
 // preview renders an entry for the before/after a dry run prints, with every
 // env value hidden. An env block is where a client config keeps its API
-// tokens -- the reason nim init tells the operator to leave it exactly as it
+// tokens -- the reason holdcall init tells the operator to leave it exactly as it
 // is -- and a diff that printed it put real secrets into terminal scrollback
 // and whatever a run was piped into. Found by review. The keys stay, so the
 // operator can see the block survives the rewrite untouched.

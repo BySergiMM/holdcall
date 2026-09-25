@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/BySergiMM/nim/engine/internal/config"
-	"github.com/BySergiMM/nim/engine/internal/journal"
+	"github.com/BySergiMM/holdcall/engine/internal/config"
+	"github.com/BySergiMM/holdcall/engine/internal/journal"
 )
 
 // start brings up a daemon on a private socket and returns a dialler for it.
@@ -20,7 +20,7 @@ func start(t testing.TB) (cfg config.Config, dbPath string) {
 	home := t.TempDir()
 	// The socket lives outside home on purpose: an AF_UNIX path is capped near
 	// 104 bytes and a temp directory is already most of that.
-	sock := filepath.Join(os.TempDir(), fmt.Sprintf("nim-test-%d.sock", time.Now().UnixNano()%1e9))
+	sock := filepath.Join(os.TempDir(), fmt.Sprintf("holdcall-test-%d.sock", time.Now().UnixNano()%1e9))
 	t.Cleanup(func() { os.Remove(sock) })
 
 	cfg = config.Config{
@@ -57,7 +57,7 @@ func startWithApprovalTimeout(t testing.TB, timeout time.Duration) (cfg config.C
 	t.Helper()
 
 	home := t.TempDir()
-	sock := filepath.Join(os.TempDir(), fmt.Sprintf("nim-test-%d.sock", time.Now().UnixNano()%1e9))
+	sock := filepath.Join(os.TempDir(), fmt.Sprintf("holdcall-test-%d.sock", time.Now().UnixNano()%1e9))
 	t.Cleanup(func() { os.Remove(sock) })
 
 	cfg = config.Config{
@@ -108,7 +108,7 @@ func allow(t testing.TB, cfg config.Config, tool, agent, connector string) {
 	})
 }
 
-// askRule is deny and allow's third counterpart, added for M6: nim policy
+// askRule is deny and allow's third counterpart, added for M6: holdcall policy
 // ask <tool> [--agent] [--connector].
 func askRule(t testing.TB, cfg config.Config, tool, agent, connector string) {
 	t.Helper()

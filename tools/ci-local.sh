@@ -25,7 +25,7 @@
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 GO="${GO:-go}"
-LOG="${CI_LOCAL_LOG:-/tmp/nim-ci-local}"
+LOG="${CI_LOCAL_LOG:-/tmp/holdcall-ci-local}"
 mkdir -p "$LOG"
 
 results=()
@@ -84,7 +84,7 @@ job_dashboard() {
 job_relay_rig() {
   cd "$ROOT" || return 1
   local py="${PYTHON:-python3}"
-  ( cd engine && "$GO" build -o bin/nim ./cmd/nim ) || return 1
+  ( cd engine && "$GO" build -o bin/holdcall ./cmd/holdcall ) || return 1
   if [ ! -x tools/relay-rig/.venv/bin/python ]; then
     "$py" -m venv tools/relay-rig/.venv || return 1
     tools/relay-rig/.venv/bin/pip install -q fastmcp==4.0.3 || return 1

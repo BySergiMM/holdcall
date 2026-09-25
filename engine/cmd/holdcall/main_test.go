@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/BySergiMM/nim/engine/internal/journal"
-	"github.com/BySergiMM/nim/engine/internal/readmodel"
+	"github.com/BySergiMM/holdcall/engine/internal/journal"
+	"github.com/BySergiMM/holdcall/engine/internal/readmodel"
 )
 
 // server is the stand-in downstream every case below binds its connector to.
@@ -21,7 +21,7 @@ func withServer(args ...string) []string {
 	return append(append([]string{}, args...), append([]string{"--"}, server...)...)
 }
 
-// The specified invocation is "nim connector set <target> --env KEY": target
+// The specified invocation is "holdcall connector set <target> --env KEY": target
 // before the flag. The standard flag package stops parsing flags at the
 // first positional argument, which would silently swallow --env as a second
 // positional and leave the env var empty -- caught by hand: the first
@@ -89,7 +89,7 @@ func TestParseConnectorSetArgsRequiresACommand(t *testing.T) {
 }
 
 // Everything after -- belongs to the downstream server, including things
-// that look like Nim's own flags. Without this a server taking --env would
+// that look like Holdcall's own flags. Without this a server taking --env would
 // have its arguments silently stolen by this parser.
 func TestParseConnectorSetArgsTakesEverythingAfterTheSeparatorVerbatim(t *testing.T) {
 	want := []string{"my-server", "--env", "SOMETHING", "--flag=x", "positional"}
@@ -120,7 +120,7 @@ func TestParseConnectorSetArgsRejectsAValueInTheEnvFlag(t *testing.T) {
 
 // runServe used to reject a missing command before the daemon was ever asked.
 // That broke the documented way to run a connector that holds a credential --
-// `nim serve --connector github`, with no `--` at all -- because the command
+// `holdcall serve --connector github`, with no `--` at all -- because the command
 // it should run lives with the connector, and only shim.Run knows whether the
 // daemon supplied one. Caught after the merge, by running the form the README
 // tells people to use.
@@ -147,7 +147,7 @@ func TestServeAcceptsNoCommandSoAConnectorCanSupplyIt(t *testing.T) {
 }
 
 // An agent is identified by one executable file, so the invocation is two
-// positionals rather than nim serve's `--` convention, which would suggest
+// positionals rather than holdcall serve's `--` convention, which would suggest
 // arguments that are never used.
 func TestParseAgentAddArgs(t *testing.T) {
 	abs := func(p string) (string, error) { return "/abs/" + p, nil }
@@ -191,7 +191,7 @@ func TestAgentAddResolvesThePathBeforeSendingIt(t *testing.T) {
 	}
 }
 
-// `nim log --follow` and `nim log --json` both go through formatEvent (or
+// `holdcall log --follow` and `holdcall log --json` both go through formatEvent (or
 // json.Marshal, in the --json case) for whatever readmodel.Stream hands back,
 // so an agent.add entry has to render like any other: the enrolment's name in
 // agent, and now the path the operator enrolled, so an enrolment does not
@@ -212,15 +212,15 @@ func TestFormatEventRendersAnAgentEntry(t *testing.T) {
 	}
 }
 
-// versionShape is the format documented for `nim version`:
+// versionShape is the format documented for `holdcall version`:
 //
-//	nim <version> (<commit>, built <builtAt>, <goos>/<goarch>, <go version>)
+//	holdcall <version> (<commit>, built <builtAt>, <goos>/<goarch>, <go version>)
 //
 // A build made with plain `go build` has no tag, commit or build time to
 // report, so this must hold for the "unknown" defaults just as much as for a
 // release built with -ldflags -- the release workflow is not what this test
 // exercises, only the shape it depends on.
-var versionShape = regexp.MustCompile(`^nim (\S+) \((\S+), built (\S+), (\S+)/(\S+), (go\S+)\)$`)
+var versionShape = regexp.MustCompile(`^holdcall (\S+) \((\S+), built (\S+), (\S+)/(\S+), (go\S+)\)$`)
 
 // A rule.add or rule.remove entry carries a scope (agent, connector) and an
 // effect (tool, decision), no session and no seq -- see journal.ruleEntry --

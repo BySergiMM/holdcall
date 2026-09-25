@@ -84,7 +84,7 @@ func TestParseRecognisesToolCalls(t *testing.T) {
 }
 
 func TestParseTolueratesAnythingElse(t *testing.T) {
-	// Nim only has to understand tools/call. Everything else must survive.
+	// Holdcall only has to understand tools/call. Everything else must survive.
 	//
 	// A JSON-RPC batch used to be listed here as another harmless shape. It is
 	// not harmless: see TestBatchIsAnAnomalyRatherThanNothing.
@@ -118,7 +118,7 @@ func TestBatchIsAnAnomalyRatherThanNothing(t *testing.T) {
 		t.Error("the envelope should be empty: the batch was not unwrapped")
 	}
 
-	// An empty array is still a batch, and still not a shape Nim can account for.
+	// An empty array is still a batch, and still not a shape Holdcall can account for.
 	if _, a := Classify([]byte(`[]`)); a != AnomalyBatch {
 		t.Errorf("empty batch classified as %q", a)
 	}
@@ -132,7 +132,7 @@ func TestMalformedJSONIsAnAnomaly(t *testing.T) {
 	}
 }
 
-// The transport is one message per line. Two values in one frame means Nim and
+// The transport is one message per line. Two values in one frame means Holdcall and
 // the server downstream may not agree on how many messages arrived.
 func TestTwoValuesInOneFrameIsAnAnomaly(t *testing.T) {
 	raw := []byte(`{"jsonrpc":"2.0","id":1,"method":"ping"}{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"x"}}`)
@@ -277,7 +277,7 @@ func sha256Hex(s string) string {
 // typed decoder matches keys case-insensitively, lets the last of several
 // matches win, and carries on past a member of the wrong type, while Python
 // and JavaScript take the last exact key. Every frame below was a tools/call
-// to a server and something else to Nim.
+// to a server and something else to Holdcall.
 func TestAnObjectNamingAKeyTwiceIsRefusedNotGuessed(t *testing.T) {
 	for _, raw := range []string{
 		`{"jsonrpc":"2.0","id":1,"method":5,"method":"tools/call","params":{"name":"rm"}}`,
@@ -298,8 +298,8 @@ func TestAnObjectNamingAKeyTwiceIsRefusedNotGuessed(t *testing.T) {
 	}
 }
 
-// A key that differs only in case is a different key, to Nim exactly as to a
-// server. `"Method":"ping"` beside `"method":"tools/call"` used to make Nim
+// A key that differs only in case is a different key, to Holdcall exactly as to a
+// server. `"Method":"ping"` beside `"method":"tools/call"` used to make Holdcall
 // read ping.
 func TestKeysAreMatchedByExactBytes(t *testing.T) {
 	env, anomaly := Classify([]byte(
@@ -322,7 +322,7 @@ func TestKeysAreMatchedByExactBytes(t *testing.T) {
 	}
 }
 
-// A tools/call Nim cannot read as one tool name is refused, not decided on a
+// A tools/call Holdcall cannot read as one tool name is refused, not decided on a
 // guess. The daemon used to see "" for every one of these.
 func TestACallWithoutOneReadableNameIsRefused(t *testing.T) {
 	cases := []struct {
@@ -347,7 +347,7 @@ func TestACallWithoutOneReadableNameIsRefused(t *testing.T) {
 		}
 	}
 
-	// Keys inside arguments are the tool's business, not Nim's: they are
+	// Keys inside arguments are the tool's business, not Holdcall's: they are
 	// digested as bytes and never interpreted, so a repeat there is not one.
 	env, _ := Classify([]byte(`{"id":1,"method":"tools/call","params":{"name":"rm","arguments":{"a":1,"a":2}}}`))
 	if _, err := env.Call(); err != nil {
@@ -356,7 +356,7 @@ func TestACallWithoutOneReadableNameIsRefused(t *testing.T) {
 }
 
 // A method that is not a string names nothing a server can dispatch; the frame
-// is relayed for the server to reject, as it would be with no Nim in the way.
+// is relayed for the server to reject, as it would be with no Holdcall in the way.
 func TestANonStringMethodIsNotACall(t *testing.T) {
 	env, anomaly := Classify([]byte(`{"jsonrpc":"2.0","id":1,"method":["tools/call"],"params":{"name":"rm"}}`))
 	if anomaly != AnomalyNone || env.IsToolCall() {

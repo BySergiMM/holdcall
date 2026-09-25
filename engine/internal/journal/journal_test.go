@@ -13,7 +13,7 @@ import (
 
 func openTemp(t *testing.T) (*Journal, string) {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "nim.db")
+	path := filepath.Join(t.TempDir(), "holdcall.db")
 	j, err := Open(path, "test-machine")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -265,8 +265,8 @@ func TestVerifyRejectsAnUnknownSchemaVersion(t *testing.T) {
 // Truncating the tail leaves a chain that is internally consistent, and nothing
 // in the journal can tell. Only a head recorded beforehand catches it. If this
 // ever starts failing at the first assertion, the chain has gained a property
-// it does not have, and the claims in docs/journal-format.md, `nim status` and
-// `nim verify` all need revisiting.
+// it does not have, and the claims in docs/journal-format.md, `holdcall status` and
+// `holdcall verify` all need revisiting.
 func TestTruncationIsInvisibleWithoutAnExpectedHead(t *testing.T) {
 	j, path := openTemp(t)
 	for i := 1; i <= 5; i++ {
@@ -323,7 +323,7 @@ func TestExpectHeadAcceptsTheRealHead(t *testing.T) {
 
 // A daemon that restarts must continue the chain, not begin a second one.
 func TestChainContinuesAcrossReopen(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "nim.db")
+	path := filepath.Join(t.TempDir(), "holdcall.db")
 
 	first, err := Open(path, "test-machine")
 	if err != nil {
@@ -394,7 +394,7 @@ func TestConcurrentAppendsProduceOneChain(t *testing.T) {
 // updated in place would assert an integrity they never had. They are moved
 // aside instead of deleted.
 func TestLegacyTablesAreRetiredNotDestroyed(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "nim.db")
+	path := filepath.Join(t.TempDir(), "holdcall.db")
 
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -582,7 +582,7 @@ func TestAnomaliesAreCounted(t *testing.T) {
 // not evidence that the journal is wrong, and reporting it as tampering would
 // accuse someone on the strength of a missing file.
 func TestAMissingSeedIsNotTampering(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "nim.db")
+	path := filepath.Join(t.TempDir(), "holdcall.db")
 
 	seeded, err := Open(path, "the-machine")
 	if err != nil {
@@ -655,7 +655,7 @@ func TestAMissingSeedIsNotTampering(t *testing.T) {
 // A chain cannot be started without a seed: entry 1 would be linked to a
 // genesis that was invented on the spot.
 func TestAnEmptyJournalRefusesToStartWithoutASeed(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "nim.db")
+	path := filepath.Join(t.TempDir(), "holdcall.db")
 	j, err := Open(path, "")
 	if err != nil {
 		t.Fatal(err)
@@ -692,7 +692,7 @@ func TestAnEmptyJournalIsReportedAsEmpty(t *testing.T) {
 		t.Errorf("unexpected report for an empty journal: %+v", rep)
 	}
 	// Empty is not a failure. The CLI keys on Problem, so leaving one here
-	// would make `nim verify` announce that something went wrong on a journal
+	// would make `holdcall verify` announce that something went wrong on a journal
 	// where nothing has happened yet.
 	if rep.Problem != "" {
 		t.Errorf("an empty journal reported a problem: %q", rep.Problem)
@@ -828,7 +828,7 @@ func TestLogOrderFollowsTheChainNotTheClock(t *testing.T) {
 // existence either: Open creates and migrates as a side effect of being called,
 // which is the wrong thing for a console to do to a machine it is inspecting.
 func TestOpenReadOnlyCannotWrite(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "nim.db")
+	path := filepath.Join(t.TempDir(), "holdcall.db")
 
 	writer, err := Open(path, "the-machine")
 	if err != nil {
@@ -880,7 +880,7 @@ func TestOpenReadOnlyCannotWrite(t *testing.T) {
 
 // Opening a journal that does not exist must fail rather than create one.
 func TestOpenReadOnlyRefusesAJournalThatIsNotThere(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "nim.db")
+	path := filepath.Join(t.TempDir(), "holdcall.db")
 
 	if _, err := OpenReadOnly(path, "m"); err == nil {
 		t.Fatal("OpenReadOnly created or accepted a journal that does not exist")
@@ -1010,7 +1010,7 @@ func contains(haystack, needle string) bool {
 // second daemon racing to start does the same before one of them loses the
 // socket -- so this is exactly the window the startup lock exists around.
 func TestConcurrentOpensDoNotCollideOnViews(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "nim.db")
+	path := filepath.Join(t.TempDir(), "holdcall.db")
 
 	// Seed the file so every opener below races on the same existing database
 	// rather than on creating it.

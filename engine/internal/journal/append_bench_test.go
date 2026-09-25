@@ -14,7 +14,7 @@ import (
 //	go test -bench BenchmarkAppend -benchtime 2000x ./internal/journal/
 func benchJournal(b *testing.B) *Journal {
 	b.Helper()
-	j, err := Open(filepath.Join(b.TempDir(), "nim.db"), "bench-machine")
+	j, err := Open(filepath.Join(b.TempDir(), "holdcall.db"), "bench-machine")
 	if err != nil {
 		b.Fatalf("Open: %v", err)
 	}
@@ -94,7 +94,7 @@ func BenchmarkCanonicalEncode(b *testing.B) {
 	}
 }
 
-// BenchmarkVerify walks and rechecks a whole chain. This is what `nim verify`
+// BenchmarkVerify walks and rechecks a whole chain. This is what `holdcall verify`
 // costs, and it grows with the journal rather than staying flat, so it is the
 // number that decides whether verification stays practical as a record ages.
 func BenchmarkVerify(b *testing.B) {

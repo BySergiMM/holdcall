@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/BySergiMM/nim/engine/internal/peer"
+	"github.com/BySergiMM/holdcall/engine/internal/peer"
 )
 
 // End to end, with the real binary: a real daemon, a real relay, a real child
@@ -25,7 +25,7 @@ import (
 
 // connectorSource is a downstream MCP server small enough to compile in a test.
 // It writes down every frame it is handed, so "the connector was not reached" is
-// checked against what the connector saw rather than against Nim's own account.
+// checked against what the connector saw rather than against Holdcall's own account.
 const connectorSource = `package main
 
 import (
@@ -64,7 +64,7 @@ func main() {
 `
 
 type stack struct {
-	nim       string // the built binary
+	holdcall  string // the built binary
 	connector string // the built downstream server
 	home      string
 	log       string // the connector's record of what it received
@@ -76,7 +76,7 @@ type stack struct {
 // It used to take a deny list to write into config.toml. Policy no longer
 // lives there -- a config.toml carrying it is refused, see
 // TestAStaleDenyListInConfigIsRefused -- so a test that wants a rule asks the
-// running daemon for one with `nim policy deny`, as an operator would.
+// running daemon for one with `holdcall policy deny`, as an operator would.
 func build(t *testing.T) *stack {
 	t.Helper()
 	if _, err := exec.LookPath("go"); err != nil {
@@ -85,7 +85,7 @@ func build(t *testing.T) *stack {
 
 	dir := t.TempDir()
 	s := &stack{
-		nim:       filepath.Join(dir, "nim"),
+		holdcall:  filepath.Join(dir, "holdcall"),
 		connector: filepath.Join(dir, "connector"),
 		home:      filepath.Join(dir, "home"),
 		log:       filepath.Join(dir, "received.log"),
@@ -96,7 +96,7 @@ func build(t *testing.T) *stack {
 		t.Fatal(err)
 	}
 	for _, c := range [][]string{
-		{"build", "-o", s.nim, "."},
+		{"build", "-o", s.holdcall, "."},
 		{"build", "-o", s.connector, src},
 	} {
 		cmd := exec.Command("go", c...)
@@ -112,14 +112,14 @@ func build(t *testing.T) *stack {
 		t.Fatal(err)
 	}
 
-	s.env = append(os.Environ(), "NIM_HOME="+s.home, "CONNECTOR_LOG="+s.log)
+	s.env = append(os.Environ(), "HOLDCALL_HOME="+s.home, "CONNECTOR_LOG="+s.log)
 	return s
 }
 
 // daemon starts one and returns a function that kills it.
 func (s *stack) daemon(t *testing.T) func() {
 	t.Helper()
-	cmd := exec.Command(s.nim, "daemon")
+	cmd := exec.Command(s.holdcall, "daemon")
 	cmd.Env = s.env
 	cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
 	if err := cmd.Start(); err != nil {
@@ -173,7 +173,7 @@ func (b *syncBuffer) String() string {
 // daemon-side diagnosis, which daemon() 's callers have never needed before.
 func (s *stack) daemonCapturing(t *testing.T) (stop func(), stderr *syncBuffer) {
 	t.Helper()
-	cmd := exec.Command(s.nim, "daemon")
+	cmd := exec.Command(s.holdcall, "daemon")
 	cmd.Env = s.env
 	buf := &syncBuffer{}
 	cmd.Stdout, cmd.Stderr = io.Discard, buf
@@ -201,7 +201,7 @@ func (s *stack) daemonCapturing(t *testing.T) (stop func(), stderr *syncBuffer) 
 	return stop, buf
 }
 
-// socketFromStatus reads the socket path off `nim status`'s own output --
+// socketFromStatus reads the socket path off `holdcall status`'s own output --
 // the daemon's to choose, so a test that needs it asks rather than guesses.
 func socketFromStatus(t *testing.T, s *stack) string {
 	t.Helper()
@@ -217,13 +217,13 @@ func socketFromStatus(t *testing.T, s *stack) string {
 
 func (s *stack) run(t *testing.T, args ...string) (string, error) {
 	t.Helper()
-	cmd := exec.Command(s.nim, args...)
+	cmd := exec.Command(s.holdcall, args...)
 	cmd.Env = s.env
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
 
-// relay is a running `nim serve` with its stdio in this test's hands.
+// relay is a running `holdcall serve` with its stdio in this test's hands.
 type relay struct {
 	cmd    *exec.Cmd
 	in     io.WriteCloser
@@ -234,7 +234,7 @@ type relay struct {
 
 func (s *stack) serve(t *testing.T) *relay {
 	t.Helper()
-	cmd := exec.Command(s.nim, "serve", "--connector", "rig", "--client", "e2e", "--", s.connector)
+	cmd := exec.Command(s.holdcall, "serve", "--connector", "rig", "--client", "e2e", "--", s.connector)
 	cmd.Env = s.env
 
 	in, err := cmd.StdinPipe()
@@ -363,7 +363,7 @@ func (s *stack) deny(t *testing.T, args ...string) {
 	t.Helper()
 	out, err := s.run(t, append([]string{"policy", "deny"}, args...)...)
 	if err != nil || !strings.Contains(out, "recorded in the journal") {
-		t.Fatalf("nim policy deny %v: %v\n%s", args, err, out)
+		t.Fatalf("holdcall policy deny %v: %v\n%s", args, err, out)
 	}
 }
 
@@ -372,7 +372,7 @@ func (s *stack) allow(t *testing.T, args ...string) {
 	t.Helper()
 	out, err := s.run(t, append([]string{"policy", "allow"}, args...)...)
 	if err != nil || !strings.Contains(out, "recorded in the journal") {
-		t.Fatalf("nim policy allow %v: %v\n%s", args, err, out)
+		t.Fatalf("holdcall policy allow %v: %v\n%s", args, err, out)
 	}
 }
 
@@ -381,17 +381,17 @@ func (s *stack) askRule(t *testing.T, args ...string) {
 	t.Helper()
 	out, err := s.run(t, append([]string{"policy", "ask"}, args...)...)
 	if err != nil || !strings.Contains(out, "recorded in the journal") {
-		t.Fatalf("nim policy ask %v: %v\n%s", args, err, out)
+		t.Fatalf("holdcall policy ask %v: %v\n%s", args, err, out)
 	}
 }
 
 // policyDefault sets deny or allow across every tool through the real CLI:
-// nim policy default deny|allow [--agent] [--connector].
+// holdcall policy default deny|allow [--agent] [--connector].
 func (s *stack) policyDefault(t *testing.T, effect string, args ...string) {
 	t.Helper()
 	out, err := s.run(t, append([]string{"policy", "default", effect}, args...)...)
 	if err != nil || !strings.Contains(out, "recorded in the journal") {
-		t.Fatalf("nim policy default %s %v: %v\n%s", effect, args, err, out)
+		t.Fatalf("holdcall policy default %s %v: %v\n%s", effect, args, err, out)
 	}
 }
 
@@ -438,20 +438,20 @@ func TestRealRelayForwardsOneCallAndRefusesTheOther(t *testing.T) {
 	// And the record agrees with what happened.
 	out, err := s.run(t, "log")
 	if err != nil {
-		t.Fatalf("nim log: %v\n%s", err, out)
+		t.Fatalf("holdcall log: %v\n%s", err, out)
 	}
 	if !strings.Contains(out, "allow") || !strings.Contains(out, "deny") {
-		t.Errorf("nim log does not show both decisions:\n%s", out)
+		t.Errorf("holdcall log does not show both decisions:\n%s", out)
 	}
 	if !strings.Contains(out, "denied") {
-		t.Errorf("nim log does not report the refused call as denied:\n%s", out)
+		t.Errorf("holdcall log does not report the refused call as denied:\n%s", out)
 	}
 	if strings.Contains(out, "(no response)") {
-		t.Errorf("nim log still reports a refusal as an unanswered call:\n%s", out)
+		t.Errorf("holdcall log still reports a refusal as an unanswered call:\n%s", out)
 	}
 
 	if out, err := s.run(t, "verify"); err != nil || !strings.Contains(out, "self-consistent") {
-		t.Errorf("nim verify: %v\n%s", err, out)
+		t.Errorf("holdcall verify: %v\n%s", err, out)
 	}
 	if out, _ := s.run(t, "status"); strings.Contains(out, "gaps           1") {
 		t.Errorf("a refused call was reported as a gap:\n%s", out)
@@ -464,9 +464,9 @@ func TestRealRelayWithNoDaemonReachesNothing(t *testing.T) {
 	s := build(t)
 	// No daemon started, and none may start: the relay spawns one when it can,
 	// so the socket is pointed somewhere it cannot bind.
-	s.env = append(s.env, "TMPDIR=/nonexistent-for-nim")
+	s.env = append(s.env, "TMPDIR=/nonexistent-for-holdcall")
 	if err := os.WriteFile(filepath.Join(s.home, "config.toml"),
-		[]byte("[daemon]\nsocket = \"/nonexistent-for-nim/nim.sock\"\n"), 0o600); err != nil {
+		[]byte("[daemon]\nsocket = \"/nonexistent-for-holdcall/holdcall.sock\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -512,7 +512,7 @@ func TestRealRelayStillPassesEverythingElse(t *testing.T) {
 	// A notification expects nothing back, and must not be held up either.
 	r.send(t, `{"jsonrpc":"2.0","method":"notifications/initialized"}`)
 	if !r.silent(300 * time.Millisecond) {
-		t.Error("Nim answered a notification")
+		t.Error("Holdcall answered a notification")
 	}
 	if !strings.Contains(s.received(t), "notifications/initialized") {
 		t.Error("a notification did not reach the connector")
@@ -520,7 +520,7 @@ func TestRealRelayStillPassesEverythingElse(t *testing.T) {
 }
 
 // When the relay dies, a connector that reads its stdin dies with it. The kernel
-// closes the pipe; nothing in Nim has to run, which is what makes it hold when
+// closes the pipe; nothing in Holdcall has to run, which is what makes it hold when
 // the relay is killed outright.
 //
 // Measured on darwin/arm64 only. The same is expected on Linux and Windows and
@@ -573,7 +573,7 @@ func main() {
 // test's choosing rather than the test binary.
 func (s *stack) serveVia(t *testing.T, launcher string) *relay {
 	t.Helper()
-	cmd := exec.Command(launcher, s.nim, "serve", "--connector", "rig", "--client", "e2e", "--", s.connector)
+	cmd := exec.Command(launcher, s.holdcall, "serve", "--connector", "rig", "--client", "e2e", "--", s.connector)
 	cmd.Env = s.env
 
 	in, err := cmd.StdinPipe()
@@ -627,7 +627,7 @@ func TestTwoRealAgentsAgainstOneConnectorReceiveDifferentVerdicts(t *testing.T) 
 			"deriveAgent always returns \"\" there, so this property cannot be demonstrated")
 	}
 	s := build(t)
-	dir := filepath.Dir(s.nim)
+	dir := filepath.Dir(s.holdcall)
 	src := filepath.Join(dir, "launcher.go")
 	if err := os.WriteFile(src, []byte(launcherSource), 0o600); err != nil {
 		t.Fatal(err)
@@ -669,7 +669,7 @@ func TestTwoRealAgentsAgainstOneConnectorReceiveDifferentVerdicts(t *testing.T) 
 	// (both said --client e2e) but from what the daemon derived.
 	out, err := s.run(t, "log", "--json")
 	if err != nil {
-		t.Fatalf("nim log --json: %v\n%s", err, out)
+		t.Fatalf("holdcall log --json: %v\n%s", err, out)
 	}
 	agents := map[string]bool{}
 	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
@@ -685,7 +685,7 @@ func TestTwoRealAgentsAgainstOneConnectorReceiveDifferentVerdicts(t *testing.T) 
 		t.Errorf("the journal does not distinguish the two agents; saw %v", agents)
 	}
 	if out, _ := s.run(t, "policy", "list"); !strings.Contains(out, "alpha") {
-		t.Errorf("nim policy list does not show the rule:\n%s", out)
+		t.Errorf("holdcall policy list does not show the rule:\n%s", out)
 	}
 }
 
@@ -699,7 +699,7 @@ func TestTwoRealAgentsAgainstOneConnectorReceiveDifferentVerdicts(t *testing.T) 
 // unprivileged the way M4's deny-only model left it.
 func TestADefaultDenyClosesEverythingAndAnAgentScopedAllowReopensOneToolForOneAgent(t *testing.T) {
 	s := build(t)
-	dir := filepath.Dir(s.nim)
+	dir := filepath.Dir(s.holdcall)
 	src := filepath.Join(dir, "launcher.go")
 	if err := os.WriteFile(src, []byte(launcherSource), 0o600); err != nil {
 		t.Fatal(err)
@@ -738,29 +738,29 @@ func TestADefaultDenyClosesEverythingAndAnAgentScopedAllowReopensOneToolForOneAg
 
 	if out, err := s.run(t, "policy", "explain", "read_file", "--agent", "alpha"); err != nil ||
 		!strings.Contains(out, "ALLOW") {
-		t.Errorf("nim policy explain read_file --agent alpha: %v\n%s", err, out)
+		t.Errorf("holdcall policy explain read_file --agent alpha: %v\n%s", err, out)
 	}
 	if out, err := s.run(t, "policy", "explain", "read_file"); err != nil || !strings.Contains(out, "DENY") {
-		t.Errorf("nim policy explain read_file (no agent): %v\n%s", err, out)
+		t.Errorf("holdcall policy explain read_file (no agent): %v\n%s", err, out)
 	}
 
 	if out, _ := s.run(t, "policy", "list"); !strings.Contains(out, "alpha") || !strings.Contains(out, "allow") {
-		t.Errorf("nim policy list does not show the allow rule:\n%s", out)
+		t.Errorf("holdcall policy list does not show the allow rule:\n%s", out)
 	}
 
 	// Removing the default leaves the M4 baseline for beta: still nothing
 	// grants it read_file, but nothing else refuses it either.
 	if out, err := s.run(t, "policy", "remove", "--default"); err != nil || !strings.Contains(out, "recorded in the journal") {
-		t.Fatalf("nim policy remove --default: %v\n%s", err, out)
+		t.Fatalf("holdcall policy remove --default: %v\n%s", err, out)
 	}
 	if !verdict(beta) {
 		t.Error("beta was still refused after the default was removed; the M4 baseline is allow")
 	}
 }
 
-// idFromApproveOutput pulls the id nim approve printed for one call, from
+// idFromApproveOutput pulls the id holdcall approve printed for one call, from
 // its own "id  <value>" line -- the same text an operator reads to type
-// nim approve/reject <id>.
+// holdcall approve/reject <id>.
 func idFromApproveOutput(t *testing.T, out string) string {
 	t.Helper()
 	for _, line := range strings.Split(out, "\n") {
@@ -769,11 +769,11 @@ func idFromApproveOutput(t *testing.T, out string) string {
 			return fields[1]
 		}
 	}
-	t.Fatalf("could not find an id line in nim approve's output:\n%s", out)
+	t.Fatalf("could not find an id line in holdcall approve's output:\n%s", out)
 	return ""
 }
 
-// waitForApproveToList polls nim approve until its output contains marker --
+// waitForApproveToList polls holdcall approve until its output contains marker --
 // the daemon receives call.arguments a moment after it answers pending, and
 // this is a separate process racing that, not something the relay can be
 // asked to wait for.
@@ -788,13 +788,13 @@ func (s *stack) waitForApproveToList(t *testing.T, marker string) string {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	t.Fatalf("nim approve never listed a call carrying %q:\n%s", marker, out)
+	t.Fatalf("holdcall approve never listed a call carrying %q:\n%s", marker, out)
 	return ""
 }
 
 // M6, human approval, run end to end the way every milestone since M2 has
 // been: the real binary, a real relay, a real connector. An ask rule holds
-// a call; nim approve from the CLI lists it with its real arguments -- not
+// a call; holdcall approve from the CLI lists it with its real arguments -- not
 // a summary, not anything the model that asked for the call could have
 // written -- and approving it is what lets the connector's own answer reach
 // the client. A second call under the same rule is rejected, and the client
@@ -811,15 +811,15 @@ func TestRealApprovalHoldsACallForAHumanWhoDecidesItThroughTheCLI(t *testing.T) 
 
 	out := s.waitForApproveToList(t, "ceo@example.com")
 	if !strings.Contains(out, "quarterly numbers") {
-		t.Fatalf("nim approve did not show the full real arguments:\n%s", out)
+		t.Fatalf("holdcall approve did not show the full real arguments:\n%s", out)
 	}
 	if !strings.Contains(out, "send_email") {
-		t.Fatalf("nim approve did not name the tool:\n%s", out)
+		t.Fatalf("holdcall approve did not name the tool:\n%s", out)
 	}
 	id := idFromApproveOutput(t, out)
 
 	if out, err := s.run(t, "approve", id); err != nil || !strings.Contains(out, "recorded in the journal") {
-		t.Fatalf("nim approve %s: %v\n%s", id, err, out)
+		t.Fatalf("holdcall approve %s: %v\n%s", id, err, out)
 	}
 
 	gotID, isError, text := decodeLine(t, r.next(t))
@@ -838,7 +838,7 @@ func TestRealApprovalHoldsACallForAHumanWhoDecidesItThroughTheCLI(t *testing.T) 
 	out = s.waitForApproveToList(t, "someone-else@example.com")
 	id = idFromApproveOutput(t, out)
 	if out, err := s.run(t, "reject", id, "--reason", "not needed"); err != nil || !strings.Contains(out, "recorded in the journal") {
-		t.Fatalf("nim reject %s: %v\n%s", id, err, out)
+		t.Fatalf("holdcall reject %s: %v\n%s", id, err, out)
 	}
 
 	_, isError, text = decodeLine(t, r.next(t))
@@ -857,16 +857,16 @@ func TestRealApprovalHoldsACallForAHumanWhoDecidesItThroughTheCLI(t *testing.T) 
 	// And the record agrees with what a human did.
 	logOut, err := s.run(t, "log")
 	if err != nil {
-		t.Fatalf("nim log: %v\n%s", err, logOut)
+		t.Fatalf("holdcall log: %v\n%s", err, logOut)
 	}
 	if !strings.Contains(logOut, "approved") || !strings.Contains(logOut, "rejected") {
-		t.Errorf("nim log does not show both human decisions:\n%s", logOut)
+		t.Errorf("holdcall log does not show both human decisions:\n%s", logOut)
 	}
 	if strings.Contains(logOut, "ceo@example.com") || strings.Contains(logOut, "someone-else@example.com") {
-		t.Errorf("nim log printed a call's real arguments:\n%s", logOut)
+		t.Errorf("holdcall log printed a call's real arguments:\n%s", logOut)
 	}
 	if out, err := s.run(t, "verify"); err != nil || !strings.Contains(out, "self-consistent") {
-		t.Errorf("nim verify: %v\n%s", err, out)
+		t.Errorf("holdcall verify: %v\n%s", err, out)
 	}
 }
 
@@ -881,10 +881,10 @@ func TestAStaleDenyListInConfigIsRefused(t *testing.T) {
 	for _, args := range [][]string{{"status"}, {"daemon"}, {"policy", "list"}} {
 		out, err := s.run(t, args...)
 		if err == nil {
-			t.Errorf("nim %v ran with a stale [policy] section:\n%s", args, out)
+			t.Errorf("holdcall %v ran with a stale [policy] section:\n%s", args, out)
 		}
-		if !strings.Contains(out, "nim policy deny") {
-			t.Errorf("nim %v did not say where policy went:\n%s", args, out)
+		if !strings.Contains(out, "holdcall policy deny") {
+			t.Errorf("holdcall %v did not say where policy went:\n%s", args, out)
 		}
 	}
 }
@@ -920,17 +920,17 @@ func TestAConnectorIgnoringStdinIsStoppedWithTheRelay(t *testing.T) {
 			"does not exercise")
 	}
 	s := build(t)
-	src := filepath.Join(filepath.Dir(s.nim), "stubborn.go")
+	src := filepath.Join(filepath.Dir(s.holdcall), "stubborn.go")
 	if err := os.WriteFile(src, []byte(stubbornSource), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	stubborn := filepath.Join(filepath.Dir(s.nim), "stubborn")
+	stubborn := filepath.Join(filepath.Dir(s.holdcall), "stubborn")
 	if out, err := exec.Command("go", "build", "-o", stubborn, src).CombinedOutput(); err != nil {
 		t.Fatalf("building the connector: %v\n%s", err, out)
 	}
 	s.daemon(t)
 
-	cmd := exec.Command(s.nim, "serve", "--connector", "rig", "--", stubborn)
+	cmd := exec.Command(s.holdcall, "serve", "--connector", "rig", "--", stubborn)
 	cmd.Env = s.env
 	in, err := cmd.StdinPipe()
 	if err != nil {
@@ -978,12 +978,12 @@ func TestAConnectorIgnoringStdinIsStoppedWithTheRelay(t *testing.T) {
 	t.Fatal("the connector outlived the relay it was spawned by")
 }
 
-// `nim status` is the line an operator trusts. It used to report "running"
+// `holdcall status` is the line an operator trusts. It used to report "running"
 // for whatever was bound on the socket, so the impostor of impostor_test.go
 // -- any process that binds the path first -- would have been reported as
 // the daemon. Status now performs the same verification every relay does.
 //
-// The impostor here is this test binary, which is not nim. Skipped on
+// The impostor here is this test binary, which is not holdcall. Skipped on
 // Windows, where peer identity is unsupported and the check cannot tell.
 func TestStatusDoesNotCallAnImpostorTheDaemon(t *testing.T) {
 	if runtime.GOOS == "windows" {
@@ -1025,8 +1025,8 @@ func TestStatusDoesNotCallAnImpostorTheDaemon(t *testing.T) {
 	if strings.Contains(out, "daemon   running") {
 		t.Fatalf("status called an impostor the daemon:\n%s", out)
 	}
-	if !strings.Contains(out, "NOT NIM") {
-		t.Errorf("status did not say what is bound is not Nim:\n%s", out)
+	if !strings.Contains(out, "NOT HOLDCALL") {
+		t.Errorf("status did not say what is bound is not Holdcall:\n%s", out)
 	}
 }
 
@@ -1035,7 +1035,7 @@ func TestStatusDoesNotCallAnImpostorTheDaemon(t *testing.T) {
 // the daemon logged "refusing a connection from an unverified peer" and the
 // client saw an EOF, both true and neither useful. peer.Diagnose tells that
 // specific shape (same launch path, different file) apart from a genuine
-// impostor, and `nim daemon restart` is the one-command fix.
+// impostor, and `holdcall daemon restart` is the one-command fix.
 //
 // Run with the real binary, rebuilt in place while its own daemon is still
 // running -- the same thing `go build -o <path>` or an install over a
@@ -1044,7 +1044,7 @@ func TestStatusDoesNotCallAnImpostorTheDaemon(t *testing.T) {
 func TestAnInPlaceUpgradeIsDiagnosedAndDaemonRestartFixesIt(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("peer identity, and therefore peer.Diagnose, is unsupported on windows by design " +
-			"(see internal/peer/peer_windows.go); nim daemon restart refuses outright there too")
+			"(see internal/peer/peer_windows.go); holdcall daemon restart refuses outright there too")
 	}
 	s := build(t)
 	_, daemonStderr := s.daemonCapturing(t)
@@ -1054,29 +1054,29 @@ func TestAnInPlaceUpgradeIsDiagnosedAndDaemonRestartFixesIt(t *testing.T) {
 	// value is enough to make `go build` write a different file at that
 	// path; it does not need to be a different program.
 	if out, err := exec.Command("go", "build", "-ldflags", "-X main.commit=rebuilt",
-		"-o", s.nim, ".").CombinedOutput(); err != nil {
-		t.Fatalf("rebuilding nim in place while its daemon runs: %v\n%s", err, out)
+		"-o", s.holdcall, ".").CombinedOutput(); err != nil {
+		t.Fatalf("rebuilding holdcall in place while its daemon runs: %v\n%s", err, out)
 	}
 
 	// The new binary and the still-running old daemon now refuse each
-	// other. `nim status`, run with the new binary, must name the specific
+	// other. `holdcall status`, run with the new binary, must name the specific
 	// case -- an older build at the same path -- not the generic wording a
 	// real impostor gets.
 	out, _ := s.run(t, "status")
 	if !strings.Contains(out, "OLDER BUILD") {
 		t.Fatalf("status did not name the older build:\n%s", out)
 	}
-	if !strings.Contains(out, "nim daemon restart") {
+	if !strings.Contains(out, "holdcall daemon restart") {
 		t.Fatalf("status did not name the remedy:\n%s", out)
 	}
-	if strings.Contains(out, "NOT NIM") {
-		t.Fatalf("status called an older build of Nim an impostor:\n%s", out)
+	if strings.Contains(out, "NOT HOLDCALL") {
+		t.Fatalf("status called an older build of Holdcall an impostor:\n%s", out)
 	}
 
-	// `nim doctor`, same binary, reports the same diagnosis as a FAIL naming
-	// the remedy, not the generic "something other than Nim" wording.
+	// `holdcall doctor`, same binary, reports the same diagnosis as a FAIL naming
+	// the remedy, not the generic "something other than Holdcall" wording.
 	out, _ = s.run(t, "doctor")
-	if !strings.Contains(out, "daemon build") || !strings.Contains(out, "nim daemon restart") {
+	if !strings.Contains(out, "daemon build") || !strings.Contains(out, "holdcall daemon restart") {
 		t.Fatalf("doctor did not report the stale daemon build with its remedy:\n%s", out)
 	}
 
@@ -1087,27 +1087,27 @@ func TestAnInPlaceUpgradeIsDiagnosedAndDaemonRestartFixesIt(t *testing.T) {
 	// Diagnosing the caller is the daemon's own job here, done
 	// asynchronously in the goroutine handle() spawns per connection (see
 	// daemon.go). Reading a peer's credentials at the exact moment it is
-	// closing its end is a genuine OS-level race, not a Nim bug: on the rare
+	// closing its end is a genuine OS-level race, not a Holdcall bug: on the rare
 	// loss, peer.DiagnosePID correctly reports DiagnosisUnavailable rather
 	// than guessing, and the daemon logs the older, generic line instead of
 	// the specific one -- the fallback the design calls for, not a wrong
-	// answer. `nim status` and `nim doctor` exit within a few milliseconds of
+	// answer. `holdcall status` and `holdcall doctor` exit within a few milliseconds of
 	// being refused and so are more likely to lose that race than win it; a
 	// relay does not have that problem on its own (it stays up, blocked on
 	// stdin, whether or not it found a daemon to talk to), but retrying with
 	// a fresh one is still the honest way to test a check that is allowed to
 	// occasionally, safely decline to guess.
 	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) && !strings.Contains(daemonStderr.String(), "different build of Nim") {
+	for time.Now().Before(deadline) && !strings.Contains(daemonStderr.String(), "different build of Holdcall") {
 		probe := s.serve(t)
 		time.Sleep(150 * time.Millisecond)
 		probe.kill()
 	}
 	logged := daemonStderr.String()
-	if !strings.Contains(logged, "different build of Nim") {
+	if !strings.Contains(logged, "different build of Holdcall") {
 		t.Fatalf("the old daemon's log never named the specific reason it refused a connection:\n%s", logged)
 	}
-	if !strings.Contains(logged, "nim daemon restart") {
+	if !strings.Contains(logged, "holdcall daemon restart") {
 		t.Fatalf("the old daemon's log did not name the remedy:\n%s", logged)
 	}
 
@@ -1115,16 +1115,16 @@ func TestAnInPlaceUpgradeIsDiagnosedAndDaemonRestartFixesIt(t *testing.T) {
 	// starts a new one it can talk to, verifying both before it returns.
 	out, err := s.run(t, "daemon", "restart")
 	if err != nil {
-		t.Fatalf("nim daemon restart: %v\n%s", err, out)
+		t.Fatalf("holdcall daemon restart: %v\n%s", err, out)
 	}
 	if !strings.Contains(out, "restarted") {
-		t.Errorf("nim daemon restart did not say what it did:\n%s", out)
+		t.Errorf("holdcall daemon restart did not say what it did:\n%s", out)
 	}
 
 	// The restarted daemon runs detached from this process, the same as any
 	// daemon StartDaemon launches -- so, unlike s.daemon's, nothing here
 	// holds an *exec.Cmd for it to clean up automatically. Find its pid the
-	// same way `nim daemon restart` itself does and stop it the same way, or
+	// same way `holdcall daemon restart` itself does and stop it the same way, or
 	// it outlives the test. stopDaemonPID rather than a direct syscall.Kill:
 	// this file has no build tag, so it must compile for windows too, where
 	// syscall.Kill does not exist -- stopDaemonPID is already split by
@@ -1155,6 +1155,6 @@ func TestAnInPlaceUpgradeIsDiagnosedAndDaemonRestartFixesIt(t *testing.T) {
 	r := s.serve(t)
 	r.send(t, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"echo","arguments":{}}}`)
 	if _, isError, _ := decodeLine(t, r.next(t)); isError {
-		t.Errorf("a call was refused by the daemon nim daemon restart started")
+		t.Errorf("a call was refused by the daemon holdcall daemon restart started")
 	}
 }

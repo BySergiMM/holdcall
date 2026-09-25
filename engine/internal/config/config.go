@@ -1,14 +1,14 @@
-// Package config resolves where Nim keeps its state and reads config.toml.
+// Package config resolves where Holdcall keeps its state and reads config.toml.
 //
 // config.toml configures the daemon: socket path and data directory. Nothing
 // an authorization decision depends on is here, and nothing may be added: the
 // standing decision is that SQLite is the only thing a decision reads, because
-// anything able to write a file could otherwise change what Nim allows and
+// anything able to write a file could otherwise change what Holdcall allows and
 // leave no record of having done so.
 //
 // It was not always so. From M2 to M4 a [policy] section carried a deny list,
 // as scaffolding, and said so. The rules now live in SQLite, are changed with
-// `nim policy`, and every change is an entry in the journal. A config.toml
+// `holdcall policy`, and every change is an entry in the journal. A config.toml
 // that still carries the section is refused rather than read past -- see
 // Load -- because a list an operator believes is enforced and is not would be
 // the worst way for the move to go unnoticed.
@@ -30,7 +30,7 @@ import (
 
 // HomeEnvVar overrides the install directory, mainly for tests and for running
 // several isolated instances on one machine.
-const HomeEnvVar = "NIM_HOME"
+const HomeEnvVar = "HOLDCALL_HOME"
 
 // Config is the whole of config.toml.
 type Config struct {
@@ -73,7 +73,7 @@ func (d *Duration) UnmarshalText(text []byte) error {
 
 func (d Duration) String() string { return time.Duration(d).String() }
 
-// Home is the single directory Nim owns.
+// Home is the single directory Holdcall owns.
 func Home() string {
 	if override := os.Getenv(HomeEnvVar); override != "" {
 		return override
@@ -81,21 +81,21 @@ func Home() string {
 	switch runtime.GOOS {
 	case "windows":
 		if base := os.Getenv("LOCALAPPDATA"); base != "" {
-			return filepath.Join(base, "nim")
+			return filepath.Join(base, "holdcall")
 		}
 	case "darwin":
 		if home, err := os.UserHomeDir(); err == nil {
-			return filepath.Join(home, "Library", "Application Support", "nim")
+			return filepath.Join(home, "Library", "Application Support", "holdcall")
 		}
 	default:
 		if base := os.Getenv("XDG_DATA_HOME"); base != "" {
-			return filepath.Join(base, "nim")
+			return filepath.Join(base, "holdcall")
 		}
 		if home, err := os.UserHomeDir(); err == nil {
-			return filepath.Join(home, ".local", "share", "nim")
+			return filepath.Join(home, ".local", "share", "holdcall")
 		}
 	}
-	return filepath.Join(os.TempDir(), "nim")
+	return filepath.Join(os.TempDir(), "holdcall")
 }
 
 func Path() string { return filepath.Join(Home(), "config.toml") }
@@ -143,7 +143,7 @@ func refuseUnknownKeys(undecoded []toml.Key) error {
 			return fmt.Errorf(
 				"%s has a [policy] section, and policy no longer lives there.\n"+
 					"Rules are kept in SQLite and changed with the daemon, so that a change is recorded:\n"+
-					"    nim policy deny <tool> [--agent <name>] [--connector <name>]\n"+
+					"    holdcall policy deny <tool> [--agent <name>] [--connector <name>]\n"+
 					"Add each tool from the old deny list that way, then remove the section",
 				Path())
 		}
@@ -183,7 +183,7 @@ const MaxSocketPath = 100
 // machine never collide.
 func defaultSocket() string {
 	sum := sha256.Sum256([]byte(Home()))
-	name := "nim-" + hex.EncodeToString(sum[:4]) + ".sock"
+	name := "holdcall-" + hex.EncodeToString(sum[:4]) + ".sock"
 	if runtime.GOOS != "windows" {
 		if dir := os.Getenv("XDG_RUNTIME_DIR"); dir != "" {
 			return filepath.Join(dir, name)
@@ -224,7 +224,7 @@ func ReadMachineID() (string, bool) {
 	// The identifier is the file's text with surrounding whitespace removed.
 	// CreateMachineID writes none, but an operator restoring the file by hand
 	// from a note usually gets a trailing newline from the editor, and that
-	// used to seed a different genesis -- so `nim verify` reported the chain
+	// used to seed a different genesis -- so `holdcall verify` reported the chain
 	// as tampered with when all that had changed was a line ending.
 	id := strings.TrimSpace(string(b))
 	if id == "" {
@@ -260,7 +260,7 @@ func NewID() string {
 // keep a record is the worst way to fail.
 func LogPath() string { return filepath.Join(Home(), "daemon.log") }
 
-func (c Config) DatabasePath() string { return filepath.Join(c.Daemon.DataDir, "nim.db") }
+func (c Config) DatabasePath() string { return filepath.Join(c.Daemon.DataDir, "holdcall.db") }
 
 // EnsureDirs creates the layout with owner-only permissions.
 func (c Config) EnsureDirs() error {

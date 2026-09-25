@@ -17,7 +17,7 @@ const PROV_MEANING: Record<Provenance, string> = {
   derived: "Computed from the repository at build time.",
   declared: "Written by hand in dashboard/data/state.json; every test and file it cites is checked to exist at build time.",
   ci: "A snapshot of a CI run, carrying its own commit and timestamp. Not live.",
-  runtime: "Only knowable on a machine running Nim. Never available to this page.",
+  runtime: "Only knowable on a machine running Holdcall. Never available to this page.",
   unknown: "Not determined.",
 };
 

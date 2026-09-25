@@ -111,7 +111,7 @@ func TestReadModelSurfaceIsFrozen(t *testing.T) {
 		// calls one session may make. Its calls are the one number here
 		// that is a limit rather than a count of something recorded.
 		{"Budget", Budget{}, []string{"agent", "calls", "connector", "created_at", "tool"}},
-		// Explanation is what nim policy explain says, for the console: the
+		// Explanation is what holdcall policy explain says, for the console: the
 		// effect a call shape gets and the rule that decides it. Nothing in
 		// it is recorded; it is the configuration read the way a decision
 		// reads it.
@@ -165,7 +165,7 @@ func TestReadModelCannotExpressEnforcement(t *testing.T) {
 		"executed":          "the journal records a decision and an outcome, never that a call ran",
 		"active":            "a session with no end may be running or dead; the journal cannot tell",
 		"allowed":           "an allow is a decision, not evidence the call was made",
-		"blocked":           "Nim refused to forward a call; it did not stop anything else",
+		"blocked":           "Holdcall refused to forward a call; it did not stop anything else",
 		"agent_id":          "an agent is named by its enrolment, never numbered",
 		"identity":          "the journal records which enrolment matched, not an identity",
 		"connector_reached": "the journal does not record whether the connector received anything",

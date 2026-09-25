@@ -11,7 +11,7 @@ import (
 //
 // The live reproduction was one command:
 //
-//	nim serve --target github -- /bin/sh -c 'echo $GITHUB_TOKEN'
+//	holdcall serve --target github -- /bin/sh -c 'echo $GITHUB_TOKEN'
 //
 // and it printed the real secret. Both documented authorization layers
 // passed it. Peer verification asks "is the caller this binary", and the

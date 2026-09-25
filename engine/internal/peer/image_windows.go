@@ -43,7 +43,7 @@ func ImageOfFile(path string) (Image, error) { return Image{}, errUnsupported }
 // ExecPathOf reports the path a process was launched from. Always
 // unsupported here, for the same reason as everything else in this file:
 // Diagnose (peer.go) must never report SameLaunchPathOlderBuild -- and
-// therefore must never tell an operator to `nim daemon restart` -- on a
+// therefore must never tell an operator to `holdcall daemon restart` -- on a
 // platform where that has no verified basis at all.
 func ExecPathOf(pid int) (path string, ok bool) { return "", false }
 

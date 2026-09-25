@@ -12,7 +12,7 @@ import (
 // encoding/json's own way of decoding an object into a map loses the order --
 // Go maps have none, and re-encoding a map sorts keys alphabetically -- which
 // would reorder an operator's whole config file for a change to one entry.
-// This keeps the order it was read in, and keeps every value nim init did
+// This keeps the order it was read in, and keeps every value holdcall init did
 // not touch as the exact bytes it read, so rewriting one MCP server does not
 // reformat or reshuffle the rest of the file.
 type orderedObject struct {
@@ -21,7 +21,7 @@ type orderedObject struct {
 }
 
 // decodeOrderedObject requires raw to be a JSON object; anything else -- an
-// array, a scalar, or invalid JSON -- is refused, mirroring nim init's rule
+// array, a scalar, or invalid JSON -- is refused, mirroring holdcall init's rule
 // that a client config file must itself be a JSON object.
 func decodeOrderedObject(raw json.RawMessage) (orderedObject, error) {
 	dec := json.NewDecoder(bytes.NewReader(raw))

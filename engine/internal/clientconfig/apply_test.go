@@ -14,7 +14,7 @@ const stdioFixture = `{
 }`
 
 // Computing a Result must never touch disk. This is what makes a dry run a
-// dry run: nim init's CLI layer only calls Apply when --write is given, and
+// dry run: holdcall init's CLI layer only calls Apply when --write is given, and
 // BuildResult itself has no write path to accidentally take.
 func TestInitDryRunWritesNothing(t *testing.T) {
 	path := writeFixture(t, "claude.json", stdioFixture)
@@ -93,7 +93,7 @@ func TestInitWriteCreatesABackupAndWritesAtomically(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), ".nim-init-tmp-") {
+		if strings.HasPrefix(e.Name(), ".holdcall-init-tmp-") {
 			t.Errorf("a temp file was left behind: %s", e.Name())
 		}
 	}
@@ -112,7 +112,7 @@ func TestInitApplyRefusesAResultWithNoChanges(t *testing.T) {
 	}
 }
 
-// nim init --undo restores exactly the bytes that were backed up, and
+// holdcall init --undo restores exactly the bytes that were backed up, and
 // recovers which file to restore from the backup's own name.
 func TestInitUndoRestoresABackup(t *testing.T) {
 	path := writeFixture(t, "claude.json", stdioFixture)
@@ -154,11 +154,11 @@ func TestInitUndoRestoresABackup(t *testing.T) {
 	}
 }
 
-// A path that was never a nim backup must be refused rather than guessed at.
+// A path that was never a holdcall backup must be refused rather than guessed at.
 func TestInitUndoRefusesAPathThatIsNotABackup(t *testing.T) {
 	path := writeFixture(t, "claude.json", stdioFixture)
 	if _, err := RestoreBackup(path); err == nil {
-		t.Fatal("expected an error for a path with no .nim-backup- marker")
+		t.Fatal("expected an error for a path with no .holdcall-backup- marker")
 	}
 }
 
@@ -173,9 +173,9 @@ func TestTwoWritesInQuickSuccessionKeepBothBackups(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A different nim path makes the second run a change (a repoint), so a
+	// A different holdcall path makes the second run a change (a repoint), so a
 	// second backup is due.
-	other := filepath.Join(t.TempDir(), "nim")
+	other := filepath.Join(t.TempDir(), "holdcall")
 	if err := os.WriteFile(other, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}

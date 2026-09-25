@@ -406,7 +406,7 @@ func TestNoAgentAndAnEmptyAgentEncodeDifferently(t *testing.T) {
 // An install that predates the agent column has to keep working: the migration
 // adds it, and everything already there stays valid.
 func TestAJournalWithoutTheAgentColumnMigratesAndStillVerifies(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "nim.db")
+	path := filepath.Join(t.TempDir(), "holdcall.db")
 
 	j, err := Open(path, "test-machine")
 	if err != nil {

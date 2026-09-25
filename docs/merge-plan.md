@@ -26,15 +26,15 @@ The plan held. Two things were different in practice:
 
 ## What each side has
 
-| | `m1-bootstrap` | `claude/nim-audit-context-8e6c6c` |
+| | `m1-bootstrap` | `claude/holdcall-audit-context-8e6c6c` |
 |---|---|---|
 | Journal | mutable `nim_calls` rows, upsert | append-only `nim_journal`, hash-chained, views |
-| Verification | none | `canonical_encode_v1`, `nim verify`, `--expect-head` |
+| Verification | none | `canonical_encode_v1`, `holdcall verify`, `--expect-head` |
 | Enforcement | none — `decision` is the literal `"allow"` | real: synchronous decide, fail-closed, deny list |
 | Credentials | OS store, bound to a registered command | none |
 | Peer authorization | yes | yes (ported across, `148bf11`) |
 | Daemon lifetime | `Setsid`, job breakaway, flock startup lock | none |
-| Read surface | `nim status` | `nim log`, `nim console`, `readmodel` projections |
+| Read surface | `holdcall status` | `holdcall log`, `holdcall console`, `readmodel` projections |
 | Anomalies | none — a batch passes unrecorded | `batch`, `malformed_json`, `framing`, `duplicate_id` |
 
 ## Direction
@@ -52,7 +52,7 @@ Everything `m1-bootstrap` has that it lacks is additive by comparison.
   its credential, and nothing is recorded. The argument is M1's — the relay
   must never be what breaks a working setup.
 - the audit branch fails **closed**: no daemon means every `tools/call` is
-  denied. The argument is that a call Nim cannot record should not happen.
+  denied. The argument is that a call Holdcall cannot record should not happen.
 
 Settled in `docs/decisions/0001-failure-behaviour.md`, and not by picking a
 side: the two were answering different questions. Open on the absence of
@@ -61,7 +61,7 @@ release.
 
 ## Conflict surface, measured
 
-`git merge-tree --write-tree m1-bootstrap claude/nim-audit-context-8e6c6c`
+`git merge-tree --write-tree m1-bootstrap claude/holdcall-audit-context-8e6c6c`
 reports ten conflicting files. Four are the core, four are their tests
 (add/add — rewritten wholesale on both sides), two are documentation.
 
@@ -70,7 +70,7 @@ reports ten conflicting files. Four are the core, four are their tests
 | `journal/journal.go` | two data models, not two edits | **hard** — do not textually merge |
 | `daemon/daemon.go` | both rewrote `handle()` | **hard** — three message families to route |
 | `shim/shim.go` | credential injection vs the decide path | **medium** |
-| `cmd/nim/main.go` | different subcommands, no overlap | easy |
+| `cmd/holdcall/main.go` | different subcommands, no overlap | easy |
 | `config/config.go` | `Policy` vs nothing | easy |
 | `*_test.go` (×4) | rewritten on both sides | medium — merge by hand, keep both |
 | `README.md`, `docs/milestones.md` | both rewritten | easy, but renumber (below) |
@@ -118,9 +118,9 @@ Each step should build and pass `go test -race ./...` before the next.
 - The relay rig still reports `RESULT: IDENTICAL` (`pip install fastmcp`,
   `python tools/relay-rig/compare.py`). This is the only test that proves a
   real client cannot tell, and every merge step above touches the relay.
-- `nim verify` on a journal written by the merged binary.
+- `holdcall verify` on a journal written by the merged binary.
 - A credential is injected into the registered command, and only that one:
-  `nim serve --target X -- /bin/sh -c 'env'` must not receive X's secret.
+  `holdcall serve --target X -- /bin/sh -c 'env'` must not receive X's secret.
 - A denied call never reaches the connector, and no daemon means denied.
 - Both benchmarks still report a p99 far below `decisionTimeout`.
 
