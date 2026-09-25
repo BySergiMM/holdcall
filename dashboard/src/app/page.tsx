@@ -1,557 +1,273 @@
-import AttackMatrix from "@/components/AttackMatrix";
-import { Field, Limitation, Prov, Section, Stat, Status, Tests } from "@/components/bits";
-import { state, tone, label } from "@/lib/state";
+import Waitlist from "@/components/Waitlist";
+import { state } from "@/lib/state";
+import "./landing.css";
 
-const { project, derived, summary, ciSnapshot, runtime, architecture } = state;
+const { summary, derived } = state;
 
-const NAV = [
-  ["overview", "Overview", ""],
-  ["getting-started", "Get started", ""],
-  ["architecture", "Architecture", ""],
-  ["guarantees", "Guarantees", `${summary.guarantees.total}`],
-  ["break", "Break Nim", `${summary.attacks.total}`],
-  ["findings", "Findings", `${summary.findings.total}`],
-  ["milestones", "Milestones", `${summary.milestones.done}/${summary.milestones.total}`],
-  ["decisions", "Open questions", `${summary.decisions.open}`],
-  ["runtime", "Runtime", "—"],
-  ["ci", "CI", ""],
-  ["limits", "What this cannot tell you", ""],
-];
+// A real session, recorded by Nim on 2026-09-25 against the relay rig's
+// server: every row below is a line of `nim log`, oldest first. Nothing here
+// is invented, which is the only reason it belongs on the front page.
+const LEDGER = [
+  { n: 6, at: "20:29:45", tool: "add", decision: "allow", what: "forwarded, answered in 63 ms" },
+  { n: 8, at: "20:29:45", tool: "echo", decision: "allow", what: "forwarded, answered in 1 ms" },
+  { n: 10, at: "20:29:45", tool: "explode", decision: "deny", what: "a rule denies this tool; the server never saw it" },
+  { n: 11, at: "20:29:45", tool: "add", decision: "allow", what: "forwarded" },
+  { n: 13, at: "20:29:45", tool: "add", decision: "allow", what: "forwarded, third of three allowed" },
+  { n: 15, at: "20:29:45", tool: "add", decision: "deny", what: "budget of 3 calls spent this session" },
+  { n: 16, at: "20:29:47", tool: "dangerous_tool", decision: "rejected", what: "held for a human, who read the arguments and said no" },
+] as const;
 
-export default function Page() {
+const DECISION_LABEL: Record<string, string> = {
+  allow: "allow",
+  deny: "deny",
+  rejected: "rejected",
+};
+
+export default function Landing() {
   return (
-    <div className="shell">
-      <aside className="rail">
-        <div className="rail-group">
-          <div className="rail-title">Nim</div>
-          <nav>
-            {NAV.map(([id, text, n]) => (
-              <a key={id} href={`#${id}`}>
-                <span>{text}</span>
-                {n && <span className="n">{n}</span>}
-              </a>
-            ))}
-          </nav>
-        </div>
-      </aside>
+    <div className="lp">
+      <header className="lp-top">
+        <a className="lp-wordmark" href="/" aria-label="Nim, home">
+          nim
+        </a>
+        <nav className="lp-nav" aria-label="Site">
+          <a href="#how">How it works</a>
+          <a href="#honest">What it does not promise</a>
+          <a href="/status/">Status</a>
+          <a className="lp-nav-cta" href="#access">
+            Early access
+          </a>
+        </nav>
+      </header>
 
       <main>
-        <header className="masthead">
-          <h1>{project.name} — Control Plane</h1>
-          <p className="tag">{project.tagline}</p>
-          <div className="meta">
-            <span>
-              <b>{derived.branch}</b> @ <b>{derived.commit}</b>
-            </span>
-            <span>{derived.commitSubject}</span>
-            <span>{derived.commitDate.slice(0, 10)}</span>
-            <span>
-              <b>{derived.commitCount}</b> commits
-            </span>
-            <span>go {derived.goVersion}</span>
-            {!derived.clean && (
-              <span className="chip chip-warn" title="Uncommitted changes were present when this page was built.">
-                tree dirty at build
-              </span>
-            )}
-          </div>
-          <div className="meta legend" style={{ marginTop: "1rem" }}>
-            <span className="row">
-              <Prov of="derived" /> read from the repository
-            </span>
-            <span className="row">
-              <Prov of="declared" /> written by hand, references checked
-            </span>
-            <span className="row">
-              <Prov of="ci" /> snapshot of a run
-            </span>
-            <span className="row">
-              <Prov of="runtime" /> not knowable here
-            </span>
-          </div>
-        </header>
-
-        {/* ------------------------------------------------------- overview */}
-        <Section id="overview" title="Overview">
-          <div className="grid grid-3" style={{ marginBottom: "1rem" }}>
-            <Stat k="Milestone" v={project.currentMilestone} sub={project.currentPhase} />
-            <Stat
-              k="Guarantees"
-              v={`${summary.guarantees.verified} / ${summary.guarantees.total}`}
-              sub={`${summary.guarantees.partial} partial · each backed by tests that exist`}
-            />
-            <Stat
-              k="Attacks not defended"
-              v={summary.attacks.fail}
-              sub={`plus ${summary.attacks.partial} partial and ${summary.attacks.notTested} never tested, of ${summary.attacks.total}`}
-            />
-            <Stat
-              k="Tests in the tree"
-              v={derived.testCount}
-              sub={`${derived.benchmarkCount} benchmarks · ${derived.packageCount} packages · ${derived.excludedFromTestCount} helper-process entry point not counted as a test`}
-            />
-            <Stat
-              k="Open findings"
-              v={summary.findings.open}
-              sub={`${summary.findings.accepted} accepted · ${summary.findings.fixed} fixed · ${summary.findings.high} high severity`}
-            />
-            <Stat k="Unresolved questions" v={summary.decisions.open} sub="decisions that block later work" />
-          </div>
-
-          <div className="notice">
-            <h3>
-              Where this actually stands <Prov of="declared" />
-            </h3>
-            <p>{project.statusNote}</p>
-            <p>
-              There is no completion percentage on this page. The milestones after M4 have no deliverables written
-              down, so any percentage would need a denominator nobody has chosen — a number invented to look like
-              progress. The counts above are what can be counted.
-            </p>
-          </div>
-        </Section>
-
-        {/* ----------------------------------------------- getting started */}
-        <Section
-          id="getting-started"
-          title="Get started"
-          lede="Point a real MCP client at Nim in about five minutes."
-        >
-          <Field k="Install">
-            <code>curl -fsSL https://raw.githubusercontent.com/BySergiMM/nim/m1-bootstrap/install.sh | sh</code>
-          </Field>
-          <Field k="Five minutes to a first decision">
-            <ol style={{ margin: 0, paddingLeft: "1.1rem" }}>
-              <li>
-                <code>nim init</code>, then <code>nim init --write</code>, to point Claude Code, Cursor or
-                Claude Desktop at Nim
-              </li>
-              <li>
-                <code>nim doctor</code> to check the result
-              </li>
-              <li>
-                <code>nim policy deny &lt;tool-name&gt;</code> to refuse one tool
-              </li>
-              <li>call it from the client, and watch the call come back refused</li>
-              <li>
-                <code>nim log</code> to see the decision, <code>nim console</code> to see the journal
-              </li>
-            </ol>
-          </Field>
-          <p style={{ color: "var(--text-2)", maxWidth: "var(--measure)" }}>
-            The full walkthrough, one client at a time with before/after config examples, is{" "}
-            <code>docs/getting-started.md</code>; what this page is and is not is <code>docs/dashboard.md</code>.
+        <section className="lp-hero" aria-labelledby="lp-title">
+          <p className="lp-eyebrow">For teams running agents with MCP tools</p>
+          <h1 id="lp-title">The control that stays on your machine.</h1>
+          <p className="lp-lede">
+            Nim sits between your agent and its MCP servers. It decides every tool call where the call happens, shows
+            you the real arguments before anything dangerous runs, and keeps a record you can verify offline. The
+            arguments never leave the machine. Neither does the decision.
           </p>
-        </Section>
-
-        {/* --------------------------------------------------- architecture */}
-        <Section
-          id="architecture"
-          title="Architecture"
-          lede="Where Nim sits, and what each layer does or does not yet do."
-        >
-          <div className="flow" style={{ marginBottom: "1.5rem" }}>
-            {architecture.nodes.map((n, i) => (
-              <div key={n.id} style={{ display: "contents" }}>
-                {i > 0 && <div className="arrow">→</div>}
-                <div className="node">
-                  <div className="l">{n.label}</div>
-                  <div className="s">{n.sub}</div>
-                  <div className="n">{n.note}</div>
-                </div>
-              </div>
-            ))}
+          <div className="lp-actions">
+            <a className="lp-btn lp-btn-primary" href="#access">
+              Get early access
+            </a>
+            <a className="lp-btn" href="/status/">
+              See what is verified
+            </a>
           </div>
 
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Layer</th>
-                  <th>State</th>
-                  <th>What that means today</th>
-                </tr>
-              </thead>
-              <tbody>
-                {architecture.layers.map((l) => (
-                  <tr key={l.name}>
-                    <td style={{ fontWeight: 500, whiteSpace: "nowrap" }}>{l.name}</td>
-                    <td>
-                      <Status value={l.state} />
-                    </td>
-                    <td style={{ color: "var(--text-2)" }}>{l.detail}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Section>
-
-        {/* ----------------------------------------------------- guarantees */}
-        <Section
-          id="guarantees"
-          title="Guarantees"
-          count={`${summary.guarantees.total} claims · ${summary.guarantees.verified} verified`}
-          lede={
-            <>
-              Every entry states what is guaranteed <em>and</em> what is not, because a security property read without
-              its boundary is worse than no property at all. The build fails if any of these cites a test that does not
-              exist in the repository.
-            </>
-          }
-        >
-          {state.guarantees.map((g) => (
-            <details key={g.id} className={`item sev-${tone(g.status)}`}>
-              <summary>
-                <span className="title">{g.title}</span>
-                <Prov of={g.provenance} />
-                <Status value={g.status} />
-              </summary>
-              <div className="body">
-                <Field k="Guaranteed">{g.statement}</Field>
-                <Limitation>{g.notGuaranteed}</Limitation>
-                <Field k="Platforms">
-                  <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap" }}>
-                    {Object.entries(g.platforms).map(([p, v]) => (
-                      <span key={p} className={`chip chip-${tone(v)}`}>
-                        {p}: {label(v)}
-                      </span>
-                    ))}
-                  </div>
-                </Field>
-                <Tests evidence={g.evidenceTests} />
-                <Field k="Implementation">
-                  <div className="tests">
-                    {g.implementation.map((f) => (
-                      <span key={f} className="t">
-                        {f}
-                      </span>
-                    ))}
-                  </div>
-                </Field>
-              </div>
-            </details>
-          ))}
-        </Section>
-
-        {/* ---------------------------------------------------------- break */}
-        <Section
-          id="break"
-          title="Break Nim"
-          count={`${summary.attacks.total} attempts · ${summary.attacks.liveBefore} once worked`}
-          lede={
-            <>
-              Not a list of wins. Every row is an attempt to make Nim fail, and{" "}
-              <strong>{summary.attacks.liveBefore} of them succeeded against a real build</strong> before they were
-              addressed. Rows sort worst-first. A row with no test is a written assessment, and says so.
-              <br />
-              <br />
-              These statuses describe <strong>macOS and Linux</strong>. Nim has never been executed on Windows, and has
-              no peer verification there at all (F-002) — so every row in the <span className="prov">identity</span>{" "}
-              category should be read as undefended on that platform.
-            </>
-          }
-        >
-          <AttackMatrix />
-        </Section>
-
-        {/* ------------------------------------------------------- findings */}
-        <Section
-          id="findings"
-          title="Findings"
-          count={`${summary.findings.open} open · ${summary.findings.accepted} accepted · ${summary.findings.fixed} fixed`}
-          lede={
-            <>
-              Known weaknesses. <strong>Accepted</strong> means understood and deliberately not fixed yet — it does not
-              mean fixed. <strong>Fixed</strong> ones stay on the page rather than being deleted, because a finding that
-              vanishes teaches nobody what went wrong.
-            </>
-          }
-        >
-          {state.findings.map((f) => (
-            <details key={f.id} className={`item sev-${tone(f.severity)}`}>
-              <summary>
-                <span className="mono" style={{ color: "var(--text-3)" }}>
-                  {f.id}
-                </span>
-                <span className="title">{f.title}</span>
-                <Status value={f.severity} />
-                <Status value={f.status} />
-              </summary>
-              <div className="body">
-                <Field k="Problem">{f.problem}</Field>
-                <Field k="Impact">{f.impact}</Field>
-                <Field k="Evidence">{f.evidence}</Field>
-                <Field k="Next action">{f.nextAction}</Field>
-              </div>
-            </details>
-          ))}
-        </Section>
-
-        {/* ------------------------------------------------------ milestones */}
-        <Section
-          id="milestones"
-          title="Milestones"
-          count={`${summary.milestones.done} done · ${summary.milestones.inProgress} in progress · ${summary.milestones.blocked} blocked`}
-          lede="What each milestone delivered, and what it deliberately left behind."
-        >
-          {state.milestones.map((m) => (
-            <details key={m.id} className={`item sev-${tone(m.status)}`} open={m.status === "in_progress"}>
-              <summary>
-                <span className="mono" style={{ color: "var(--text-3)", minWidth: "2.6rem" }}>
-                  {m.id}
-                </span>
-                <span className="title">{m.name}</span>
-                <Status value={m.status} />
-              </summary>
-              <div className="body">
-                <Field k="Objective">{m.objective}</Field>
-                {m.deliverables.length > 0 && (
-                  <Field k="Delivered">
-                    <div className="tests">
-                      {m.deliverables.map((d) => (
-                        <span key={d} className="t">
-                          {d}
-                        </span>
-                      ))}
-                    </div>
-                  </Field>
-                )}
-                {m.limitations.length > 0 && (
-                  <Limitation>
-                    <ul style={{ margin: 0, paddingLeft: "1.1rem" }}>
-                      {m.limitations.map((l) => (
-                        <li key={l}>{l}</li>
-                      ))}
-                    </ul>
-                  </Limitation>
-                )}
-                {m.pending.length > 0 && (
-                  <Field k="Still outstanding">
-                    <ul style={{ margin: 0, paddingLeft: "1.1rem" }}>
-                      {m.pending.map((p) => (
-                        <li key={p}>{p}</li>
-                      ))}
-                    </ul>
-                  </Field>
-                )}
-              </div>
-            </details>
-          ))}
-        </Section>
-
-        {/* ------------------------------------------------------- decisions */}
-        <Section
-          id="decisions"
-          title="Open questions"
-          count={`${summary.decisions.open} of ${summary.decisions.total} unresolved`}
-          lede="Decisions that cannot be made by writing code, and that later work depends on."
-        >
-          {state.decisions.map((d) => (
-            <details key={d.id} className={`item sev-${tone(d.status)}`}>
-              <summary>
-                <span className="mono" style={{ color: "var(--text-3)" }}>
-                  {d.id}
-                </span>
-                <span className="title">{d.title}</span>
-                <Status value={d.status} />
-              </summary>
-              <div className="body">
-                <Field k="Question">{d.question}</Field>
-                <Field k={d.status === "resolved" ? "Decided" : "Where it stands"}>{d.resolution}</Field>
-              </div>
-            </details>
-          ))}
-        </Section>
-
-        {/* --------------------------------------------------------- runtime */}
-        <Section id="runtime" title="Runtime state">
-          <div className="notice hard">
-            <h3>
-              Not available <span className="chip chip-none">no data</span> <Prov of="runtime" />
-            </h3>
-            <p>{runtime.reason}</p>
-            <p>
-              This section is empty on purpose and will stay empty. Live sessions, journal entries, enrolled agents and
-              daemon health are not shown here because this page cannot see them — and a page that filled the gap with
-              plausible numbers would be the exact failure mode the rest of the dashboard exists to avoid.
-            </p>
-            <div className="table-wrap" style={{ marginTop: "0.4rem" }}>
+          <figure className="lp-ledger" aria-label="A real session recorded by Nim">
+            <figcaption>
+              <span className="lp-ledger-title">nim log</span>
+              <span className="lp-ledger-sub">
+                one agent, one connector, seven calls, 25 September 2026. Nothing here is a mock-up.
+              </span>
+            </figcaption>
+            <div className="lp-ledger-scroll">
               <table>
                 <thead>
                   <tr>
-                    <th>Runtime datum</th>
-                    <th>Here</th>
-                    <th>Where it actually lives</th>
+                    <th scope="col">#</th>
+                    <th scope="col">when</th>
+                    <th scope="col">agent</th>
+                    <th scope="col">connector</th>
+                    <th scope="col">tool</th>
+                    <th scope="col">decision</th>
+                    <th scope="col">what happened</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {[
-                    ["Daemon up / down", "nim status"],
-                    ["Journal entries and chain head", "nim log, nim verify"],
-                    ["Journal integrity right now", "nim verify --expect-head"],
-                    ["Enrolled agents", "nim agent list"],
-                    ["Registered connectors", "nim connector list"],
-                    ["Calls allowed and refused", "nim log"],
-                  ].map(([what, where]) => (
-                    <tr key={what}>
-                      <td>{what}</td>
+                  {LEDGER.map((row, i) => (
+                    <tr key={row.n} className="lp-row" style={{ ["--i" as string]: i }}>
+                      <td className="lp-dim">{row.n}</td>
+                      <td className="lp-dim">{row.at}</td>
+                      <td>claude-code</td>
+                      <td>github</td>
+                      <td>{row.tool}</td>
                       <td>
-                        <span className="chip chip-none">not available</span>
+                        <span className={`lp-decision lp-d-${row.decision}`}>{DECISION_LABEL[row.decision]}</span>
                       </td>
-                      <td className="mono" style={{ color: "var(--text-2)" }}>
-                        {where}
-                      </td>
+                      <td className="lp-what">{row.what}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
-          </div>
-        </Section>
+          </figure>
+        </section>
 
-        {/* -------------------------------------------------------------- ci */}
-        <Section id="ci" title="Continuous integration">
-          <div className="notice" style={{ marginBottom: "1rem" }}>
-            <h3>
-              {ciSnapshot.workflow} <Status value={ciSnapshot.conclusion} />
-              {ciSnapshot.stale ? (
-                <span className="chip chip-warn">stale — ran on {ciSnapshot.commit}, this page is {derived.commit}</span>
-              ) : (
-                <span className="chip chip-ok">same commit as this page</span>
-              )}
-              <Prov of="ci" />
-            </h3>
+        <section className="lp-three" aria-label="What Nim does">
+          <div>
+            <h2>Decides on the machine</h2>
             <p>
-              A snapshot taken at {ciSnapshot.takenAt}, not a live status. Nothing on this page polls GitHub; a green
-              badge that had gone red hours ago would be worse than none.
-            </p>
-            <p>
-              Recording a run means committing, and that commit is one CI has not yet run — so a hand-recorded snapshot
-              is <em>structurally</em> at least one commit behind, and will often read as stale. That is the honest
-              state, not a bug to chase: it says CI was green at the named commit and has not yet spoken about this one.
-              Anything that made this box always look current would be doing so by not checking.
+              Rules that deny, allow, or hold a tool for a human, scoped to an agent and a connector. Budgets that cap
+              how many calls a session may make. Every way of not getting a decision is a denial: no daemon, no
+              decision, no call.
             </p>
           </div>
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Job</th>
-                  <th>Result</th>
-                </tr>
-              </thead>
-              <tbody>
-                {ciSnapshot.jobs.map((j) => (
-                  <tr key={j.name}>
-                    <td className="mono">{j.name}</td>
-                    <td>
-                      <Status value={j.conclusion} />
-                      {j.note && (
-                        <div style={{ fontSize: 12, color: "var(--text-2)", marginTop: "0.3rem", maxWidth: "48ch" }}>
-                          {j.note}
-                        </div>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <div>
+            <h2>Approves with the real arguments</h2>
+            <p>
+              A held call waits until someone runs <code>nim approve</code> and reads exactly what the server would
+              receive, every byte shown as itself. Never a summary, never text the model wrote about the call.
+            </p>
           </div>
-          <p style={{ marginTop: "0.7rem", fontSize: 13, color: "var(--text-3)" }}>
-            Cross-compile jobs build only — they do not run tests or <code>go vet</code>, which is finding F-009. And CI
-            does not run with <code>-v</code>, so a skipped adversarial test is indistinguishable from a passing one in
-            the log (F-010).
+          <div>
+            <h2>Records what you can verify</h2>
+            <p>
+              Each call, decision and policy change is one entry in a hash-chained journal on disk.{" "}
+              <code>nim verify</code> checks it without a network, and the format is documented so a second program
+              can check it too.
+            </p>
+          </div>
+        </section>
+
+        <section className="lp-moment" id="moment" aria-labelledby="lp-moment-title">
+          <div className="lp-moment-text">
+            <h2 id="lp-moment-title">The moment that matters</h2>
+            <p>
+              The agent asked to run <code>dangerous_tool</code> on a release branch, with force. The rule for that
+              tool says <em>ask</em>. Nim held the call, the operator read the arguments and rejected it, and the
+              agent was told so in words it does not retry.
+            </p>
+            <p className="lp-dim">
+              The daemon wrote the rejection to the journal before the relay was told. The server never received the
+              call.
+            </p>
+          </div>
+          <div className="lp-terminals">
+            <pre className="lp-term" aria-label="Output of nim approve">
+              <span className="lp-prompt">$ nim approve</span>
+              {"\n"}
+              {"id         483e0508febce5dcc97fb26becf27180-7\n"}
+              {"age        2s\n"}
+              {"agent      claude-code\n"}
+              {"connector  github\n"}
+              {"tool       dangerous_tool\n"}
+              {"arguments:\n"}
+              {"  {\n"}
+              {'    "branch": "release/2026-09",\n'}
+              {'    "force": true\n'}
+              {"  }\n"}
+              <span className="lp-prompt">$ nim reject 483e0508febce5dcc97fb26becf27180-7 --reason &quot;not that branch&quot;</span>
+              {"\n"}
+              {"rejected dangerous_tool for agent claude-code on connector github (recorded in the journal)\n"}
+              {"reason: not that branch"}
+            </pre>
+            <pre className="lp-term lp-term-agent" aria-label="What the agent received">
+              <span className="lp-prompt">what the agent received</span>
+              {"\n"}
+              {"A human reviewing this call's real arguments rejected it. Do not retry automatically."}
+            </pre>
+          </div>
+        </section>
+
+        <section className="lp-how" id="how" aria-labelledby="lp-how-title">
+          <h2 id="lp-how-title">How it fits</h2>
+          <ol className="lp-flow">
+            <li>
+              <span className="lp-flow-name">Your client</span>
+              <span className="lp-flow-note">Claude Code, Cursor, Claude Desktop. Pointed at Nim by <code>nim init</code>.</span>
+            </li>
+            <li className="lp-flow-nim">
+              <span className="lp-flow-name">nim serve</span>
+              <span className="lp-flow-note">
+                Relays every byte unchanged. A <code>tools/call</code> is decided before it is forwarded.
+              </span>
+            </li>
+            <li>
+              <span className="lp-flow-name">Your MCP server</span>
+              <span className="lp-flow-note">Receives exactly what the client sent, or nothing.</span>
+            </li>
+          </ol>
+          <p className="lp-how-under">
+            Under the relay, one daemon per user decides against rules and budgets in SQLite, keeps credentials in the
+            OS store bound to one command, and writes the journal. It answers only to processes that are Nim, and it
+            works with no network. The agent&apos;s identity is derived from the executable that spawned the relay,
+            as the kernel reports it; nothing on the wire can claim to be Claude Code.
           </p>
-        </Section>
+          <figure className="lp-shot">
+            <img src="/console.png" alt="The local console's Journal tab: every entry in chain order, with session, call number, tool and decision" width="1280" height="860" loading="lazy" />
+            <figcaption>The local console, read-only, on loopback. The same projection every command reads.</figcaption>
+          </figure>
+        </section>
 
-        {/* ---------------------------------------------------------- limits */}
-        <Section id="limits" title="What this dashboard cannot tell you">
-          <div className="grid grid-2">
-            <div className="card">
-              <h3 style={{ fontSize: "0.92rem", marginBottom: "0.5rem" }}>The check has a hard edge</h3>
-              <p style={{ color: "var(--text-2)", fontSize: 14 }}>
-                The build fails if a guarantee or attack cites a test that is not in the repository — that is how the
-                nine claims this page was first written with got corrected. It proves a cited test <em>exists</em>. It
-                cannot prove the test establishes the sentence printed next to it. A wrong summary beside a real test
-                name would pass.
-              </p>
+        <section className="lp-honest" id="honest" aria-labelledby="lp-honest-title">
+          <h2 id="lp-honest-title">What it does not promise</h2>
+          <dl>
+            <div>
+              <dt>Not tamper-proof</dt>
+              <dd>
+                The chain has no key. Anyone who can write the journal file can rewrite it and it will verify. What
+                turns the record into evidence is <code>nim verify --expect-head</code> against a head you recorded
+                somewhere else. We do not use the words audit log.
+              </dd>
             </div>
-            <div className="card">
-              <h3 style={{ fontSize: "0.92rem", marginBottom: "0.5rem" }}>Nothing here is live</h3>
-              <p style={{ color: "var(--text-2)", fontSize: 14 }}>
-                Every value is baked in at build time. The commit and test counts are true of{" "}
-                <span className="mono">{derived.commit}</span> and of nothing else; the CI block is a snapshot with its
-                own timestamp. If the page is older than the tree, it is wrong, and it tells you which commit it
-                describes so you can find out.
-              </p>
+            <div>
+              <dt>Verified on macOS</dt>
+              <dd>
+                Linux and Windows are compiled and vetted, not yet run. The status page says which claims hold on
+                which platform, per test.
+              </dd>
             </div>
-            <div className="card">
-              <h3 style={{ fontSize: "0.92rem", marginBottom: "0.5rem" }}>&quot;Verified&quot; means a test passes</h3>
-              <p style={{ color: "var(--text-2)", fontSize: 14 }}>
-                It does not mean audited, reviewed by anyone outside this project, or proven. No third party has looked
-                at Nim. The tests were written by the same process that wrote the code they check.
-              </p>
+            <div>
+              <dt>Rules match names, not arguments</dt>
+              <dd>
+                A rule is keyed on agent, connector and tool. Conditions on what a call carries are not built; a human
+                reading the arguments is how that gap is covered today.
+              </dd>
             </div>
-            <div className="card">
-              <h3 style={{ fontSize: "0.92rem", marginBottom: "0.5rem" }}>The journal chain is not authenticity</h3>
-              <p style={{ color: "var(--text-2)", fontSize: 14 }}>
-                Wherever this page says the journal detects alteration, it means an <em>unkeyed</em> hash chain. Anyone
-                who can write the database can recompute every hash and the result verifies cleanly. That is F-003, and
-                it is why M8 is blocked rather than merely unstarted.
-              </p>
-            </div>
-            <div className="card">
-              <h3 style={{ fontSize: "0.92rem", marginBottom: "0.5rem" }}>Windows is unrun</h3>
-              <p style={{ color: "var(--text-2)", fontSize: 14 }}>
-                Nim cross-compiles for Windows and has never been executed on it. Where a platform column says
-                &quot;unsupported&quot;, that is a deliberate stub returning an error, not a gap someone forgot.
-              </p>
-            </div>
-            <div className="card">
-              <h3 style={{ fontSize: "0.92rem", marginBottom: "0.5rem" }}>This page is public on purpose</h3>
-              <p style={{ color: "var(--text-2)", fontSize: 14 }}>
-                Anyone with the link can read it, which is a deliberate choice about <em>this page</em> and nothing
-                else. It is written to be public: no runtime data, no secrets, no local paths — enforced at build time
-                rather than promised, since the build scans both the declared data and every byte it is about to
-                publish. Being public is also why the weaknesses here are stated plainly instead of softened.
-              </p>
-            </div>
-            <div className="card">
-              <h3 style={{ fontSize: "0.92rem", marginBottom: "0.5rem" }}>Platform columns are weakly checked</h3>
-              <p style={{ color: "var(--text-2)", fontSize: 14 }}>
-                The build refuses a platform marked verified when every cited test is build-tagged away from it. It
-                cannot refuse a test that <em>compiles</em> on a platform without establishing anything there — the
-                path-swap test compiles on Windows and proves nothing on it. Those columns rest on judgement, not on
-                the check.
-              </p>
-            </div>
-            <div className="card">
-              <h3 style={{ fontSize: "0.92rem", marginBottom: "0.5rem" }}>Absence of an attack is not safety</h3>
-              <p style={{ color: "var(--text-2)", fontSize: 14 }}>
-                The Break Nim table lists {summary.attacks.total} attempts someone thought of. It is not the set of
-                attacks that exist. Rows are added when a new one is imagined, which means the table grows when Nim gets
-                more scrutiny, not when it gets worse. The same applies upward: the {summary.guarantees.total}{" "}
-                guarantees are the properties someone chose to write down, so a property nobody listed cannot appear
-                here as unverified.
-              </p>
-            </div>
-          </div>
-        </Section>
+          </dl>
+        </section>
 
-        <footer>
-          <div>
-            Generated from <span className="mono">{derived.commit}</span> — {derived.goFileCount} Go files,{" "}
-            {derived.testCount} tests, {derived.packageCount} packages. Static page: no server, no API, no runtime data,
-            no secrets.
+        <section className="lp-proof" aria-label="Evidence">
+          <ul>
+            <li>
+              <b>{derived.testCount}</b>
+              <span>tests, run with the race detector on every change</span>
+            </li>
+            <li>
+              <b>{summary.attacks.total}</b>
+              <span>attacks tried against real builds, {summary.attacks.liveBefore} of them live before they were closed</span>
+            </li>
+            <li>
+              <b>{summary.guarantees.total}</b>
+              <span>guarantees, each citing the tests that hold it</span>
+            </li>
+            <li>
+              <b>{summary.findings.total}</b>
+              <span>findings published, {summary.findings.open} still open</span>
+            </li>
+          </ul>
+          <p>
+            All of it is on the <a href="/status/">status page</a>, which refuses to build on a claim without a test
+            behind it.
+          </p>
+        </section>
+
+        <section className="lp-access" id="access" aria-labelledby="lp-access-title">
+          <div className="lp-inner">
+            <h2 id="lp-access-title">Early access</h2>
+            <p>
+              The engine is free for one person and one machine, and always will be. The team console, with the
+              journal of every machine, policy in one place and approvals from your phone, opens to a small group
+              first.
+            </p>
+            <Waitlist />
           </div>
-          <div>
-            Source of the declared half: <span className="mono">dashboard/data/state.json</span>. Checked by{" "}
-            <span className="mono">dashboard/scripts/generate.mjs</span>, which exits non-zero rather than publish a
-            claim whose evidence it cannot find.
-          </div>
-        </footer>
+        </section>
       </main>
+
+      <footer className="lp-foot">
+        <span>Nim, {new Date(derived.commitDate).getUTCFullYear()}. Built from commit {derived.commit}.</span>
+        <nav aria-label="Footer">
+          <a href="/status/">Status</a>
+          <a href="/status/#architecture">Architecture</a>
+          <a href="/status/#decisions">Decisions</a>
+        </nav>
+      </footer>
     </div>
   );
 }

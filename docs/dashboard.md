@@ -155,6 +155,21 @@ runtime data, no secrets and no local paths -- enforced at build time, not
 promised. Deployment protection on the Vercel project is off. That decision is
 about this page only and extends to nothing else the project publishes.
 
+Since 2026-09-25 the same deployment serves two pages. The product page at
+`/` is the public face of Nim: a real session's `nim log`, the `nim approve`
+moment, how the relay fits, what Nim does not promise, and an early-access
+form. The status page, this dashboard, moved to `/status/`; every anchor it
+had still works there. Both are built from the same repository by the same
+generator, and the output scan covers both. The product page is meant to be
+found, so the `noindex` header (D-005) now applies to `/status` only.
+
+The early-access form is the one thing here with a server behind it:
+`api/waitlist.js`, a Vercel function outside Next that stores an address and
+a timestamp in a private Blob store and nothing else, one record per address.
+Its token is a Vercel environment variable, never in the repository. When the
+store is absent the function answers 503 and the page says sign-ups are not
+open yet, rather than pretending.
+
 How it got there is worth keeping. An earlier version of this section said the
 project had Vercel Authentication enabled and that a deployment would be
 readable only by the team. Reading the setting was not enough: the protection

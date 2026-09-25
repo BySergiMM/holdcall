@@ -2,10 +2,9 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Nim — Control Plane",
+  title: "Nim — the control that stays on your machine",
   description:
-    "What Nim actually guarantees, what it does not, and what has not been tested. Built from the repository; refuses to build on an unsubstantiated claim.",
-  robots: { index: false, follow: false },
+    "Nim sits between your agent and its MCP tools. It decides every call on your machine, shows you the real arguments before anything dangerous runs, and keeps a record you can verify offline.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

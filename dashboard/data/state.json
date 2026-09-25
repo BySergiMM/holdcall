@@ -1744,7 +1744,7 @@
       "title": "Should the public page be search-indexed?",
       "question": "Public and indexed are different things. The build still sends X-Robots-Tag: noindex, nofollow, noarchive, nosnippet, so the page is readable by anyone given the link but will not appear in search results.",
       "status": "resolved",
-      "resolution": "noindex stays, deliberately: readable by anyone given the link, absent from search. The reversible direction -- a page can be indexed later, it cannot be reliably un-indexed once crawled and archived -- chosen for a page that lists this project's weaknesses. docs/decisions/0006.",
+      "resolution": "noindex stays, deliberately: readable by anyone given the link, absent from search. The reversible direction -- a page can be indexed later, it cannot be reliably un-indexed once crawled and archived -- chosen for a page that lists this project's weaknesses. docs/decisions/0006. Since 2026-09-25 the deployment also serves a product page at /, which is meant to be found; noindex applies to the status page at /status only.",
       "provenance": "declared",
       "decidedOn": "2026-09-16"
     }

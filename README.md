@@ -265,8 +265,9 @@ tools/       The relay rig: a real MCP client, run direct and through Nim.
 ```
 
 The engine keeps working with no network. `dashboard/` is deployed publicly
-(D-003) and shows no runtime state; the hosted journal viewer is M8 and does
-not exist.
+(D-003): the product page at the root and the status page at `/status/`, both
+built from this repository and showing no runtime state; the hosted journal
+viewer is M8 and does not exist.
 
 ## Building
 
