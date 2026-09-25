@@ -1,5 +1,8 @@
 # Nim
 
+**[nim-blush.vercel.app](https://nim-blush.vercel.app)** — the product page,
+and [/status](https://nim-blush.vercel.app/status/) for what is verified.
+
 Nim is a local process that sits between an MCP client — Claude Code, Cursor,
 Claude Desktop — and the MCP servers it spawns. It holds each server's
 credentials, decides whether every `tools/call` is allowed before it reaches
@@ -279,10 +282,12 @@ Go 1.26.6 or newer, which the `go` directive fetches on demand. No C
 toolchain: the SQLite driver is pure Go, so the engine cross-compiles for
 darwin, linux and windows with `CGO_ENABLED=0`.
 
-Everything has been run on darwin/arm64. Linux is exercised in CI; **no code
-in this project has ever been run on Windows**, only cross-compiled, and two
-of its security properties are known not to hold there — see the *Known gaps*
-table in `docs/security.md`.
+Everything has been run on darwin/arm64. The CI workflow runs the suite on
+Linux and Windows too, but as of 2026-09-25 it has not executed: GitHub
+Actions is unavailable on this account until October. Until it runs, Linux
+is compiled and vetted here, not executed, and **no code in this project has
+ever been run on Windows**, where two of its security properties are known not
+to hold — see the *Known gaps* table in `docs/security.md`.
 
 ### Running CI without GitHub's runners
 

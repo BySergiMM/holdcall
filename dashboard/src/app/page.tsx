@@ -23,9 +23,25 @@ const DECISION_LABEL: Record<string, string> = {
   rejected: "rejected",
 };
 
+// Structured data for the product page: what it is, that it costs nothing
+// for one person, and where it runs. Nothing here that the page does not
+// already say in prose.
+const JSON_LD = {
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  name: "Nim",
+  applicationCategory: "DeveloperApplication",
+  operatingSystem: "macOS",
+  description:
+    "A local relay that decides every MCP tool call on your machine, holds the dangerous ones for a human who sees the real arguments, and keeps a record you can verify offline.",
+  url: "https://nim-blush.vercel.app/",
+  offers: { "@type": "Offer", price: "0", priceCurrency: "EUR", description: "Free for one person and one machine" },
+};
+
 export default function Landing() {
   return (
     <div className="lp">
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(JSON_LD) }} />
       <header className="lp-top">
         <a className="lp-wordmark" href="/" aria-label="Nim, home">
           nim
