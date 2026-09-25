@@ -77,7 +77,7 @@ yet, so there is no release to download (see `CHANGELOG.md`). Go 1.26.6 or
 newer; see *Building* for the rest:
 
 ```bash
-git clone https://github.com/BySergiMM/holdcall.git && cd nim/engine
+git clone https://github.com/BySergiMM/holdcall.git && cd holdcall/engine
 go build -o bin/nim ./cmd/nim && ./bin/nim version
 ```
 
