@@ -226,7 +226,10 @@ jobs:
           TAG: ${{ needs.prepare.outputs.tag }}
         run: |
           notes="$(mktemp)"
-          awk -v tag="$TAG" '
+          # CHANGELOG.md names versions without the v the tag carries
+          # (Keep a Changelog: "## [0.1.1] - 2026-09-26"), so match on the
+          # bare version and let the date follow.
+          awk -v tag="${TAG#v}" '
             $0 ~ ("^## \\[" tag "\\]") { found = 1; next }
             found && /^## \[/ { exit }
             found { print }

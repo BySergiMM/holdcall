@@ -89,11 +89,10 @@ to `data/holdcall.db` inside it to keep the journal, rules and enrolments, run
 connector's credential again, since the keychain items were stored under the
 old name. `CHANGELOG.md` has the full list.
 
-**From a release.** `v0.1.0` exists, built by hand on macOS on 2026-09-26;
-`CHANGELOG.md` says which archive was actually executed. While the repository
-is private the installer cannot fetch it anonymously, so take the archive from
-the release page with your GitHub session; once the repository is public this
-is the line:
+**From a release.** `v0.1.1` was built and published by the release
+workflow on GitHub's runners; `CHANGELOG.md` says what each version was
+tested on. The installer resolves the latest release, verifies the archive
+against `SHA256SUMS`, and refuses on any mismatch:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/BySergiMM/holdcall/m1-bootstrap/install.sh | sh

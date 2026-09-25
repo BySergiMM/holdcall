@@ -3,13 +3,25 @@
 All notable changes to this project are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-`0.1.0` is the first tagged version and describes everything built so far on
-`m1-bootstrap`; there is no prior release for it to diff against, so read it
-as a status report rather than a list of deltas. `docs/milestones.md` is the
+`0.1.0` was the first tagged version and describes everything built so far
+on `m1-bootstrap`; there is no prior release for it to diff against, so read
+it as a status report rather than a list of deltas. `0.1.1` is the first
+release the workflow itself built. `docs/milestones.md` is the
 source of truth this section summarizes, and is where the detail and the
 test names behind each claim live.
 
 ## [Unreleased]
+
+Nothing since 0.1.1.
+
+## [0.1.1] - 2026-09-26
+
+Built and published by `.github/workflows/release.yml` on GitHub's runners,
+the first release that was: the repository is public since 2026-09-26 and
+the runners can start. The suite ran on ubuntu-latest before the build; the
+same commit passed on macos-latest in CI. Every archive comes from the same
+commit; darwin/arm64 is also the build the maintainer runs. Windows archives
+are still cross-compiled from a tree whose tests fail there (F-029).
 
 ### Changed
 

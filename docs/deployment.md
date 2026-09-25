@@ -42,6 +42,10 @@ hand on macOS with the workflow's own flags and layout, from the tagged
 commit, and published with `gh release create`. Only darwin/arm64 was
 executed; the release notes and `CHANGELOG.md` say so.
 
+`v0.1.1` (2026-09-26) is the first release the workflow itself produced,
+once the repository was public and GitHub's runners could start: tests on
+ubuntu-latest, five archives, `SHA256SUMS`, published by the `publish` job.
+
 ## History worth keeping
 
 Between 2026-08-11 11:39 and 14:13 the Vercel project `holdcall` was connected to
