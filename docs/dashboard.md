@@ -168,7 +168,10 @@ The early-access form is the one thing here with a server behind it:
 a timestamp in a private Blob store and nothing else, one record per address.
 Its token is a Vercel environment variable, never in the repository. When the
 store is absent the function answers 503 and the page says sign-ups are not
-open yet, rather than pretending.
+open yet, rather than pretending. The store lives in Vercel's Paris region
+(`cdg1`) since 2026-09-25: the addresses are people's, and nothing about
+them needs to leave the EU. The move was proven end to end with one probe
+address that was then deleted; the store held no other record at the time.
 
 How it got there is worth keeping. An earlier version of this section said the
 project had Vercel Authentication enabled and that a deployment would be
