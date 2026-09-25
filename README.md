@@ -72,8 +72,16 @@ why those are different questions.
 
 ## Install
 
-**From a release**, once one exists — no version has been tagged yet (see
-`CHANGELOG.md`):
+**From source**, which is the only way today — no version has been tagged
+yet, so there is no release to download (see `CHANGELOG.md`). Go 1.26.6 or
+newer; see *Building* for the rest:
+
+```bash
+git clone https://github.com/BySergiMM/nim.git && cd nim/engine
+go build -o bin/nim ./cmd/nim && ./bin/nim version
+```
+
+**From a release**, once one exists:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/BySergiMM/nim/m1-bootstrap/install.sh | sh
@@ -84,12 +92,6 @@ POSIX `sh`, never `sudo`, writes only inside `NIM_INSTALL_DIR` (default
 `NIM_VERSION=vX.Y.Z` to pin one, checks the archive's SHA-256 against that
 release's `SHA256SUMS`, and refuses — nothing written — on any mismatch.
 Windows has no `sh`: take the `.zip` from the release page.
-
-**From source** — see *Building* for the requirements:
-
-```bash
-cd engine && go build -o bin/nim ./cmd/nim
-```
 
 A release binary adds the ldflags that make `nim version` report something
 other than `0.0.0-dev`, the same ones `.github/workflows/release.yml` uses
