@@ -138,13 +138,23 @@ the call never reached the server that would have run it.
 
 ```bash
 nim log        # shows the call: deny, no result
-nim console    # the same journal, plus sessions and policy, at 127.0.0.1:7717
+nim console    # the same journal, plus held calls, sessions and policy, at 127.0.0.1:7717
 ```
 
-![The console's Journal tab over a journal holding an enrolment, four rules and two sessions: every entry in chain order, with the session, the call number, the tool and the decision](docs/images/console.png)
+![The console's Journal view over a demo journal: every entry in chain order with its kind, tool, decision, agent and connector, and entry 22, a rejected call, open beside it with its prev_hash and hash](docs/images/console.png)
 
-The console is read-only and serves loopback only; `/#journal`, `/#sessions`
-and `/#policy` open a tab directly.
+The console is read-only and serves loopback only. It has five views:
+an overview of the record (chain check, decisions, detectable gaps, the
+policy in effect), the calls **held** for a human with their real
+arguments and the `nim approve` / `nim reject` lines to copy, the
+**journal** with filters and a detail drawer showing each entry's place in
+the chain, **sessions** with a timeline each, and the **policy** with an
+"explain a call" form that runs the daemon's own decision function. Deciding
+stays on the command line on purpose: a page any other page on this machine
+can reach must not be able to approve. `/#held`, `/#journal/22` and
+`/#sessions/<id>` open a view, an entry or a session directly.
+
+![The console's Held view: one call to dangerous_tool held for a human, with the agent, connector, its real arguments including a bidirectional override shown as an escape, and the approve and reject commands to copy](docs/images/console-held.png)
 
 ## Policy
 

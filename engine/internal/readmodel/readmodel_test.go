@@ -37,8 +37,14 @@ type fake struct {
 	connectors []journal.Connector
 }
 
-func (f *fake) ListRules() ([]journal.Rule, error)           { return f.rules, f.err }
-func (f *fake) ListBudgets() ([]journal.Budget, error)       { return f.budgets, f.err }
+func (f *fake) ListRules() ([]journal.Rule, error)     { return f.rules, f.err }
+func (f *fake) ListBudgets() ([]journal.Budget, error) { return f.budgets, f.err }
+func (f *fake) MatchingRules(agent, connector, tool string) ([]journal.Rule, error) {
+	return f.rules, f.err
+}
+func (f *fake) MatchingBudgets(agent, connector, tool string) ([]journal.Budget, error) {
+	return f.budgets, f.err
+}
 func (f *fake) ListAgents() ([]journal.Agent, error)         { return f.agents, f.err }
 func (f *fake) ListConnectors() ([]journal.Connector, error) { return f.connectors, f.err }
 

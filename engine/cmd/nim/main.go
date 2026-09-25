@@ -769,6 +769,25 @@ func runConsole(args []string) error {
 		return err
 	}
 	srv := console.New(j, cfg.Daemon.Socket)
+	// The one thing the console reads from the daemon rather than the
+	// journal: the calls held for a human, with their real arguments, so
+	// they can be seen here and decided with nim approve. Through the same
+	// verified dial every command uses; a purpose of its own on the socket.
+	srv.Pending = func() ([]daemon.PendingInfo, error) {
+		conn, err := shim.DialRunningDaemon(cfg, dialTimeout)
+		if err != nil {
+			return nil, err
+		}
+		defer conn.Close()
+		resp, err := daemon.SendRequest(conn, daemon.Request{ID: config.NewID(), Kind: daemon.KindApprovalList})
+		if err != nil {
+			return nil, err
+		}
+		if resp.Error != "" {
+			return nil, errors.New(resp.Error)
+		}
+		return resp.Pending, nil
+	}
 
 	fmt.Println("nim console on http://" + listener.Addr().String())
 	fmt.Println("reading", cfg.DatabasePath())

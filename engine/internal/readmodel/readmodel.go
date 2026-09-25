@@ -59,6 +59,11 @@ type PolicySource interface {
 	ListBudgets() ([]journal.Budget, error)
 	ListAgents() ([]journal.Agent, error)
 	ListConnectors() ([]journal.Connector, error)
+	// The two reads a decision makes, so Explain can show what the daemon
+	// would do with a call without a second copy of the precedence: the
+	// candidates come from here and journal.Decide picks among them.
+	MatchingRules(agent, connector, tool string) ([]journal.Rule, error)
+	MatchingBudgets(agent, connector, tool string) ([]journal.Budget, error)
 }
 
 // Source is all four, for wiring: a caller holding a journal passes it once

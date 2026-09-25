@@ -218,3 +218,43 @@ func TakePolicy(src PolicySource) (Policy, error) {
 
 	return p, nil
 }
+
+// Explanation is what `nim policy explain` says, as a reader sees it: the
+// effect a call shaped like (agent, connector, tool) would get, the rule that
+// decides it when one does, every rule that matched, and the budgets that
+// would be weighed once the rules allow. Decision is what journal.Decide
+// returns -- the one function the daemon and the CLI already share -- so
+// the console cannot say something a real call would not do.
+type Explanation struct {
+	Agent     string   `json:"agent"`
+	Connector string   `json:"connector"`
+	Tool      string   `json:"tool"`
+	Decision  string   `json:"decision"`
+	ByRule    bool     `json:"by_rule"`
+	Rule      *Rule    `json:"rule,omitempty"`
+	Matching  []Rule   `json:"matching"`
+	Budgets   []Budget `json:"budgets"`
+}
+
+// Explain projects the decision for one call shape. "" for agent or
+// connector means an unenrolled program or an unnamed connector, exactly as
+// the daemon sees a session that no enrolment matched.
+func Explain(src PolicySource, agent, connector, tool string) (Explanation, error) {
+	out := Explanation{Agent: agent, Connector: connector, Tool: tool, Decision: journal.DecisionAllow,
+		Matching: []Rule{}, Budgets: []Budget{}}
+	candidates, err := src.MatchingRules(agent, connector, tool)
+	if err != nil {
+		return out, err
+	}
+	out.Matching = RulesFrom(candidates)
+	if winner, found := journal.Decide(candidates); found {
+		r := RuleFrom(winner)
+		out.Rule, out.ByRule, out.Decision = &r, true, winner.Effect
+	}
+	budgets, err := src.MatchingBudgets(agent, connector, tool)
+	if err != nil {
+		return out, err
+	}
+	out.Budgets = BudgetsFrom(budgets)
+	return out, nil
+}

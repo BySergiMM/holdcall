@@ -194,8 +194,14 @@ type fakePolicy struct {
 	err        error
 }
 
-func (f *fakePolicy) ListRules() ([]journal.Rule, error)           { return f.rules, f.err }
-func (f *fakePolicy) ListBudgets() ([]journal.Budget, error)       { return f.budgets, f.err }
+func (f *fakePolicy) ListRules() ([]journal.Rule, error)     { return f.rules, f.err }
+func (f *fakePolicy) ListBudgets() ([]journal.Budget, error) { return f.budgets, f.err }
+func (f *fakePolicy) MatchingRules(agent, connector, tool string) ([]journal.Rule, error) {
+	return f.rules, f.err
+}
+func (f *fakePolicy) MatchingBudgets(agent, connector, tool string) ([]journal.Budget, error) {
+	return f.budgets, f.err
+}
 func (f *fakePolicy) ListAgents() ([]journal.Agent, error)         { return f.agents, f.err }
 func (f *fakePolicy) ListConnectors() ([]journal.Connector, error) { return f.connectors, f.err }
 
@@ -257,5 +263,35 @@ func TestTakePolicyProjectsBudgets(t *testing.T) {
 	}
 	if pol.Budgets[0].CreatedAt != "2026-09-15T10:00:00Z" {
 		t.Errorf("created_at = %q", pol.Budgets[0].CreatedAt)
+	}
+}
+
+// Explain says what a call shape gets and which rule decided it, through
+// journal.Decide -- the one precedence function -- so a console that shows
+// it cannot drift from what the daemon does.
+func TestExplainNamesTheDecidingRuleAndTheBudgetsThatApply(t *testing.T) {
+	agent := "claude-code"
+	rules := []journal.Rule{
+		{ID: 1, Tool: journal.RuleToolDefault, Effect: journal.DecisionDeny},
+		{ID: 2, Agent: &agent, Tool: "rm", Effect: journal.DecisionAsk},
+	}
+	budgets := []journal.Budget{{ID: 1, Tool: "rm", Calls: 5}}
+	ex, err := Explain(&fakePolicy{rules: rules, budgets: budgets}, agent, "", "rm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ex.Decision != journal.DecisionAsk || !ex.ByRule || ex.Rule == nil || ex.Rule.Tool != "rm" {
+		t.Fatalf("the exact, agent-scoped ask should decide: %+v", ex)
+	}
+	if len(ex.Matching) != 2 || len(ex.Budgets) != 1 || ex.Budgets[0].Calls != 5 {
+		t.Errorf("matching rules and budgets were not all reported: %+v", ex)
+	}
+
+	none, err := Explain(&fakePolicy{}, "", "", "ls")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if none.Decision != journal.DecisionAllow || none.ByRule || none.Rule != nil || none.Matching == nil || none.Budgets == nil {
+		t.Errorf("no matching rule is allow, with empty lists rather than nil: %+v", none)
 	}
 }

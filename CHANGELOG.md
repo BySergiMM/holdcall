@@ -11,6 +11,28 @@ the test names behind each claim live.
 
 ## [Unreleased]
 
+### Changed
+
+- **The console was redesigned around the calls that need a human.** One
+  page, light and dark, with five views. *Overview*: the chain check, the
+  decisions this page has read, the newest calls, the gaps the record can
+  detect in itself and the policy in effect. *Held*: every call an `ask`
+  rule stopped, read from the daemon over the verified socket, with its
+  real arguments (bidirectional overrides and control characters shown as
+  escapes) and the `nim approve` / `nim reject` lines to copy; a strip at
+  the top says how many are waiting from any view. *Journal*: every entry
+  as it is written, with search and kind/decision filters, agent and
+  connector joined from the session, and a drawer showing an entry's
+  `prev_hash` and `hash`. *Sessions*: a timeline per session. *Policy*:
+  rules, budgets, agents and connectors, and an "explain a call" form that
+  runs the daemon's own decision function and names the deciding rule and
+  the budgets that would apply. `#journal/<chain_seq>` and
+  `#sessions/<id>` open an entry or a session directly. Two read-only
+  routes were added for this, `/api/explain` and `/api/pending`; there is
+  still no route that writes, and approving stays on the CLI on purpose.
+  The page is served with `Cache-Control: no-store`, so a browser never
+  drives a daemon with a page from a previous build.
+
 ### Fixed
 
 - **Nim's refusals now follow the handshake the session negotiated (F-021).**

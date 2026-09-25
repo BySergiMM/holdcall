@@ -111,6 +111,14 @@ func TestReadModelSurfaceIsFrozen(t *testing.T) {
 		// calls one session may make. Its calls are the one number here
 		// that is a limit rather than a count of something recorded.
 		{"Budget", Budget{}, []string{"agent", "calls", "connector", "created_at", "tool"}},
+		// Explanation is what nim policy explain says, for the console: the
+		// effect a call shape gets and the rule that decides it. Nothing in
+		// it is recorded; it is the configuration read the way a decision
+		// reads it.
+		{"Explanation", Explanation{}, []string{
+			"agent", "budgets", "by_rule", "calls", "connector", "created_at", "decision",
+			"effect", "matching", "rule", "tool",
+		}},
 		{"Agent", Agent{}, []string{"current", "enrolled_at", "exec_path", "name"}},
 		{"Connector", Connector{}, []string{"command", "env_key", "target", "updated_at"}},
 		{"Policy", Policy{}, []string{
@@ -173,7 +181,7 @@ func TestReadModelCannotExpressEnforcement(t *testing.T) {
 	// Policy carries Rule, Agent and Connector through its own fields, so
 	// walking it also checks them: a connector row must never grow a field
 	// this list would catch, any more than an Event may.
-	for _, dto := range []any{Event{}, Page{}, Snapshot{}, JournalState{}, Gaps{}, Session{}, SessionDetail{}, Policy{}, Budget{}} {
+	for _, dto := range []any{Event{}, Page{}, Snapshot{}, JournalState{}, Gaps{}, Session{}, SessionDetail{}, Policy{}, Budget{}, Explanation{}} {
 		name := reflect.TypeOf(dto).Name()
 		for _, field := range jsonFields(t, dto) {
 			if why, bad := forbidden[field]; bad {

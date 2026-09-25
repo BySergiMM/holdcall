@@ -153,8 +153,13 @@ never in the console.
   `nim daemon restart`: policy and lifecycle, all through the daemon's
   verified socket.
 - `nim console`: a read-only page on loopback only (`Host` must be a
-  loopback name), with `/api/snapshot`, `/api/events`, `/api/sessions/<id>`
-  and `/api/policy`; tabs are URL fragments.
+  loopback name), with `/api/snapshot`, `/api/events`, `/api/sessions/<id>`,
+  `/api/policy`, `/api/explain?tool=&agent=&connector=` (the daemon's own
+  `journal.Decide`, applied to the rules as they stand) and `/api/pending`
+  (what the daemon holds for approval, read over the verified socket; it
+  says so when the daemon cannot be asked). Views are URL fragments, and
+  `#journal/<chain_seq>` or `#sessions/<id>` open one entry or session.
+  There is no write route: approving stays on the CLI.
 
 ## Layer 7: the repository's own claims (`dashboard/`, `.github/`)
 

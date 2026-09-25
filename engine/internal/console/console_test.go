@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/BySergiMM/nim/engine/internal/daemon"
 	"github.com/BySergiMM/nim/engine/internal/journal"
 	"github.com/BySergiMM/nim/engine/internal/peer"
 	"github.com/BySergiMM/nim/engine/internal/readmodel"
@@ -86,7 +87,7 @@ func decode[T any](t *testing.T, body []byte) T {
 func TestNoEndpointAcceptsAWrite(t *testing.T) {
 	srv, _ := serve(t, func(j *journal.Journal) { j.Append(session("s1", "github")) })
 
-	paths := []string{"/", "/api/snapshot", "/api/events", "/api/sessions/s1", "/api/policy"}
+	paths := []string{"/", "/api/snapshot", "/api/events", "/api/sessions/s1", "/api/policy", "/api/explain?tool=rm", "/api/pending"}
 	methods := []string{http.MethodPost, http.MethodPut, http.MethodPatch,
 		http.MethodDelete, "TRACE"}
 
@@ -391,6 +392,19 @@ func TestIndexIsServedOnlyAtRoot(t *testing.T) {
 	}
 }
 
+// The page is embedded in the binary and drives a daemon of the same build.
+// A browser keeping a copy from a previous build would send that build's
+// requests to this one, so the page, like the API, must never be cached.
+func TestThePageIsNeverCached(t *testing.T) {
+	srv, _ := serve(t, nil)
+	for _, p := range []string{"/", "/api/snapshot", "/api/policy", "/api/pending"} {
+		res, _ := get(t, srv, p)
+		if cc := res.Header.Get("Cache-Control"); cc != "no-store" {
+			t.Errorf("%s: Cache-Control = %q, want no-store", p, cc)
+		}
+	}
+}
+
 // The console shows a record of what an agent did. That belongs on loopback.
 func TestListenRefusesNonLoopback(t *testing.T) {
 	for _, addr := range []string{"0.0.0.0:0", "192.168.1.10:0", "[::]:0"} {
@@ -434,7 +448,7 @@ func TestTheConsoleAnswersOnlyToALoopbackName(t *testing.T) {
 	}
 
 	for _, host := range []string{"attacker.example:7717", "nim.internal", "127.0.0.1.attacker.example:7717", "10.0.0.5:7717"} {
-		for _, path := range []string{"/", "/api/snapshot", "/api/events", "/api/sessions/s1", "/api/policy"} {
+		for _, path := range []string{"/", "/api/snapshot", "/api/events", "/api/sessions/s1", "/api/policy", "/api/explain?tool=rm", "/api/pending"} {
 			req, _ := http.NewRequest(http.MethodGet, srv.URL+path, nil)
 			req.Host = host
 			resp, err := http.DefaultClient.Do(req)
@@ -580,5 +594,90 @@ func TestPolicyReportsAStaleEnrolment(t *testing.T) {
 	}
 	if pol.Agents[0].Current == nil || *pol.Agents[0].Current {
 		t.Fatal("an enrolment pointing at a missing file was not reported STALE")
+	}
+}
+
+// The console's explanation of a call is the daemon's decision function
+// applied to the same rules, so the two can never disagree.
+func TestExplainNamesTheDecidingRule(t *testing.T) {
+	srv, _ := serve(t, func(j *journal.Journal) {
+		if _, err := j.AddRule(journal.Rule{Tool: journal.RuleToolDefault, Effect: journal.DecisionDeny}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := j.AddRule(journal.Rule{Tool: "read_file", Connector: sp("github"), Effect: journal.DecisionAllow}); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	_, body := get(t, srv, "/api/explain?tool=read_file&connector=github")
+	ex := decode[readmodel.Explanation](t, body)
+	if ex.Decision != journal.DecisionAllow || ex.Rule == nil || ex.Rule.Tool != "read_file" {
+		t.Fatalf("the exact allow on the connector should decide: %+v", ex)
+	}
+	_, body = get(t, srv, "/api/explain?tool=read_file")
+	ex = decode[readmodel.Explanation](t, body)
+	if ex.Decision != journal.DecisionDeny {
+		t.Fatalf("off the connector only the default deny matches: %+v", ex)
+	}
+
+	res, _ := get(t, srv, "/api/explain")
+	if res.StatusCode != http.StatusBadRequest {
+		t.Errorf("a missing tool got %d, want 400", res.StatusCode)
+	}
+	res, _ = get(t, srv, "/api/explain?tool=%01x")
+	if res.StatusCode != http.StatusBadRequest {
+		t.Errorf("a control character in a name got %d, want 400", res.StatusCode)
+	}
+}
+
+// Held calls are read from the daemon and shown with their real arguments,
+// as nim approve prints them; when nothing can ask the daemon the page is
+// told so, never an empty list that looks like "nothing is held".
+func TestPendingSaysWhetherTheDaemonCouldBeAsked(t *testing.T) {
+	srv, _ := serve(t, nil)
+	_, body := get(t, srv, "/api/pending")
+	var out struct {
+		Available bool                 `json:"available"`
+		Reason    string               `json:"reason"`
+		Pending   []daemon.PendingInfo `json:"pending"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Available || out.Reason == "" || out.Pending == nil {
+		t.Fatalf("a console with no way to ask should say so, with an empty list: %s", body)
+	}
+}
+
+func TestPendingShowsWhatTheDaemonHolds(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nim.db")
+	w, err := journal.Open(path, "test-machine")
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Close()
+	j, err := journal.OpenReadOnly(path, "test-machine")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+	s := New(j, "/nonexistent.sock")
+	s.Pending = func() ([]daemon.PendingInfo, error) {
+		return []daemon.PendingInfo{{ID: "s1-1", Tool: "send_email", Agent: "claude-code", Connector: "mail",
+			Arguments: json.RawMessage(`{"to":"ceo@example.com"}`), ArgumentsKnown: true, StartedAt: "2026-09-25T10:00:00Z"}}, nil
+	}
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	_, body := get(t, srv, "/api/pending")
+	var out struct {
+		Available bool                 `json:"available"`
+		Pending   []daemon.PendingInfo `json:"pending"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !out.Available || len(out.Pending) != 1 || string(out.Pending[0].Arguments) != `{"to":"ceo@example.com"}` {
+		t.Fatalf("the held call and its real arguments should be shown: %s", body)
 	}
 }

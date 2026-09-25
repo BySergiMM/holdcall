@@ -205,8 +205,8 @@ export default function Landing() {
             as the kernel reports it; nothing on the wire can claim to be Claude Code.
           </p>
           <figure className="lp-shot">
-            <img src="/console.png" alt="The local console's Journal tab: every entry in chain order, with session, call number, tool and decision" width="1280" height="860" loading="lazy" />
-            <figcaption>The local console, read-only, on loopback. The same projection every command reads.</figcaption>
+            <img src="/console.png" alt="The local console's Held view: one call to dangerous_tool held for a human, showing the agent, the connector, its real arguments with a bidirectional override made visible, and the approve and reject commands to copy" width="1440" height="900" loading="lazy" />
+            <figcaption>The local console, read-only, on loopback: a held call with its real arguments. Approving stays on the command line.</figcaption>
           </figure>
         </section>
 
