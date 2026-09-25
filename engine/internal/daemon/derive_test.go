@@ -202,7 +202,7 @@ func TestDeriveAgentMatchesTheEnrolledParent(t *testing.T) {
 	if err != nil {
 		t.Skipf("cannot read the parent's image: %v", err)
 	}
-	if err := j.SetAgent(journalAgent("the-runner", img)); err != nil {
+	if err := j.AddAgent(journalAgent("the-runner", img)); err != nil {
 		t.Fatalf("enrolling: %v", err)
 	}
 
@@ -212,7 +212,7 @@ func TestDeriveAgentMatchesTheEnrolledParent(t *testing.T) {
 
 	// A different identity must not match. Shifting the inode by one is enough
 	// and cannot collide with the real one.
-	if err := j.SetAgent(journalAgent("the-runner", peer.NewImage(img.Dev(), img.Ino()+1))); err != nil {
+	if err := j.AddAgent(journalAgent("the-runner", peer.NewImage(img.Dev(), img.Ino()+1))); err != nil {
 		t.Fatalf("re-enrolling: %v", err)
 	}
 	if got := deriveAgent(server, j); got != "" {

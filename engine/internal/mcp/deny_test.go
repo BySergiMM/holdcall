@@ -15,7 +15,7 @@ import (
 func TestALargeIDSurvivesVerbatim(t *testing.T) {
 	const id = "9007199254740993"
 
-	line := DenyResponse(json.RawMessage(id), DeniedByPolicy)
+	line := DenyResponse(json.RawMessage(id), DeniedByPolicy, "")
 	if !strings.Contains(string(line), `"id":`+id) {
 		t.Fatalf("the id was rewritten: %s", line)
 	}
@@ -35,7 +35,7 @@ func TestALargeIDSurvivesVerbatim(t *testing.T) {
 // The shape MCP uses for a tool that failed: a successful response whose result
 // carries isError, not a JSON-RPC protocol error.
 func TestDenyResponseIsAToolError(t *testing.T) {
-	line := DenyResponse(json.RawMessage(`7`), DeniedByPolicy)
+	line := DenyResponse(json.RawMessage(`7`), DeniedByPolicy, "")
 
 	var got struct {
 		JSONRPC string          `json:"jsonrpc"`
@@ -213,6 +213,45 @@ func TestIsNotification(t *testing.T) {
 		}
 		if got := env.IsNotification(); got != want {
 			t.Errorf("%s: IsNotification = %v, want %v", raw, got, want)
+		}
+	}
+}
+
+// A refusal is written in the dialect the session negotiated. Under the
+// 2026-07-28 revision every result must name its resultType and a client
+// refuses to parse one that does not; under the older handshake the field is
+// unknown and is not sent. Reproduced against fastmcp 4.0.3 before this test
+// existed: in its default mode the refusal raised a validation error on the
+// client instead of reading as a tool error (F-021).
+func TestARefusalCarriesResultTypeOnlyWhenTheProtocolRequiresIt(t *testing.T) {
+	for version, want := range map[string]string{
+		"":           "",
+		"2025-06-18": "",
+		"2025-11-25": "",
+		"2026-07-28": ResultTypeComplete,
+		"2027-01-01": ResultTypeComplete,
+	} {
+		line := DenyResponse(json.RawMessage(`7`), DeniedByPolicy, version)
+
+		var got struct {
+			Result map[string]json.RawMessage `json:"result"`
+		}
+		if err := json.Unmarshal(line, &got); err != nil {
+			t.Fatalf("%q: %v", version, err)
+		}
+		raw, present := got.Result["resultType"]
+		if want == "" {
+			if present {
+				t.Errorf("%q: a refusal for an older client carries resultType %s; that client does not know the field", version, raw)
+			}
+			continue
+		}
+		var typ string
+		if err := json.Unmarshal(raw, &typ); err != nil || typ != want {
+			t.Errorf("%q: resultType = %s, want %q", version, raw, want)
+		}
+		if !json.Valid(got.Result["content"]) || string(got.Result["isError"]) != "true" {
+			t.Errorf("%q: the rest of the refusal changed shape: %s", version, line)
 		}
 	}
 }

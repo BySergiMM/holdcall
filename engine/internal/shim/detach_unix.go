@@ -42,3 +42,7 @@ func startDaemonProcess(path string, log *os.File) error {
 	go cmd.Wait()
 	return nil
 }
+
+// terminate asks a downstream connector to stop, the polite way, before the
+// relay resorts to killing it.
+func terminate(p *os.Process) { p.Signal(syscall.SIGTERM) }

@@ -1,14 +1,17 @@
 // Package config resolves where Nim keeps its state and reads config.toml.
 //
-// config.toml configures the daemon: socket path, data directory, and -- for
-// this milestone only -- a list of tool names to refuse.
+// config.toml configures the daemon: socket path and data directory. Nothing
+// an authorization decision depends on is here, and nothing may be added: the
+// standing decision is that SQLite is the only thing a decision reads, because
+// anything able to write a file could otherwise change what Nim allows and
+// leave no record of having done so.
 //
-// That list is scaffolding, not the authorization model. It exists so the
-// enforcement path can be exercised end to end against something real, and it
-// gives up the property the rest of this file was written around: any process
-// able to write config.toml can empty it. Authorization belongs somewhere the
-// daemon owns, and until that exists nothing here should grow wildcards,
-// scopes, per-connector rules or an evaluation order. See docs/milestones.md.
+// It was not always so. From M2 to M4 a [policy] section carried a deny list,
+// as scaffolding, and said so. The rules now live in SQLite, are changed with
+// `nim policy`, and every change is an entry in the journal. A config.toml
+// that still carries the section is refused rather than read past -- see
+// Load -- because a list an operator believes is enforced and is not would be
+// the worst way for the move to go unnoticed.
 package config
 
 import (
@@ -19,7 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"slices"
+	"strings"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -32,31 +35,43 @@ const HomeEnvVar = "NIM_HOME"
 // Config is the whole of config.toml.
 type Config struct {
 	Daemon Daemon `toml:"daemon"`
-	Policy Policy `toml:"policy"`
 }
 
 type Daemon struct {
 	Socket  string `toml:"socket"`
 	DataDir string `toml:"data_dir"`
+	// ApprovalTimeout bounds how long a call an "ask" rule holds waits for a
+	// human to decide it, on both sides: the relay's wait on the same
+	// connection, and the daemon's own timer that rejects and journals the
+	// call if nobody does -- see docs/decisions/0005-human-approval.md. Read
+	// as "2m" in config.toml; ApprovalTimeoutOrDefault is what code actually
+	// consults, because a Config built directly rather than through Load
+	// (every test in this codebase that does not read a real file) leaves
+	// this at its zero value.
+	ApprovalTimeout Duration `toml:"approval_timeout"`
 }
 
-// Policy is a list of tool names to refuse, and nothing more.
-//
-//	[policy]
-//	deny = ["dangerous_tool"]
-//
-// Exact names, compared to params.name as the client sent it. No wildcards, no
-// patterns, no ordering, no per-connector rules: a name is on the list or it is
-// not, and anything not on it is allowed.
-//
-// This is the smallest thing that makes a real denial reachable outside a test.
-// It is not a policy engine and must not become one.
-type Policy struct {
-	Deny []string `toml:"deny"`
+// Duration is a config value read from a TOML string like "2m" -- TOML has
+// no duration type of its own, and approval_timeout is the one field that
+// needs one. UnmarshalText is only called when the key is present, so a
+// non-positive value is refused right there rather than silently becoming
+// "unset" once wrapped in a plain time.Duration; the zero value therefore
+// unambiguously means "the key was absent" wherever this type is read.
+type Duration time.Duration
+
+func (d *Duration) UnmarshalText(text []byte) error {
+	parsed, err := time.ParseDuration(string(text))
+	if err != nil {
+		return fmt.Errorf("not a duration: %w", err)
+	}
+	if parsed <= 0 {
+		return fmt.Errorf("must be positive, not %q", string(text))
+	}
+	*d = Duration(parsed)
+	return nil
 }
 
-// Denied reports whether a tool name is on the deny list.
-func (p Policy) Denied(tool string) bool { return slices.Contains(p.Deny, tool) }
+func (d Duration) String() string { return time.Duration(d).String() }
 
 // Home is the single directory Nim owns.
 func Home() string {
@@ -87,10 +102,20 @@ func Path() string { return filepath.Join(Home(), "config.toml") }
 
 // Load reads config.toml, filling in defaults for anything absent. A missing
 // file is not an error: the defaults are a working configuration.
+//
+// A key this build does not know is an error, not something to read past. A
+// misspelt section used to be accepted silently, which for a file that once
+// held the deny list meant a typo could disable every rule in it with nothing
+// on any surface saying so. The [policy] section itself gets its own message,
+// because the operator who still has one believes it is doing something.
 func Load() (Config, error) {
 	cfg := Config{}
 	if data, err := os.ReadFile(Path()); err == nil {
-		if err := toml.Unmarshal(data, &cfg); err != nil {
+		md, err := toml.Decode(string(data), &cfg)
+		if err != nil {
+			return cfg, fmt.Errorf("%s: %w", Path(), err)
+		}
+		if err := refuseUnknownKeys(md.Undecoded()); err != nil {
 			return cfg, err
 		}
 	} else if !os.IsNotExist(err) {
@@ -102,7 +127,47 @@ func Load() (Config, error) {
 	if cfg.Daemon.Socket == "" {
 		cfg.Daemon.Socket = defaultSocket()
 	}
+	if cfg.Daemon.ApprovalTimeout == 0 {
+		cfg.Daemon.ApprovalTimeout = Duration(DefaultApprovalTimeout)
+	}
 	return cfg, nil
+}
+
+func refuseUnknownKeys(undecoded []toml.Key) error {
+	if len(undecoded) == 0 {
+		return nil
+	}
+	var names []string
+	for _, k := range undecoded {
+		if len(k) > 0 && k[0] == "policy" {
+			return fmt.Errorf(
+				"%s has a [policy] section, and policy no longer lives there.\n"+
+					"Rules are kept in SQLite and changed with the daemon, so that a change is recorded:\n"+
+					"    nim policy deny <tool> [--agent <name>] [--connector <name>]\n"+
+					"Add each tool from the old deny list that way, then remove the section",
+				Path())
+		}
+		names = append(names, k.String())
+	}
+	return fmt.Errorf("%s: unknown key(s) %s -- the file configures [daemon] socket, data_dir and approval_timeout, nothing else",
+		Path(), strings.Join(names, ", "))
+}
+
+// DefaultApprovalTimeout is what an "ask" rule's hold waits for when
+// config.toml names none.
+const DefaultApprovalTimeout = 2 * time.Minute
+
+// ApprovalTimeoutOrDefault is the value the daemon and the relay actually
+// wait on: DefaultApprovalTimeout when the field was never set. Load already
+// applies this default to what it returns; the method exists for the many
+// Config values built directly rather than through Load -- every daemon and
+// shim test in this codebase -- so a zero value there fails closed to the
+// default rather than to an instant timeout nothing asked for.
+func (c Config) ApprovalTimeoutOrDefault() time.Duration {
+	if c.Daemon.ApprovalTimeout <= 0 {
+		return DefaultApprovalTimeout
+	}
+	return time.Duration(c.Daemon.ApprovalTimeout)
 }
 
 // MaxSocketPath is the practical ceiling for an AF_UNIX path. The kernel
@@ -153,10 +218,19 @@ func MachineIDPath() string { return filepath.Join(Home(), "machine-id") }
 // chained to the old one yet.
 func ReadMachineID() (string, bool) {
 	b, err := os.ReadFile(MachineIDPath())
-	if err != nil || len(b) == 0 {
+	if err != nil {
 		return "", false
 	}
-	return string(b), true
+	// The identifier is the file's text with surrounding whitespace removed.
+	// CreateMachineID writes none, but an operator restoring the file by hand
+	// from a note usually gets a trailing newline from the editor, and that
+	// used to seed a different genesis -- so `nim verify` reported the chain
+	// as tampered with when all that had changed was a line ending.
+	id := strings.TrimSpace(string(b))
+	if id == "" {
+		return "", false
+	}
+	return id, true
 }
 
 // CreateMachineID writes a new identifier. Callers must first establish that no

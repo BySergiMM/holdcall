@@ -24,11 +24,28 @@ import (
 
 var errUnsupported = fmt.Errorf("executable identity is not implemented on windows")
 
+// FileIdentitySupported reports whether ImageOfFile can answer at all on
+// this platform. False here: ImageOfFile always fails below, and that
+// failure is a statement about the platform, not about any particular file.
+// A caller that persists an Image and later asks whether a file still
+// matches it (the console's STALE check among them) must read that as
+// "unknown" rather than as "no" -- reporting a platform limitation as a
+// finding about the file would tell an operator their enrolment had gone
+// stale when nothing was actually checked.
+const FileIdentitySupported = false
+
 // ImageOf reports the identity of the file a process is running.
 func ImageOf(pid int) (Image, error) { return Image{}, errUnsupported }
 
 // ImageOfFile reports the identity of a file on disk.
 func ImageOfFile(path string) (Image, error) { return Image{}, errUnsupported }
+
+// ExecPathOf reports the path a process was launched from. Always
+// unsupported here, for the same reason as everything else in this file:
+// Diagnose (peer.go) must never report SameLaunchPathOlderBuild -- and
+// therefore must never tell an operator to `nim daemon restart` -- on a
+// platform where that has no verified basis at all.
+func ExecPathOf(pid int) (path string, ok bool) { return "", false }
 
 // ParentOf reports the pid that spawned pid.
 func ParentOf(pid int) (int, error) { return 0, errUnsupported }

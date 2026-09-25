@@ -10,6 +10,13 @@
 // a different question -- is a denial. There is no path on which a tools/call
 // reaches a connector without a decision behind it.
 //
+// One answer takes longer than the rest: a rule that says "ask" holds the
+// call for a human, and the relay's wait extends from decisionTimeout to
+// approval_timeout for that one call, on the same connection -- see
+// reporter.awaitApproval and docs/decisions/0005-human-approval.md. Every
+// other rule in this paragraph still applies to it: a way of not getting a
+// final answer within that longer bound is still a denial.
+//
 // Everything else still flows without waiting. Other methods are relayed
 // untouched and never consult the daemon, and sessions, outcomes and anomalies
 // are still reported one way, so bookkeeping cannot stall the relay.
@@ -22,6 +29,7 @@ package shim
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -89,10 +97,25 @@ type Shim struct {
 	seq      int
 
 	initializeKey   string // id of the initialize request, while it is in flight
+	discoverKey     string // id of the server/discover request, while it is in flight
+	proposedVersion string // the version that server/discover proposed
 	protocolVersion string // what the client and server actually agreed on
 
 	finished sync.Once
 	refused  sync.Once
+
+	// stopped guards stopDownstream the way finished guards finish: the
+	// signal handler and the normal exit can both reach it, and two
+	// concurrent Waits on one Cmd are a data race the race detector found.
+	stopped sync.Once
+	stopErr error
+}
+
+// stop terminates the connector once, whichever path gets there first, and
+// hands every caller the same result.
+func (s *Shim) stop(cmd *exec.Cmd) error {
+	s.stopped.Do(func() { s.stopErr = stopDownstream(cmd) })
+	return s.stopErr
 }
 
 // clientOut serialises everything Nim writes to the client.
@@ -178,17 +201,6 @@ func Run(opts Options) error {
 	//
 	// The handler only flushes what is already known and exits; it does not try
 	// to keep the relay alive or to clean up the downstream server.
-	stopping := make(chan os.Signal, 1)
-	signal.Notify(stopping, syscall.SIGTERM, syscall.SIGINT)
-	go func() {
-		<-stopping
-		s.finish()
-		// Exiting zero after being asked to stop: the relay did what it was
-		// told. Re-raising the signal to reproduce the original exit status
-		// would need per-platform code for a status nothing reads.
-		os.Exit(0)
-	}()
-
 	cmd := buildDownstreamCmd(command, inj.env)
 	downIn, err := cmd.StdinPipe()
 	if err != nil {
@@ -204,6 +216,23 @@ func Run(opts Options) error {
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("cannot start %s: %w", command[0], err)
 	}
+
+	stopping := make(chan os.Signal, 1)
+	signal.Notify(stopping, syscall.SIGTERM, syscall.SIGINT)
+	go func() {
+		<-stopping
+		s.finish()
+		// The connector is this relay's child and does not outlive it. Its
+		// stdin closes when this process exits, and a connector that reads
+		// stdin notices; one that does not -- mid-call, or on its own event
+		// loop -- used to be left running, still holding whatever credential
+		// it was given, after the journal had recorded the session as over.
+		s.stop(cmd)
+		// Exiting zero after being asked to stop: the relay did what it was
+		// told. Re-raising the signal to reproduce the original exit status
+		// would need per-platform code for a status nothing reads.
+		os.Exit(0)
+	}()
 
 	// Read, never create: replacing a lost identifier would reseed the journal's
 	// chain. By now the daemon has had its chance to make one, so on a fresh
@@ -226,10 +255,47 @@ func Run(opts Options) error {
 	go func() { defer wg.Done(); s.pumpResponses(downOut, s.out) }()
 	wg.Wait()
 
-	err = cmd.Wait()
+	// The client has gone (its stdin closed) or the connector has. Either way
+	// the connector's stdin is closed by now; a connector that does not act on
+	// that is told, then made to.
+	err = s.stop(cmd)
 	s.finish()
 	return err
 }
+
+// stopDownstream waits for the connector to exit on its own, then asks it to,
+// then makes it. The waits are short: a connector that has not exited once its
+// stdin closed is not going to, and the relay is what a client is waiting on.
+//
+// The result is cmd.Wait's, so a connector that exited badly is still reported
+// as such. A connector this had to terminate reports as an error too, which is
+// right: it did not stop when told, and that is worth a line on stderr.
+func stopDownstream(cmd *exec.Cmd) error {
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
+
+	select {
+	case err := <-exited:
+		return err
+	case <-time.After(downstreamGrace):
+	}
+	if cmd.Process != nil {
+		terminate(cmd.Process)
+	}
+	select {
+	case err := <-exited:
+		return err
+	case <-time.After(downstreamGrace):
+	}
+	if cmd.Process != nil {
+		cmd.Process.Kill()
+	}
+	return <-exited
+}
+
+// downstreamGrace is how long a connector gets to exit on its own after its
+// stdin closes, and then again after being asked to stop.
+const downstreamGrace = 2 * time.Second
 
 // finish closes the session in the record and flushes what is pending. It runs
 // once, whether the relay ends because the client went away or because it was
@@ -276,6 +342,11 @@ func (s *Shim) pumpRequests(in io.Reader, out io.WriteCloser) {
 			}
 
 		case anomaly != mcp.AnomalyNone:
+			// Includes an object that names a key twice. Valid JSON, but the
+			// one shape on which Nim and a server may legitimately read
+			// different messages, so it is treated exactly as a frame that
+			// could not be read at all: not relayed, and not answered, because
+			// which of two ids to answer under is the same question.
 			// Unreadable, so unaccountable. Go rejects JSON that other parsers
 			// accept -- NaN is the easy example -- so a frame Nim cannot parse
 			// may still be a tools/call to the server behind it. There is no id
@@ -292,6 +363,16 @@ func (s *Shim) pumpRequests(in io.Reader, out io.WriteCloser) {
 			s.mu.Lock()
 			s.initializeKey = env.Key()
 			s.mu.Unlock()
+
+		case env.IsDiscover():
+			// The other handshake. A client on the 2026-07-28 revision
+			// never sends initialize, so this is the only place the
+			// version can be learned -- and the version decides the shape
+			// a refusal has to take for that client to read it.
+			s.mu.Lock()
+			s.discoverKey = env.Key()
+			s.proposedVersion = env.ProposedProtocolVersion()
+			s.mu.Unlock()
 		}
 
 		// Byte for byte, whatever it was.
@@ -307,12 +388,32 @@ func (s *Shim) pumpRequests(in io.Reader, out io.WriteCloser) {
 // rewritten on the way: a call either travels exactly as it arrived, or it does
 // not travel.
 func (s *Shim) decide(env mcp.Envelope) bool {
+	// Before a sequence number is spent or the daemon is asked: a call Nim
+	// cannot read as exactly one tool name is refused here, whole. The daemon
+	// would otherwise decide on "" or on whichever of two names Go's decoder
+	// preferred, and the journal would record that as what was called while
+	// the server ran something else. No call.request is written for it, as
+	// for a refused batch; the anomaly entry is its record.
+	call, err := env.Call()
+	if err != nil {
+		anomaly := mcp.AnomalyUnreadableCall
+		if errors.Is(err, mcp.ErrDuplicateKey) {
+			anomaly = mcp.AnomalyDuplicateKey
+		}
+		s.noteAnomaly(anomaly)
+		s.refuse("a tools/call it could not read as one tool name")
+		if !env.IsNotification() {
+			s.toClient(mcp.DenyResponse(env.ID, mcp.DeniedUnreadable, s.negotiated()))
+		}
+		return false
+	}
+
 	key := env.Key()
 
 	s.mu.Lock()
 	_, reused := s.inFlight[key]
 	s.seq++
-	p := pending{tool: env.ToolName(), digest: env.ArgumentsDigest(), seq: s.seq, started: time.Now()}
+	p := pending{tool: call.Name, digest: call.Digest, seq: s.seq, started: time.Now()}
 	s.mu.Unlock()
 
 	// Two calls in flight under one id: the second answer cannot be matched to
@@ -321,8 +422,10 @@ func (s *Shim) decide(env mcp.Envelope) bool {
 		s.noteAnomaly(anomalyDuplicateID)
 	}
 
-	// No decision field: the shim does not get to say what was decided. It asks,
-	// and the daemon records its own answer.
+	// No decision field: the shim does not get to say what was decided. It
+	// asks, and the daemon records its own answer. The real arguments travel
+	// with the question only as far as ask(), which sends them on only if
+	// the daemon says it is holding this call for a human -- see awaitApproval.
 	v := s.reporter.ask(daemon.Event{
 		Kind:       daemon.KindCallRequest,
 		SessionID:  s.sessionID,
@@ -330,9 +433,9 @@ func (s *Shim) decide(env mcp.Envelope) bool {
 		Tool:       p.tool,
 		Digest:     p.digest,
 		OccurredAt: p.started.UTC().Format(time.RFC3339Nano),
-	})
+	}, call.Arguments)
 
-	if v == verdictAllow {
+	if v == verdictAllow || v == verdictApproved {
 		// In flight only now. A refused call never gets an outcome, so it must
 		// not be left waiting for one -- that would look like a call that never
 		// came back.
@@ -348,12 +451,26 @@ func (s *Shim) decide(env mcp.Envelope) bool {
 	// but nothing here depends on that being true.
 	if !env.IsNotification() {
 		text := mcp.DeniedNoDecision
-		if v == verdictDeniedByPolicy {
+		switch v {
+		case verdictDeniedByPolicy:
 			text = mcp.DeniedByPolicy
+		case verdictRejectedByHuman:
+			text = mcp.DeniedByHuman
+		case verdictApprovalTimedOut:
+			text = mcp.DeniedApprovalTimedOut
 		}
-		s.toClient(mcp.DenyResponse(env.ID, text))
+		s.toClient(mcp.DenyResponse(env.ID, text, s.negotiated()))
 	}
 	return false
+}
+
+// negotiated is the protocol version the session has agreed on so far, or ""
+// before either handshake has been answered. A refusal is written in the
+// dialect of that version, so a client reads it as the tool error it is.
+func (s *Shim) negotiated() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.protocolVersion
 }
 
 // batchMayPass reports whether a JSON-RPC batch may be relayed.
@@ -434,6 +551,14 @@ func (s *Shim) noteResponse(env mcp.Envelope) {
 		s.protocolVersion = env.ProtocolVersion()
 		s.initializeKey = ""
 	}
+	if key != "" && key == s.discoverKey {
+		// An error here means the client will fall back to initialize,
+		// which is watched above; the version stays unknown until then.
+		if v := env.NegotiatedVersion(s.proposedVersion); v != "" {
+			s.protocolVersion = v
+		}
+		s.discoverKey, s.proposedVersion = "", ""
+	}
 	p, found := s.inFlight[key]
 	delete(s.inFlight, key)
 	s.mu.Unlock()
@@ -470,8 +595,8 @@ func (s *Shim) report(ev daemon.Event) { s.reporter.send(ev) }
 
 // verdict is what a tools/call gets back from the daemon.
 //
-// The zero value is the safe default: anything that is not an explicit allow
-// or an explicit policy denial is treated as no decision at all, so a
+// The zero value is the safe default: anything that is not an explicit
+// allow-shaped or deny-shaped answer is treated as no decision at all, so a
 // tools/call refused this way reads as retryable, not as ruled against.
 type verdict int
 
@@ -479,13 +604,27 @@ const (
 	verdictNoDecision verdict = iota
 	verdictAllow
 	verdictDeniedByPolicy
+	// verdictApproved and verdictRejectedByHuman are allow and deny's
+	// counterparts for a call an "ask" rule held: a human decided it,
+	// instead of a rule. See awaitApproval and
+	// docs/decisions/0005-human-approval.md.
+	verdictApproved
+	verdictRejectedByHuman
+	// verdictApprovalTimedOut is its own outcome, not verdictNoDecision:
+	// nobody deciding in time is not the daemon failing to answer, and the
+	// client is told so in its own words -- see mcp.DeniedApprovalTimedOut.
+	verdictApprovalTimedOut
 )
 
-// item is one thing to send. reply is nil for the reports that expect no answer.
+// item is one thing to send. reply is nil for the reports that expect no
+// answer. arguments is the call's real params.arguments bytes, carried
+// alongside the call.request event but sent on the wire only if the daemon
+// answers that it is holding this call for a human -- see awaitApproval.
 type item struct {
-	ev       daemon.Event
-	reply    chan verdict
-	deadline time.Time
+	ev        daemon.Event
+	arguments json.RawMessage
+	reply     chan verdict
+	deadline  time.Time
 }
 
 // reporter carries events to the daemon and brings decisions back.
@@ -498,6 +637,12 @@ type reporter struct {
 	conn net.Conn
 	enc  *json.Encoder
 	dec  *mcp.Reader
+
+	// approvalTimeout bounds the second, longer wait a call an "ask" rule
+	// holds gets -- read once, from the same config the daemon reads its own
+	// copy from, rather than hardcoded like decisionTimeout: unlike the 2 s
+	// bound, an operator is expected to tune this one.
+	approvalTimeout time.Duration
 
 	ch   chan item
 	done chan struct{}
@@ -520,7 +665,10 @@ type reporter struct {
 }
 
 func dialDaemon(cfg config.Config) *reporter {
-	r := &reporter{ch: make(chan item, 256), done: make(chan struct{})}
+	r := &reporter{
+		ch: make(chan item, 256), done: make(chan struct{}),
+		approvalTimeout: cfg.ApprovalTimeoutOrDefault(),
+	}
 	conn, err := net.DialTimeout("unix", cfg.Daemon.Socket, 300*time.Millisecond)
 	if err != nil {
 		if StartDaemon() {
@@ -536,13 +684,14 @@ func dialDaemon(cfg config.Config) *reporter {
 	// list refuses, and read every tool name and argument digest as they went
 	// past. Verified before a single byte is sent, so it never learns what
 	// this session was going to ask.
-	if conn != nil && !daemonIsGenuine(conn) {
-		fmt.Fprintf(os.Stderr,
-			"nim: the process listening on %s is not Nim\n"+
-				"nim: refusing to take decisions from it; every tool call in this session will be denied\n",
-			cfg.Daemon.Socket)
-		conn.Close()
-		conn = nil
+	if conn != nil {
+		if genuine, pid := daemonIsGenuine(conn); !genuine {
+			fmt.Fprintf(os.Stderr,
+				"nim: %s\nnim: refusing to take decisions from it; every tool call in this session will be denied\n",
+				peerRefusalReason(cfg, peer.DiagnosePID(pid)))
+			conn.Close()
+			conn = nil
+		}
 	}
 
 	if conn != nil {
@@ -582,9 +731,91 @@ func dialDaemon(cfg config.Config) *reporter {
 // true, exactly as the daemon's own check treats unsupported as not-a-denial.
 // It cannot invent a guarantee the OS does not offer, and pretending otherwise
 // would only move the gap somewhere less visible.
-func daemonIsGenuine(conn net.Conn) bool {
-	supported, isSelf := peer.IsSelf(conn)
-	return !supported || isSelf
+//
+// pid is the peer's, read once via peer.IsSelfPID -- exactly the value a
+// caller that gets false back needs to diagnose the refusal with
+// peer.DiagnosePID, without touching conn a second time to get it. See
+// peer.IsSelfPID's doc comment for why a second, separate read is unsafe
+// here: the peer on the other end of a refused conn is, in every real
+// caller, already closing its side.
+func daemonIsGenuine(conn net.Conn) (genuine bool, pid int) {
+	supported, isSelf, pid := peer.IsSelfPID(conn)
+	return !supported || isSelf, pid
+}
+
+// ErrDaemonOlderBuild means the peer on the socket is provably an older
+// build of this same binary: peer.Diagnose found it running a different
+// file at exactly our own executable path, which is what an in-place
+// upgrade or a `go build` over a running daemon leaves behind (F-001). It
+// is reported apart from a peer that is simply not Nim, because the remedy
+// is different -- `nim daemon restart`, not investigating an impostor --
+// and apart from ErrDaemonNotReachable, because something IS listening and
+// answering as a daemon, just an old one. Wrapped into the errors DialDaemon
+// and DialRunningDaemon return, so a caller like nim doctor or nim status
+// can tell the two apart with errors.Is instead of matching text.
+var ErrDaemonOlderBuild = errors.New("the daemon on the socket is an older build of Nim")
+
+// peerRefusalReason is the sentence every caller that refuses a peer builds
+// its message from -- an error return or a line on stderr -- so an upgrade
+// gets one diagnosis, written once: the specific remedy when diag is
+// peer.SameLaunchPathOlderBuild, the unchanged "is not Nim" wording
+// otherwise. diag is computed by the caller with a single peer.Diagnose (or
+// peer.DiagnosePID) call, never recomputed here -- see peer.Diagnose's doc
+// comment on why calling it twice on the same connection is unsafe.
+func peerRefusalReason(cfg config.Config, diag peer.Diagnosis) string {
+	if diag == peer.SameLaunchPathOlderBuild {
+		return fmt.Sprintf("the daemon on %s is an older build of Nim at the same path; run `nim daemon restart`",
+			cfg.Daemon.Socket)
+	}
+	return fmt.Sprintf("the process listening on %s is not Nim", cfg.Daemon.Socket)
+}
+
+// peerRefusalError is peerRefusalReason for a caller that returns an error
+// rather than printing to stderr: the SameLaunchPathOlderBuild case wraps
+// ErrDaemonOlderBuild so it can be matched with errors.Is; every other case
+// keeps the "is not Nim; <suffix>" wording callers used before Diagnose
+// existed, with suffix naming what that particular caller was about to do.
+func peerRefusalError(cfg config.Config, diag peer.Diagnosis, suffix string) error {
+	if diag == peer.SameLaunchPathOlderBuild {
+		return fmt.Errorf("%w: %s", ErrDaemonOlderBuild, peerRefusalReason(cfg, diag))
+	}
+	return fmt.Errorf("the process listening on %s is not Nim; %s", cfg.Daemon.Socket, suffix)
+}
+
+// PeerPID connects to the daemon socket and reports the pid of whatever is
+// listening, together with whether it is confirmably Nim: either this exact
+// build, or an older build at this binary's own path (peer.Diagnose's
+// SameLaunchPathOlderBuild). Exported for `nim daemon restart`, which needs
+// the pid to signal but must never signal a process it cannot tell is Nim
+// at all -- unlike DialDaemon and DialRunningDaemon, which only need to
+// refuse to talk to such a peer, this hands the caller the one fact it
+// needs to act on it instead.
+//
+// The pid is read once, before daemonIsGenuine's own peer.IsSelf call, and
+// the diagnosis (if needed) runs against that pid via peer.DiagnosePID
+// rather than touching conn again -- see peer.Diagnose's doc comment on why
+// a second conn-based check can catch a peer mid-close and disagree with
+// the first.
+func PeerPID(cfg config.Config, timeout time.Duration) (pid int, confirmedNim bool, err error) {
+	conn, err := net.DialTimeout("unix", cfg.Daemon.Socket, timeout)
+	if err != nil {
+		return 0, false, fmt.Errorf("%w: %v", ErrDaemonNotReachable, err)
+	}
+	defer conn.Close()
+
+	// One conn touch, via peer.IsSelfPID -- not PIDOf followed separately by
+	// daemonIsGenuine, which would be two -- for the same reason
+	// daemonIsGenuine's own doc comment gives: this pid belongs to a peer
+	// this call is about to decide about, and a second read risks racing
+	// whatever that peer does next.
+	supported, isSelf, p := peer.IsSelfPID(conn)
+	if !supported {
+		return 0, false, fmt.Errorf("the pid of the process listening on %s could not be determined", cfg.Daemon.Socket)
+	}
+	if isSelf || peer.DiagnosePID(p) == peer.SameLaunchPathOlderBuild {
+		return p, true, nil
+	}
+	return p, false, nil
 }
 
 // attach binds the connection and the codecs that read and write it, so they
@@ -624,7 +855,9 @@ func (r *reporter) post(ev daemon.Event) {
 //
 // Every failure returns the zero verdict, which is a denial. The queue, the
 // socket, the clock and the daemon all get to say no; only one specific reply
-// says yes.
+// says yes -- or, for a call an ask rule holds, says pending, in which case
+// this hands off to awaitApproval for the longer, second wait rather than
+// deciding here.
 func (r *reporter) exchange(it item) verdict {
 	if r.conn == nil {
 		r.miss("there was no daemon to decide a call, so it was denied")
@@ -644,31 +877,98 @@ func (r *reporter) exchange(it item) verdict {
 		return verdictNoDecision
 	}
 
+	d, ok := r.readDecision(raw, it.ev)
+	if !ok {
+		return verdictNoDecision
+	}
+	if d.Decision == daemon.DecisionPending {
+		return r.awaitApproval(it)
+	}
+	v, ok := verdictFor(d.Decision)
+	if !ok {
+		r.drop("the daemon sent a decision Nim does not understand")
+		return verdictNoDecision
+	}
+	return v
+}
+
+// readDecision unmarshals one reply and checks it answers the question that
+// was actually asked. A reply that does not match means the two are out of
+// step, and the next answer would be read as belonging to a different call
+// -- which is how a refusal turns into an allowance -- so this drops the
+// connection exactly as exchange always has for that case.
+func (r *reporter) readDecision(raw []byte, question daemon.Event) (daemon.Decision, bool) {
 	var d daemon.Decision
 	if err := json.Unmarshal(raw, &d); err != nil {
 		r.drop("the daemon sent something that was not a decision")
-		return verdictNoDecision
+		return daemon.Decision{}, false
 	}
-
-	// The answer has to be to the question that was asked. A reply that does not
-	// match means the two are out of step, and the next answer would be read as
-	// belonging to a different call -- which is how a refusal turns into an
-	// allowance.
-	if d.Kind != daemon.KindDecision || d.SessionID != it.ev.SessionID || d.Seq != it.ev.Seq {
+	if d.Kind != daemon.KindDecision || d.SessionID != question.SessionID || d.Seq != question.Seq {
 		r.drop("the daemon answered a different call")
+		return daemon.Decision{}, false
+	}
+	return d, true
+}
+
+// verdictFor maps the daemon's wire vocabulary to what the shim acts on. ok
+// is false for a decision value this build does not know, which the caller
+// treats as a protocol break rather than any kind of verdict.
+func verdictFor(decision string) (verdict, bool) {
+	switch decision {
+	case journal.DecisionAllow:
+		return verdictAllow, true
+	case journal.DecisionDeny:
+		return verdictDeniedByPolicy, true
+	case journal.DecisionApproved:
+		return verdictApproved, true
+	case journal.DecisionRejected:
+		return verdictRejectedByHuman, true
+	case daemon.DecisionUndecided:
+		return verdictNoDecision, true
+	}
+	return verdictNoDecision, false
+}
+
+// awaitApproval sends the call's real arguments once the daemon has said it
+// is holding the call for a human, then waits up to approvalTimeout for the
+// final answer on the same connection -- the same exchange decisionTimeout
+// already bounds, only longer, because deciding this one needs a human
+// rather than a rule lookup. See docs/decisions/0005-human-approval.md.
+//
+// A failure here denies the call, exactly as every other path through
+// exchange does, and drops the connection: the daemon has its own timer at
+// the same bound, armed the moment it started holding the call, so reaching
+// this without an answer means even that did not arrive, which is the
+// daemon being unreachable, not merely undecided.
+func (r *reporter) awaitApproval(it item) verdict {
+	deadline := time.Now().Add(r.approvalTimeout)
+
+	r.conn.SetWriteDeadline(deadline)
+	if err := r.enc.Encode(daemon.Event{
+		Kind: daemon.KindCallArguments, SessionID: it.ev.SessionID, Seq: it.ev.Seq,
+		Arguments: it.arguments,
+	}); err != nil {
+		r.drop("the daemon stopped accepting events mid-session")
 		return verdictNoDecision
 	}
 
-	switch d.Decision {
-	case journal.DecisionAllow:
-		return verdictAllow
-	case journal.DecisionDeny:
-		return verdictDeniedByPolicy
-	case daemon.DecisionUndecided:
+	r.conn.SetReadDeadline(deadline)
+	raw, err := r.dec.ReadRaw()
+	if err != nil {
+		r.drop("nobody decided a pending call within " + r.approvalTimeout.String())
+		return verdictApprovalTimedOut
+	}
+
+	d, ok := r.readDecision(raw, it.ev)
+	if !ok {
 		return verdictNoDecision
 	}
-	r.drop("the daemon sent a decision Nim does not understand")
-	return verdictNoDecision
+	v, ok := verdictFor(d.Decision)
+	if !ok {
+		r.drop("the daemon sent a decision Nim does not understand")
+		return verdictNoDecision
+	}
+	return v
 }
 
 // drop closes the connection for good and counts what it cost.
@@ -685,16 +985,21 @@ func (r *reporter) drop(reason string) {
 	r.miss(reason)
 }
 
-// ask sends a call.request and waits for the daemon's decision.
+// ask sends a call.request and waits for the daemon's decision. arguments is
+// the call's real params.arguments bytes -- see item and awaitApproval; most
+// calls never need it, and it is a no-op to carry for those.
 //
 // The clock starts here rather than at the write, so time spent queued behind
-// other reports counts against the same budget. A caller cannot wait longer than
-// decisionTimeout whatever the reporter is doing.
-func (r *reporter) ask(ev daemon.Event) verdict {
+// other reports counts against the same budget. A caller cannot wait longer
+// than decisionTimeout for an ordinary verdict, or decisionTimeout plus
+// approvalTimeout for a call an ask rule ends up holding -- the outer bound
+// below covers both, because ask does not yet know which this call will be.
+func (r *reporter) ask(ev daemon.Event, arguments json.RawMessage) verdict {
 	reply := make(chan verdict, 1)
 	deadline := time.Now().Add(decisionTimeout)
+	outer := deadline.Add(r.approvalTimeout)
 
-	if !r.offer(item{ev: ev, reply: reply, deadline: deadline}) {
+	if !r.offer(item{ev: ev, arguments: arguments, reply: reply, deadline: deadline}) {
 		// A full queue is not a reason to let a call through, and waiting for
 		// room would stall behind whatever filled it. Denying is the only answer
 		// that is both bounded and safe.
@@ -705,9 +1010,11 @@ func (r *reporter) ask(ev daemon.Event) verdict {
 	select {
 	case v := <-reply:
 		return v
-	case <-time.After(time.Until(deadline)):
-		// The loop sets its own deadlines, so this should be unreachable. It is
-		// here because "should be" is not a bound.
+	case <-time.After(time.Until(outer)):
+		// The loop sets its own deadlines -- decisionTimeout for the first
+		// reply, then its own approvalTimeout-based one if that reply was
+		// pending -- so this should be unreachable. It is here because
+		// "should be" is not a bound.
 		return verdictNoDecision
 	}
 }
@@ -804,8 +1111,91 @@ func StartDaemon() bool {
 	if err != nil {
 		return false
 	}
-	log, _ := os.OpenFile(config.LogPath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	// The log lives in the home directory, which on a fresh install does not
+	// exist yet when `nim connector set` is the first thing run. Opening the
+	// file then failed, the error was dropped, and the daemon's first words
+	// -- the ones that explain why it did not start -- went nowhere.
+	if err := os.MkdirAll(config.Home(), 0o700); err != nil {
+		fmt.Fprintf(os.Stderr, "nim: cannot create %s for the daemon's log: %v\n", config.Home(), err)
+	}
+	log, err := os.OpenFile(config.LogPath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "nim: cannot open %s: the daemon will start with no log: %v\n", config.LogPath(), err)
+		log = nil
+	}
 	return startDaemonProcess(self, log) == nil
+}
+
+// DialDaemon connects for one request/response exchange -- a connector, an
+// enrolment or a rule -- starting the daemon if it is not running, and
+// refusing to hand back a connection to anything that is not Nim.
+//
+// The refusal is the point. The relay verified the daemon before sending it a
+// byte, but the management commands dialled the socket path and trusted
+// whatever answered: `nim connector set` would have written the plaintext
+// secret to any process that had bound the path first. Exported so every
+// command that talks to the daemon goes through the one check.
+func DialDaemon(cfg config.Config) (net.Conn, error) {
+	conn, err := dialOrStart(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if genuine, pid := daemonIsGenuine(conn); !genuine {
+		err := peerRefusalError(cfg, peer.DiagnosePID(pid), "refusing to talk to it")
+		conn.Close()
+		return nil, err
+	}
+	return conn, nil
+}
+
+// ErrDaemonNotReachable means nothing answered the daemon's socket within the
+// timeout -- as opposed to something answering that is not Nim, which
+// DialRunningDaemon reports as a different error entirely. The distinction
+// matters to a caller like nim doctor: the first is the ordinary state of an
+// install nobody has started yet, worth a WARN; the second means something is
+// impersonating the daemon, worth a FAIL.
+var ErrDaemonNotReachable = errors.New("no daemon reachable")
+
+// DialRunningDaemon connects to the daemon's socket without starting one, and
+// verifies the peer is genuinely this binary.
+//
+// Unlike DialDaemon, which brings the daemon up when nothing answers because
+// that is the right thing for a command that needs a decision, this is for a
+// caller whose whole job is reporting what is true right now: starting the
+// thing being checked would make "is it running" unanswerable. nim doctor is
+// the one caller today, and it opens one of these per check, exactly as
+// DialDaemon's callers open one connection per request kind.
+func DialRunningDaemon(cfg config.Config, timeout time.Duration) (net.Conn, error) {
+	conn, err := net.DialTimeout("unix", cfg.Daemon.Socket, timeout)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrDaemonNotReachable, err)
+	}
+	if genuine, pid := daemonIsGenuine(conn); !genuine {
+		err := peerRefusalError(cfg, peer.DiagnosePID(pid), "refusing to talk to it")
+		conn.Close()
+		return nil, err
+	}
+	return conn, nil
+}
+
+// dialOrStart reaches the daemon socket, starting a daemon when nothing
+// answers. Peer identity is the caller's business: the two callers treat an
+// unreachable daemon differently, and both must verify what they reached.
+func dialOrStart(cfg config.Config) (net.Conn, error) {
+	conn, err := net.DialTimeout("unix", cfg.Daemon.Socket, 300*time.Millisecond)
+	if err == nil {
+		return conn, nil
+	}
+	if !StartDaemon() {
+		return nil, fmt.Errorf("could not start the daemon")
+	}
+	for i := 0; i < 20; i++ {
+		time.Sleep(100 * time.Millisecond)
+		if conn, err = net.DialTimeout("unix", cfg.Daemon.Socket, 300*time.Millisecond); err == nil {
+			return conn, nil
+		}
+	}
+	return nil, fmt.Errorf("daemon did not become reachable at %s", cfg.Daemon.Socket)
 }
 
 func nowRFC3339() string { return time.Now().UTC().Format(time.RFC3339Nano) }
@@ -849,28 +1239,17 @@ func buildDownstreamCmd(command []string, env []string) *exec.Cmd {
 //     be injected into. A response carrying a credential but no command is
 //     itself refused; that pairing is the whole authorization.
 func fetchConnector(cfg config.Config, connector string) (injection, error) {
-	conn, err := net.DialTimeout("unix", cfg.Daemon.Socket, 300*time.Millisecond)
+	conn, err := dialOrStart(cfg)
 	if err != nil {
-		if !StartDaemon() {
-			return injection{}, nil
-		}
-		for i := 0; i < 20 && conn == nil; i++ {
-			time.Sleep(100 * time.Millisecond)
-			conn, _ = net.DialTimeout("unix", cfg.Daemon.Socket, 300*time.Millisecond)
-		}
-		if conn == nil {
-			return injection{}, nil
-		}
+		return injection{}, nil // unreachable: no connector, and every call will be denied
 	}
 	defer conn.Close()
 
 	// Whoever is on the other end of this decides what command receives a
 	// credential, so it has to be Nim. Refusing to spawn is the only safe
 	// answer here: an impostor's answer is worse than no answer.
-	if !daemonIsGenuine(conn) {
-		return injection{}, fmt.Errorf(
-			"the process listening on %s is not Nim; refusing to ask it for a credential or a command",
-			cfg.Daemon.Socket)
+	if genuine, pid := daemonIsGenuine(conn); !genuine {
+		return injection{}, peerRefusalError(cfg, peer.DiagnosePID(pid), "refusing to ask it for a credential or a command")
 	}
 
 	conn.SetDeadline(time.Now().Add(2 * time.Second))

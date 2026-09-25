@@ -1,0 +1,6 @@
+# The product page is meant to be found. The status page is public but
+# unlisted by decision (D-005): readable by anyone given the link.
+User-agent: *
+Allow: /
+Disallow: /status
+Sitemap: https://nim-blush.vercel.app/sitemap.xml

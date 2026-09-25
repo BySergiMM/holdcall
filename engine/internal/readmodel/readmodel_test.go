@@ -25,12 +25,28 @@ type fake struct {
 	anomalies map[string]int
 	verify    journal.VerifyReport
 	seedKnown bool
+	budgets   []journal.Budget
 	err       error
 	calls     []struct {
 		since int64
 		limit int
 	}
+
+	rules      []journal.Rule
+	agents     []journal.Agent
+	connectors []journal.Connector
 }
+
+func (f *fake) ListRules() ([]journal.Rule, error)     { return f.rules, f.err }
+func (f *fake) ListBudgets() ([]journal.Budget, error) { return f.budgets, f.err }
+func (f *fake) MatchingRules(agent, connector, tool string) ([]journal.Rule, error) {
+	return f.rules, f.err
+}
+func (f *fake) MatchingBudgets(agent, connector, tool string) ([]journal.Budget, error) {
+	return f.budgets, f.err
+}
+func (f *fake) ListAgents() ([]journal.Agent, error)         { return f.agents, f.err }
+func (f *fake) ListConnectors() ([]journal.Connector, error) { return f.connectors, f.err }
 
 func (f *fake) Sessions(limit int) ([]journal.SessionRow, error) {
 	if f.err != nil {
@@ -40,6 +56,18 @@ func (f *fake) Sessions(limit int) ([]journal.SessionRow, error) {
 		return f.sessions[:limit], nil
 	}
 	return f.sessions, nil
+}
+
+func (f *fake) Session(id string) (journal.SessionRow, bool, error) {
+	if f.err != nil {
+		return journal.SessionRow{}, false, f.err
+	}
+	for _, r := range f.sessions {
+		if r.ID == id {
+			return r, true, nil
+		}
+	}
+	return journal.SessionRow{}, false, nil
 }
 
 func (f *fake) SessionEntries(id string, limit int) ([]journal.Entry, error) {
@@ -101,7 +129,7 @@ func TestEventCarriesEveryFieldOfAnEntry(t *testing.T) {
 		ParamsDigest: sp("digest"), Decision: sp(journal.DecisionObserved),
 		OK: bp(true), DurationMS: ip(42), Anomaly: sp("batch"),
 		OccurredAt: "2026-08-07T10:00:00Z", MachineID: sp("m"), Client: sp("c"),
-		ProtocolVersion: sp("2025-06-18"), PrevHash: "prev", Hash: "hash",
+		ProtocolVersion: sp("2025-06-18"), Agent: sp("claude-code"), PrevHash: "prev", Hash: "hash",
 	}
 	got := EventFrom(e)
 
@@ -116,7 +144,7 @@ func TestEventCarriesEveryFieldOfAnEntry(t *testing.T) {
 		"params_digest": got.ParamsDigest != nil, "decision": got.Decision != nil,
 		"ok": got.OK != nil, "duration_ms": got.DurationMS != nil, "anomaly": got.Anomaly != nil,
 		"machine_id": got.MachineID != nil, "client": got.Client != nil,
-		"protocol_version": got.ProtocolVersion != nil,
+		"protocol_version": got.ProtocolVersion != nil, "agent": got.Agent != nil,
 	} {
 		if !ok {
 			t.Errorf("field %s was dropped by the projection", name)

@@ -9,7 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/BySergiMM/nim/engine/internal/daemon"
 	"github.com/BySergiMM/nim/engine/internal/journal"
+	"github.com/BySergiMM/nim/engine/internal/peer"
 	"github.com/BySergiMM/nim/engine/internal/readmodel"
 )
 
@@ -85,7 +87,7 @@ func decode[T any](t *testing.T, body []byte) T {
 func TestNoEndpointAcceptsAWrite(t *testing.T) {
 	srv, _ := serve(t, func(j *journal.Journal) { j.Append(session("s1", "github")) })
 
-	paths := []string{"/", "/api/snapshot", "/api/events", "/api/sessions/s1"}
+	paths := []string{"/", "/api/snapshot", "/api/events", "/api/sessions/s1", "/api/policy", "/api/explain?tool=rm", "/api/pending"}
 	methods := []string{http.MethodPost, http.MethodPut, http.MethodPatch,
 		http.MethodDelete, "TRACE"}
 
@@ -124,6 +126,7 @@ func TestReadingDoesNotChangeTheJournal(t *testing.T) {
 	get(t, srv, "/api/snapshot")
 	get(t, srv, "/api/events?since=0")
 	get(t, srv, "/api/sessions/s1")
+	get(t, srv, "/api/policy")
 	get(t, srv, "/")
 
 	after, err := journal.OpenReadOnly(path, "test-machine")
@@ -389,6 +392,19 @@ func TestIndexIsServedOnlyAtRoot(t *testing.T) {
 	}
 }
 
+// The page is embedded in the binary and drives a daemon of the same build.
+// A browser keeping a copy from a previous build would send that build's
+// requests to this one, so the page, like the API, must never be cached.
+func TestThePageIsNeverCached(t *testing.T) {
+	srv, _ := serve(t, nil)
+	for _, p := range []string{"/", "/api/snapshot", "/api/policy", "/api/pending"} {
+		res, _ := get(t, srv, p)
+		if cc := res.Header.Get("Cache-Control"); cc != "no-store" {
+			t.Errorf("%s: Cache-Control = %q, want no-store", p, cc)
+		}
+	}
+}
+
 // The console shows a record of what an agent did. That belongs on loopback.
 func TestListenRefusesNonLoopback(t *testing.T) {
 	for _, addr := range []string{"0.0.0.0:0", "192.168.1.10:0", "[::]:0"} {
@@ -407,5 +423,261 @@ func TestListenRefusesNonLoopback(t *testing.T) {
 	}
 	if _, err := Listen("not-an-address"); err == nil {
 		t.Error("Listen accepted a malformed address")
+	}
+}
+
+// A loopback bind is not a loopback name. A page on another site can have its
+// own name resolve to 127.0.0.1 and then read the console as if it were its
+// own origin -- unless the console refuses to answer under that name.
+func TestTheConsoleAnswersOnlyToALoopbackName(t *testing.T) {
+	srv, _ := serve(t, func(j *journal.Journal) {
+		j.Append(session("s1", "github"))
+	})
+
+	for _, host := range []string{"127.0.0.1:7717", "localhost:7717", "[::1]:7717", "localhost", "127.0.0.1"} {
+		req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/snapshot", nil)
+		req.Host = host
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("%s: %v", host, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("Host %q was refused with %d; it names this machine", host, resp.StatusCode)
+		}
+	}
+
+	for _, host := range []string{"attacker.example:7717", "nim.internal", "127.0.0.1.attacker.example:7717", "10.0.0.5:7717"} {
+		for _, path := range []string{"/", "/api/snapshot", "/api/events", "/api/sessions/s1", "/api/policy", "/api/explain?tool=rm", "/api/pending"} {
+			req, _ := http.NewRequest(http.MethodGet, srv.URL+path, nil)
+			req.Host = host
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatalf("%s: %v", host, err)
+			}
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusMisdirectedRequest {
+				t.Errorf("Host %q reading %s got %d; a rebound name must be refused", host, path, resp.StatusCode)
+			}
+		}
+	}
+}
+
+// The agent the daemon derived reaches the browser, on the session list and
+// on the session detail, beside the label the relay chose.
+func TestTheDerivedAgentReachesTheBrowser(t *testing.T) {
+	srv, _ := serve(t, func(j *journal.Journal) {
+		s := session("s1", "github")
+		s.Agent = sp("claude-code")
+		j.Append(s)
+		j.Append(journal.Entry{Kind: journal.KindCallRequest, SessionID: "s1", Seq: ip(1),
+			Tool: sp("t"), ParamsDigest: sp("d"), Decision: sp(journal.DecisionAllow),
+			OccurredAt: time.Now().UTC().Format(time.RFC3339Nano)})
+	})
+
+	var snap struct {
+		Sessions []readmodel.Session `json:"sessions"`
+	}
+	_, body := get(t, srv, "/api/snapshot")
+	if err := json.Unmarshal(body, &snap); err != nil {
+		t.Fatal(err)
+	}
+	if len(snap.Sessions) != 1 || snap.Sessions[0].Agent == nil || *snap.Sessions[0].Agent != "claude-code" {
+		t.Fatalf("the session list does not carry the agent: %+v", snap.Sessions)
+	}
+
+	var detail readmodel.SessionDetail
+	_, body = get(t, srv, "/api/sessions/s1")
+	if err := json.Unmarshal(body, &detail); err != nil {
+		t.Fatal(err)
+	}
+	if detail.Session.Agent == nil || *detail.Session.Agent != "claude-code" {
+		t.Errorf("the session detail does not carry the agent: %+v", detail.Session)
+	}
+	if len(detail.Events) == 0 || detail.Events[0].Agent == nil || *detail.Events[0].Agent != "claude-code" {
+		t.Errorf("the session.start event does not carry the agent: %+v", detail.Events)
+	}
+}
+
+// The rules, agents and connectors journal.go and rules.go already hold
+// reach the browser through this endpoint, with the shape the console's
+// Policy tab reads: rules only ever deny, and a scopeless one names neither
+// an agent nor a connector.
+func TestPolicyReturnsRulesBudgetsAgentsAndConnectors(t *testing.T) {
+	srv, _ := serve(t, func(j *journal.Journal) {
+		if _, err := j.AddRule(journal.Rule{Tool: "rm", Effect: journal.DecisionDeny}); err != nil {
+			t.Fatal(err)
+		}
+		if err := j.SetConnector("github", "GITHUB_TOKEN",
+			[]string{"npx", "-y", "@modelcontextprotocol/server-github"}, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := j.AddBudget(journal.Budget{Tool: "list_repos", Calls: 20}); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	_, body := get(t, srv, "/api/policy")
+	var pol readmodel.Policy
+	if err := json.Unmarshal(body, &pol); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(pol.Rules) != 1 || pol.Rules[0].Tool != "rm" {
+		t.Fatalf("rules = %+v, want one rule denying rm", pol.Rules)
+	}
+	// Budgets too, since M5: a Policy tab without them would show a session
+	// as unbounded that is not.
+	if len(pol.Budgets) != 1 || pol.Budgets[0].Tool != "list_repos" || pol.Budgets[0].Calls != 20 {
+		t.Fatalf("budgets = %+v, want one budget of 20 on list_repos", pol.Budgets)
+	}
+	if pol.Rules[0].Agent != nil || pol.Rules[0].Connector != nil {
+		t.Errorf("a scopeless rule gained a scope: %+v", pol.Rules[0])
+	}
+	if len(pol.Connectors) != 1 || pol.Connectors[0].Target != "github" || pol.Connectors[0].EnvKey != "GITHUB_TOKEN" {
+		t.Fatalf("connectors = %+v", pol.Connectors)
+	}
+	if len(pol.Agents) != 0 {
+		t.Fatalf("agents = %+v, want none enrolled", pol.Agents)
+	}
+}
+
+// The journal never holds a connector's secret -- only the env var name it
+// is injected under and the argv authorized to receive it -- and this
+// endpoint must never become the place one reaches a browser.
+func TestPolicyNeverExposesASecret(t *testing.T) {
+	srv, _ := serve(t, func(j *journal.Journal) {
+		if err := j.SetConnector("github", "GITHUB_TOKEN",
+			[]string{"npx", "-y", "@modelcontextprotocol/server-github"}, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	_, body := get(t, srv, "/api/policy")
+	text := strings.ToLower(string(body))
+	for _, forbidden := range []string{"secret", "credential"} {
+		if strings.Contains(text, forbidden) {
+			t.Errorf("/api/policy exposed %q: %s", forbidden, text)
+		}
+	}
+}
+
+// STALE reaches the browser exactly as readmodel computes it: an enrolment
+// whose file no longer exists reads as not current over HTTP, the same as it
+// does in the projection this endpoint serves -- or as unknown, on a
+// platform with no way to check at all, never as a guess dressed up as one.
+func TestPolicyReportsAStaleEnrolment(t *testing.T) {
+	srv, _ := serve(t, func(j *journal.Journal) {
+		if err := j.AddAgent(journal.Agent{
+			Name: "gone", ExecDev: 1, ExecIno: 2,
+			ExecPath:   filepath.Join(t.TempDir(), "does-not-exist"),
+			EnrolledAt: time.Now(),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	_, body := get(t, srv, "/api/policy")
+	var pol readmodel.Policy
+	if err := json.Unmarshal(body, &pol); err != nil {
+		t.Fatal(err)
+	}
+	if len(pol.Agents) != 1 {
+		t.Fatalf("got %d agents, want 1", len(pol.Agents))
+	}
+
+	if !peer.FileIdentitySupported {
+		if pol.Agents[0].Current != nil {
+			t.Fatalf("current = %v on a platform that cannot answer, want unknown", *pol.Agents[0].Current)
+		}
+		return
+	}
+	if pol.Agents[0].Current == nil || *pol.Agents[0].Current {
+		t.Fatal("an enrolment pointing at a missing file was not reported STALE")
+	}
+}
+
+// The console's explanation of a call is the daemon's decision function
+// applied to the same rules, so the two can never disagree.
+func TestExplainNamesTheDecidingRule(t *testing.T) {
+	srv, _ := serve(t, func(j *journal.Journal) {
+		if _, err := j.AddRule(journal.Rule{Tool: journal.RuleToolDefault, Effect: journal.DecisionDeny}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := j.AddRule(journal.Rule{Tool: "read_file", Connector: sp("github"), Effect: journal.DecisionAllow}); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	_, body := get(t, srv, "/api/explain?tool=read_file&connector=github")
+	ex := decode[readmodel.Explanation](t, body)
+	if ex.Decision != journal.DecisionAllow || ex.Rule == nil || ex.Rule.Tool != "read_file" {
+		t.Fatalf("the exact allow on the connector should decide: %+v", ex)
+	}
+	_, body = get(t, srv, "/api/explain?tool=read_file")
+	ex = decode[readmodel.Explanation](t, body)
+	if ex.Decision != journal.DecisionDeny {
+		t.Fatalf("off the connector only the default deny matches: %+v", ex)
+	}
+
+	res, _ := get(t, srv, "/api/explain")
+	if res.StatusCode != http.StatusBadRequest {
+		t.Errorf("a missing tool got %d, want 400", res.StatusCode)
+	}
+	res, _ = get(t, srv, "/api/explain?tool=%01x")
+	if res.StatusCode != http.StatusBadRequest {
+		t.Errorf("a control character in a name got %d, want 400", res.StatusCode)
+	}
+}
+
+// Held calls are read from the daemon and shown with their real arguments,
+// as nim approve prints them; when nothing can ask the daemon the page is
+// told so, never an empty list that looks like "nothing is held".
+func TestPendingSaysWhetherTheDaemonCouldBeAsked(t *testing.T) {
+	srv, _ := serve(t, nil)
+	_, body := get(t, srv, "/api/pending")
+	var out struct {
+		Available bool                 `json:"available"`
+		Reason    string               `json:"reason"`
+		Pending   []daemon.PendingInfo `json:"pending"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Available || out.Reason == "" || out.Pending == nil {
+		t.Fatalf("a console with no way to ask should say so, with an empty list: %s", body)
+	}
+}
+
+func TestPendingShowsWhatTheDaemonHolds(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nim.db")
+	w, err := journal.Open(path, "test-machine")
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Close()
+	j, err := journal.OpenReadOnly(path, "test-machine")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+	s := New(j, "/nonexistent.sock")
+	s.Pending = func() ([]daemon.PendingInfo, error) {
+		return []daemon.PendingInfo{{ID: "s1-1", Tool: "send_email", Agent: "claude-code", Connector: "mail",
+			Arguments: json.RawMessage(`{"to":"ceo@example.com"}`), ArgumentsKnown: true, StartedAt: "2026-09-25T10:00:00Z"}}, nil
+	}
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	_, body := get(t, srv, "/api/pending")
+	var out struct {
+		Available bool                 `json:"available"`
+		Pending   []daemon.PendingInfo `json:"pending"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !out.Available || len(out.Pending) != 1 || string(out.Pending[0].Arguments) != `{"to":"ceo@example.com"}` {
+		t.Fatalf("the held call and its real arguments should be shown: %s", body)
 	}
 }

@@ -11,12 +11,14 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"os"
+	"runtime"
 	"sort"
 	"text/tabwriter"
 	"time"
@@ -29,7 +31,15 @@ import (
 	"github.com/BySergiMM/nim/engine/internal/shim"
 )
 
-var version = "0.0.0-dev"
+// Set by the release workflow with -ldflags "-X main.xxx=...". A build made
+// any other way -- `go build`, `go run`, a developer's own binary -- is
+// exactly the case these defaults describe: it did not come from a tagged
+// release and has no commit or build time to report.
+var (
+	version = "0.0.0-dev"
+	commit  = "unknown"
+	builtAt = "unknown"
+)
 
 func main() {
 	if len(os.Args) < 2 {
@@ -41,7 +51,7 @@ func main() {
 	case "serve":
 		err = runServe(os.Args[2:])
 	case "daemon":
-		err = runDaemon()
+		err = runDaemonCmd(os.Args[2:])
 	case "status":
 		err = runStatus()
 	case "log":
@@ -52,10 +62,20 @@ func main() {
 		err = runConnector(os.Args[2:])
 	case "agent":
 		err = runAgent(os.Args[2:])
+	case "policy":
+		err = runPolicy(os.Args[2:])
+	case "approve":
+		err = runApprove(os.Args[2:])
+	case "reject":
+		err = runReject(os.Args[2:])
 	case "verify":
 		err = runVerify(os.Args[2:])
+	case "init":
+		err = runInit(os.Args[2:])
+	case "doctor":
+		err = runDoctor(os.Args[2:])
 	case "version", "--version", "-v":
-		fmt.Println("nim", version)
+		fmt.Println(versionString())
 	case "help", "--help", "-h":
 		usage()
 	default:
@@ -68,6 +88,14 @@ func main() {
 	}
 }
 
+// versionString is what `nim version` prints. It is a function rather than a
+// literal Println call so a test can check the shape without spawning the
+// binary or depending on the ldflags a particular build was made with.
+func versionString() string {
+	return fmt.Sprintf("nim %s (%s, built %s, %s/%s, %s)",
+		version, commit, builtAt, runtime.GOOS, runtime.GOARCH, runtime.Version())
+}
+
 func usage() {
 	fmt.Fprint(os.Stderr, `nim - a record of what agents did through MCP
 
@@ -76,6 +104,13 @@ func usage() {
 
   nim daemon
         Run the shared daemon. Started automatically when needed.
+
+  nim daemon restart
+        Ask the running daemon to exit and start a new one from this
+        binary. The remedy for F-001: replacing the binary while a daemon
+        runs otherwise leaves the old daemon and every new client refusing
+        each other, since the socket is exactly what an older build cannot
+        answer for a new client. Not supported on Windows.
 
   nim status
         Where state lives, and what the record says about itself.
@@ -91,6 +126,57 @@ func usage() {
 
   nim console [--addr 127.0.0.1:7717]
         Serve a local, read-only view of what has been recorded.
+
+  nim connector set <name> --env KEY -- <command> [args...]
+  nim connector list | remove <name>
+        Hold a downstream server's credential, bound to the one command it
+        may be injected into. The secret is read from stdin, never argv.
+
+  nim agent add <name> <path-to-executable>
+  nim agent list | remove <name>
+        Enrol a client program, identified by the file it executes.
+
+  nim policy deny|allow|ask <tool> [--agent <name>] [--connector <name>]
+  nim policy default deny|allow|ask [--agent <name>] [--connector <name>]
+  nim policy remove <tool>|--default [--agent <name>] [--connector <name>]
+  nim policy list
+  nim policy explain <tool> [--agent <name>] [--connector <name>]
+        Deny, allow or ask about a tool, for every session or for one agent
+        or connector. No matching rule is allow; among rules that match, the
+        most specific wins and a tie goes to deny, then ask, then allow --
+        see nim policy explain. "default" sets one across every tool. Every
+        change is an entry in the journal.
+
+  nim approve
+        List every call currently held by an ask rule, with its real
+        arguments.
+
+  nim approve <id>
+  nim reject <id> [--reason <text>]
+        Approve or refuse one held call. Recorded in the journal before the
+        client that made the call is told; --reason is logged and printed
+        here, never sent to the client or the journal.
+
+  nim policy budget <n> --tool <tool>|--all-tools [--agent <name>] [--connector <name>]
+  nim policy budget remove --tool <tool>|--all-tools [--agent <name>] [--connector <name>]
+        Cap the number of ALLOWED calls one session may make, decremented at
+        authorization time. Per session: session.start to session.end, so a
+        client that restarts its relay starts fresh. A budget never grants
+        -- it only lowers what the rules already allow. Every change is an
+        entry in the journal.
+
+  nim init [--client <name>] [--config <path>] [--write] [--repoint]
+        Rewrite MCP client configs so every stdio server goes through Nim.
+        Without --write this only prints what would change.
+
+  nim init --undo <backup file>
+        Restore a config file from a backup nim init --write made.
+
+  nim doctor
+        A read-only health check: one line per check, OK/WARN/FAIL and a
+        remedy for anything not OK. Exits 1 only if something FAILed.
+
+  nim version
 
 `)
 }
@@ -132,6 +218,117 @@ func runDaemon() error {
 	return daemon.Run(cfg)
 }
 
+// runDaemonCmd dispatches `nim daemon`'s one subcommand. Kept separate from
+// runDaemon, which is also what a detached daemon process re-execs itself
+// into (see shim.StartDaemon: `<self> daemon`, no further arguments) --
+// that call must keep working exactly as it does today.
+func runDaemonCmd(args []string) error {
+	if len(args) == 0 {
+		return runDaemon()
+	}
+	if args[0] == "restart" {
+		return runDaemonRestart(args[1:])
+	}
+	return fmt.Errorf("nim daemon: unknown argument %q (did you mean `nim daemon restart`?)", args[0])
+}
+
+// restartTimeout bounds how long `nim daemon restart` waits for the old
+// daemon to exit after SIGTERM, and separately for the new one to answer.
+// Generous next to the p99 numbers in docs/benchmarks.md for an ordinary
+// request; a daemon that has not managed either in this long is worth
+// reporting as stuck rather than waiting longer.
+const restartTimeout = 5 * time.Second
+
+// runDaemonRestart is F-001's remedy: `nim daemon restart` asks the running
+// daemon to exit and starts a new one from this binary, so replacing the
+// binary while a daemon runs no longer leaves an operator with a daemon and
+// a client that can only refuse each other with no way forward.
+//
+// The request to stop travels by signal, not by the socket: the socket is
+// exactly what an older build refuses to answer for a new client, which is
+// the whole problem this command exists to fix. SIGTERM goes to the pid the
+// socket itself reports -- read from the kernel via peer.PIDOf, not
+// self-reported -- and only once shim.PeerPID has confirmed that pid is
+// genuinely Nim, either this exact build or an older one at this binary's
+// own path. Anything else on the socket is left alone: signalling a process
+// this cannot confirm is Nim is not this command's call to make.
+func runDaemonRestart(args []string) error {
+	fs := flag.NewFlagSet("daemon restart", flag.ExitOnError)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if runtime.GOOS == "windows" {
+		return fmt.Errorf("nim daemon restart is not supported on windows: peer identity has no way " +
+			"to confirm the process on the socket is Nim (see docs/security.md) -- end the daemon " +
+			"process yourself (Task Manager, or `taskkill /PID <pid> /F`), then run `nim daemon`")
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+
+	pid, confirmed, err := shim.PeerPID(cfg, dialTimeout)
+	switch {
+	case errors.Is(err, shim.ErrDaemonNotReachable):
+		fmt.Println("nim: no daemon was running")
+	case err != nil:
+		return err
+	case !confirmed:
+		return fmt.Errorf(
+			"something other than Nim is listening on %s; refusing to signal it -- stop it yourself, then run this again",
+			cfg.Daemon.Socket)
+	default:
+		fmt.Printf("nim: stopping the daemon (pid %d)\n", pid)
+		if err := stopDaemonPID(pid); err != nil {
+			return fmt.Errorf("could not signal pid %d: %w", pid, err)
+		}
+		if !waitDaemonGone(cfg, restartTimeout) {
+			return fmt.Errorf("pid %d did not exit within %s", pid, restartTimeout)
+		}
+	}
+
+	if !shim.StartDaemon() {
+		return fmt.Errorf("could not start a new daemon")
+	}
+	if !waitDaemonRunning(cfg, restartTimeout) {
+		return fmt.Errorf("the new daemon did not come up at %s -- see %s", cfg.Daemon.Socket, config.LogPath())
+	}
+	fmt.Println("nim: daemon restarted and answering at", cfg.Daemon.Socket)
+	return nil
+}
+
+// waitDaemonGone polls until nothing answers the socket at all -- the old
+// daemon's own shutdown removes the socket file, so a dial failure is what
+// "gone" looks like from here.
+func waitDaemonGone(cfg config.Config, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		conn, err := net.DialTimeout("unix", cfg.Daemon.Socket, 200*time.Millisecond)
+		if err != nil {
+			return true
+		}
+		conn.Close()
+		time.Sleep(50 * time.Millisecond)
+	}
+	return false
+}
+
+// waitDaemonRunning polls until a new daemon answers and is confirmed
+// genuine -- the same verification every relay performs, not a bare
+// connect.
+func waitDaemonRunning(cfg config.Config, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if conn, err := shim.DialRunningDaemon(cfg, 200*time.Millisecond); err == nil {
+			conn.Close()
+			return true
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return false
+}
+
 func runStatus() error {
 	cfg, err := config.Load()
 	if err != nil {
@@ -147,15 +344,32 @@ func runStatus() error {
 	}
 
 	// Whether the daemon answers is the question that matters: a relay with no
-	// daemon behind it records nothing while looking perfectly healthy.
-	if conn, err := net.DialTimeout("unix", cfg.Daemon.Socket, 500*time.Millisecond); err == nil {
+	// daemon behind it records nothing while looking perfectly healthy. And
+	// whether what answers is Nim matters as much: this line is what an
+	// operator trusts, and "running" for whatever happens to be bound on the
+	// socket would report an impostor as the daemon (impostor_test.go is the
+	// attack). So the same verification every relay performs, not a bare
+	// connect -- which also left a connection the daemon logged as an
+	// unverified peer, because it was closed before the daemon could look.
+	conn, err := shim.DialRunningDaemon(cfg, 500*time.Millisecond)
+	switch {
+	case err == nil:
 		conn.Close()
 		fmt.Println("daemon   running")
-	} else {
+	case errors.Is(err, shim.ErrDaemonNotReachable):
 		fmt.Println("daemon   not running")
 		if _, statErr := os.Stat(config.LogPath()); statErr == nil {
 			fmt.Println("         see", config.LogPath())
 		}
+	case errors.Is(err, shim.ErrDaemonOlderBuild):
+		// F-001: the daemon on the socket is provably this same binary, just
+		// an older file at the same path -- an in-place upgrade or rebuild
+		// while it was running. Not an impostor, so not NOT NIM; a specific
+		// line with the one-command fix instead.
+		fmt.Println("daemon   OLDER BUILD -- run nim daemon restart")
+	default:
+		fmt.Println("daemon   NOT NIM --", err)
+		fmt.Println("         something else is bound on the socket; every relay will refuse its answers")
 	}
 
 	if _, err := os.Stat(cfg.DatabasePath()); os.IsNotExist(err) {
@@ -177,6 +391,16 @@ func runStatus() error {
 		return err
 	}
 	renderStatus(os.Stdout, snap)
+
+	// Policy too: rules, agents and connectors, from the same read-only
+	// handle status already opened. No daemon needed, and none of this is a
+	// record of what happened -- it is what may happen, which is why it
+	// prints as its own block after the journal one rather than inside it.
+	pol, err := readmodel.TakePolicy(j)
+	if err != nil {
+		return err
+	}
+	renderPolicy(os.Stdout, pol)
 	return nil
 }
 
@@ -234,7 +458,8 @@ func renderStatus(w io.Writer, snap readmodel.Snapshot) {
 
 // renderGaps reports what the journal can tell about its own incompleteness.
 func renderGaps(w io.Writer, gaps readmodel.Gaps) {
-	if gaps.UnfinishedSessions == 0 && gaps.SessionsWithGaps == 0 && len(gaps.Anomalies) == 0 {
+	if gaps.UnfinishedSessions == 0 && gaps.SessionsWithGaps == 0 && gaps.CallsWithoutSession == 0 &&
+		len(gaps.Anomalies) == 0 {
 		// Not "no gaps": events dropped on the daemon's write path leave no
 		// trace to find, so this can only speak for the ones that do.
 		fmt.Fprintln(w, "         gaps           none of the detectable kinds found")
@@ -244,13 +469,54 @@ func renderGaps(w io.Writer, gaps readmodel.Gaps) {
 		fmt.Fprintf(w, "         gaps           %d call(s) missing across %d session(s): reported but not recorded\n",
 			gaps.MissingCallEntries, gaps.SessionsWithGaps)
 	}
+	if gaps.CallsWithoutSession > 0 {
+		fmt.Fprintf(w, "         orphaned       %d call(s) whose session.start never reached the journal\n",
+			gaps.CallsWithoutSession)
+	}
 	if gaps.UnfinishedSessions > 0 {
 		fmt.Fprintf(w, "         unfinished     %d session(s) with no end (a session running now looks the same)\n",
 			gaps.UnfinishedSessions)
 	}
+	// What became of each kind is stated next to its count, from the one
+	// place that knows: "relayed without inspection" was written when nothing
+	// was refused, and kept being printed about frames the relay had refused
+	// since M2.
 	for _, name := range sortedKeys(gaps.Anomalies) {
-		fmt.Fprintf(w, "         anomaly        %-16s %d (relayed without inspection)\n", name, gaps.Anomalies[name])
+		fmt.Fprintf(w, "         anomaly        %-16s %d (%s)\n", name, gaps.Anomalies[name],
+			readmodel.AnomalyDisposition(name))
 	}
+}
+
+// renderPolicy writes the policy block: what may happen, as opposed to the
+// journal block above it, which is what did. Separate from runStatus, and
+// takes a Policy rather than reading one, for the same reason renderStatus
+// does: a test can render the projection without a daemon or a socket, and
+// the console can be held to reporting the same counts.
+func renderPolicy(w io.Writer, pol readmodel.Policy) {
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "policy   rules        ", len(pol.Rules))
+	fmt.Fprintln(w, "         budgets      ", len(pol.Budgets))
+
+	stale, unknown := 0, 0
+	for _, a := range pol.Agents {
+		switch {
+		case a.Current == nil:
+			unknown++
+		case !*a.Current:
+			stale++
+		}
+	}
+	switch {
+	case stale > 0:
+		fmt.Fprintf(w, "         agents        %d (%d stale)\n", len(pol.Agents), stale)
+	default:
+		fmt.Fprintln(w, "         agents       ", len(pol.Agents))
+	}
+	if unknown > 0 {
+		fmt.Fprintf(w, "                        %d enrolment(s) could not be checked on this platform\n", unknown)
+	}
+
+	fmt.Fprintln(w, "         connectors   ", len(pol.Connectors))
 }
 
 func runLog(args []string) error {
@@ -269,6 +535,9 @@ func runLog(args []string) error {
 			sinceSet = true
 		}
 	})
+	if *limit <= 0 {
+		return fmt.Errorf("-n must be a positive number of entries")
+	}
 
 	// --json and --follow both mean "the entry stream", which is a different
 	// view from the default: every kind of entry, in the journal's own order,
@@ -296,7 +565,7 @@ func runLog(args []string) error {
 	// timestamp is shown because it is useful, but it does not decide the
 	// order: it is a value an entry carries, and a value can be wrong.
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "#\tWHEN\tCONNECTOR\tTOOL\tDECISION\tRESULT\tMS")
+	fmt.Fprintln(w, "#\tWHEN\tAGENT\tCONNECTOR\tTOOL\tDECISION\tRESULT\tMS")
 	for _, c := range calls {
 		// The same derivation the console uses, so a call cannot read as refused
 		// in a browser and as unanswered here. A completed call is worth more
@@ -313,8 +582,8 @@ func runLog(args []string) error {
 		if c.DurationMS != nil {
 			ms = fmt.Sprintf("%d", *c.DurationMS)
 		}
-		fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			c.ChainSeq, shortTime(c.OccurredAt), c.Connector, c.Tool, c.Decision, result, ms)
+		fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			c.ChainSeq, shortTime(c.OccurredAt), c.Agent, c.Connector, c.Tool, c.Decision, result, ms)
 	}
 	w.Flush()
 
@@ -357,6 +626,13 @@ func streamEntries(asJSON, follow bool, since int64, sinceSet bool, limit int) e
 		}
 		cursor = length
 	}
+	// The page size is what the journal will actually return, not what was
+	// asked for: it caps a read, and comparing the page against the larger
+	// number stopped a dump after one page while reporting success -- an
+	// export of a 3000-entry journal came back with 1000 and exit status 0.
+	if limit > journal.MaxEntriesPerRead {
+		limit = journal.MaxEntriesPerRead
+	}
 
 	out := bufio.NewWriter(os.Stdout)
 	defer out.Flush()
@@ -398,6 +674,12 @@ func streamEntries(asJSON, follow bool, since int64, sinceSet bool, limit int) e
 
 // formatEvent renders one entry on one line, leading with the position that
 // orders it.
+//
+// Agent comes before connector and client: a rule.add or rule.remove entry
+// carries only agent, connector, tool and decision (see journal.ruleEntry),
+// and this order is what makes such a line read as a scope followed by an
+// effect -- "agent=cursor connector=github tool=rm decision=deny" -- rather
+// than an arbitrary field dump.
 func formatEvent(ev readmodel.Event) string {
 	line := fmt.Sprintf("%6d  %-14s %s", ev.ChainSeq, ev.Kind, shortID(ev.SessionID))
 	add := func(format string, args ...any) { line += "  " + fmt.Sprintf(format, args...) }
@@ -405,14 +687,23 @@ func formatEvent(ev readmodel.Event) string {
 	if ev.Seq != nil {
 		add("seq=%d", *ev.Seq)
 	}
+	if ev.Agent != nil {
+		add("agent=%s", *ev.Agent)
+	}
 	if ev.Connector != nil {
 		add("connector=%s", *ev.Connector)
 	}
 	if ev.Client != nil {
 		add("client=%s", *ev.Client)
 	}
+	if ev.ExecPath != nil {
+		add("exec_path=%s", *ev.ExecPath)
+	}
 	if ev.Tool != nil {
 		add("tool=%s", *ev.Tool)
+	}
+	if ev.BudgetCalls != nil {
+		add("budget_calls=%d", *ev.BudgetCalls)
 	}
 	if ev.Decision != nil {
 		add("decision=%s", *ev.Decision)
@@ -478,6 +769,25 @@ func runConsole(args []string) error {
 		return err
 	}
 	srv := console.New(j, cfg.Daemon.Socket)
+	// The one thing the console reads from the daemon rather than the
+	// journal: the calls held for a human, with their real arguments, so
+	// they can be seen here and decided with nim approve. Through the same
+	// verified dial every command uses; a purpose of its own on the socket.
+	srv.Pending = func() ([]daemon.PendingInfo, error) {
+		conn, err := shim.DialRunningDaemon(cfg, dialTimeout)
+		if err != nil {
+			return nil, err
+		}
+		defer conn.Close()
+		resp, err := daemon.SendRequest(conn, daemon.Request{ID: config.NewID(), Kind: daemon.KindApprovalList})
+		if err != nil {
+			return nil, err
+		}
+		if resp.Error != "" {
+			return nil, errors.New(resp.Error)
+		}
+		return resp.Pending, nil
+	}
 
 	fmt.Println("nim console on http://" + listener.Addr().String())
 	fmt.Println("reading", cfg.DatabasePath())
@@ -524,22 +834,20 @@ func runVerify(args []string) error {
 		fmt.Println("That file seeds the chain. Its absence is missing verification material, not")
 		fmt.Println("evidence of a problem: restore it and the whole chain can be checked again.")
 		fmt.Println("Everything from entry 2 onwards is self-consistent.")
+		// The one check that detects truncation is still answered here. A
+		// missing seed says nothing about whether a head recorded earlier is
+		// in the chain, and the operator who ran this with --expect-head
+		// asked exactly that.
+		if *expect != "" {
+			fmt.Println()
+			reportExpectedHead(state)
+		}
 		return nil
 	}
 
 	fmt.Printf("journal self-consistent: %d entries, head %s\n", state.Entries, state.Head)
 	if *expect != "" {
-		if state.ExpectedHeadAt == state.Entries {
-			fmt.Println("head matches the one you recorded, so nothing before it has been rewritten")
-			return nil
-		}
-		// The journal grew, which is the ordinary case for any head recorded
-		// before the agent kept working. Saying so is the difference between a
-		// check an operator keeps running and one they learn to ignore.
-		fmt.Printf("the head you recorded is entry %d of %d, so the journal has grown by %d entries\n",
-			state.ExpectedHeadAt, state.Entries, state.Entries-state.ExpectedHeadAt)
-		fmt.Println("nothing at or before it has been rewritten; the entries after it are covered")
-		fmt.Println("only by the chain itself, so record the new head to cover them too.")
+		reportExpectedHead(state)
 		return nil
 	}
 	fmt.Println()
@@ -548,6 +856,23 @@ func runVerify(args []string) error {
 	fmt.Println("recompute the chain, and a shorter one checks out just as cleanly. Pass")
 	fmt.Println("--expect-head with a hash you recorded earlier to cover that too.")
 	return nil
+}
+
+// reportExpectedHead says where a head recorded earlier was found. Only
+// called once Check has established the chain contains it: a chain that did
+// not is reported as broken before this is reached.
+func reportExpectedHead(state readmodel.JournalState) {
+	if state.ExpectedHeadAt == state.Entries {
+		fmt.Println("head matches the one you recorded, so nothing before it has been rewritten")
+		return
+	}
+	// The journal grew, which is the ordinary case for any head recorded
+	// before the agent kept working. Saying so is the difference between a
+	// check an operator keeps running and one they learn to ignore.
+	fmt.Printf("the head you recorded is entry %d of %d, so the journal has grown by %d entries\n",
+		state.ExpectedHeadAt, state.Entries, state.Entries-state.ExpectedHeadAt)
+	fmt.Println("nothing at or before it has been rewritten; the entries after it are covered")
+	fmt.Println("only by the chain itself, so record the new head to cover them too.")
 }
 
 // openJournal opens the journal for reading and nothing else.

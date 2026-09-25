@@ -10,7 +10,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/BySergiMM/nim/engine/internal/config"
 	"time"
 )
 
@@ -185,12 +184,13 @@ func BenchmarkDecisionRoundTripContended(b *testing.B) {
 }
 
 // BenchmarkDecisionDenied is the refusal path. It should not be slower than
-// allow -- a denial does the same journal write, so if the two diverged it
-// would mean the deny list itself had become the expensive part, which for a
-// list of exact names it must never be.
+// allow -- a denial does the same journal write and the same rule lookup, so
+// if the two diverged it would mean the rules themselves had become the
+// expensive part, which for an indexed exact-name lookup they must never be.
 func BenchmarkDecisionDenied(b *testing.B) {
 	quiet(b)
-	cfg, _ := startWithPolicy(b, config.Policy{Deny: []string{"denied_tool"}})
+	cfg, _ := start(b)
+	deny(b, cfg, "denied_tool", "", "")
 	conn, enc, dec := openSession(b, sockPath(cfg.Daemon.Socket), "bench-deny")
 	defer conn.Close()
 

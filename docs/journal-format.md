@@ -31,29 +31,104 @@ is updated.
 | 14 | `machine_id` | string, nullable | `session.start` |
 | 15 | `client` | string, nullable | `session.start` |
 | 16 | `protocol_version` | string, nullable | `session.end` |
-| 17 | `agent` | string, nullable | `session.start` (schema_version 2 only) |
+| 17 | `agent` | string, nullable | `session.start` (from schema_version 2); `rule.add`, `rule.remove`; `agent.add`, `agent.remove` (schema_version 3 only) |
+| 18 | `exec_path` | string, nullable | `agent.add`, `agent.remove` (schema_version 3 only) |
+| 19 | `exec_id` | string, nullable | `agent.add`, `agent.remove` (schema_version 3 only) |
+| 20 | `budget_calls` | int, nullable | `budget.add`, `budget.remove` (schema_version 4 only) |
 
 `prev_hash` and `hash` are stored alongside but are **not** encoded: they are the
 chain, not the content.
 
 `kind` is one of `session.start`, `call.request`, `call.outcome`, `session.end`,
-`anomaly`.
+`anomaly`, `rule.add`, `rule.remove`, `agent.add`, `agent.remove`, `budget.add`,
+`budget.remove`.
 
-`decision` is one of `observed`, `allow`, `deny`, `approved`, `rejected`. M2
-writes `allow` and `deny`. `observed` is what earlier milestones wrote, when
-nothing was authorized at all, and it is still what those entries hold — which is
-why enforcement needed no migration. `approved` and `rejected` belong to human
-approval and are not written yet. See *What a decision means* below.
+`rule.add` and `rule.remove` record a policy change: a rule with one effect
+-- deny, allow or ask -- for `tool`, for the sessions in its scope. They
+carry the scope in `agent` (null: every session) and `connector` (null:
+every connector), the tool in `tool`, and the effect in `decision`. `tool` is
+either an exact name or `*`, which means a default set by `nim policy
+default deny|allow|ask` -- see
+docs/decisions/0003-allow-rules-and-precedence.md and its 2026-09-15
+addendum -- never a pattern or a prefix. Before M4.5 `decision` on these two
+kinds was always `deny`, and before M6 it was never `ask`; a journal written
+before either milestone has only the values that build could write, and a
+reader does not need to treat that specially -- it is exactly what the
+later build would have written for the same rule. They carry no session:
+`session_id` is the empty string, which the encoding keeps distinct from
+null, and `seq` is null. The rule and its entry are written in one SQLite
+transaction, so the chain never describes a rule that was not stored and no
+rule exists that the chain does not know about.
 
-`anomaly` is one of `batch`, `malformed_json`, `framing`, `duplicate_id`.
+`agent.add` and `agent.remove` record an enrolment change: the binding of a
+name the operator chose to an executable, which is what a rule's `agent`
+scope actually names. They carry the enrolment in `agent` (the name), `exec_path`
+(the path the operator typed) and `exec_id` (the resolved identity, see
+*canonical_encode_v3* below). `agent.add` carries the enrolment being made;
+`agent.remove` carries the one being removed, not nulls, so the chain says
+what stopped being enrolled rather than only that something did. They carry
+no session, exactly like a rule: `session_id` is the empty string and `seq`
+is null. The enrolment and its entry are written in one SQLite transaction --
+`AddAgent` and `RemoveAgent` -- so the chain never describes an enrolment that
+was not stored and no enrolment exists that the chain does not know about.
+Re-enrolling a name writes a fresh `agent.add` carrying the new identity; it
+does not rewrite the old one, because entries are never modified after they
+are written.
+
+`budget.add` and `budget.remove` record a budget change: a cap on the number
+of ALLOWED calls one session may make, for the sessions in its scope. They
+carry the scope in `agent` (null: every session) and `connector` (null:
+every connector), the tool in `tool` -- an exact name or `*`, meaning every
+tool, through `nim policy budget <n> --all-tools` and nowhere else, the same
+convention `RuleToolDefault` uses for a rule -- and the cap in
+`budget_calls`. `budget.add` carries the budget being set; `budget.remove`
+carries the one being removed, not nulls, so the chain says what stopped
+applying rather than only that something did -- the same reasoning
+`agent.add`/`agent.remove` follow for an enrolment. They carry no session,
+exactly like a rule or an enrolment: `session_id` is the empty string and
+`seq` is null. `decision` is null on both: a budget carries a magnitude, not
+an effect, so there is nothing for that field to hold. The budget and its
+entry are written in one SQLite transaction -- `AddBudget` and
+`RemoveBudget` -- so the chain never describes a budget that was not stored
+and no budget exists that the chain does not know about.
+docs/decisions/0004-budgets.md is the argument for what a budget counts and
+why.
+
+`decision` is one of `observed`, `allow`, `deny`, `approved`, `rejected`,
+`ask`. M2 writes `allow` and `deny` on `call.request`; M4.5 writes them on
+`rule.add` and `rule.remove` too, now that a rule can allow as well as deny.
+`observed` is what earlier milestones wrote, when nothing was authorized at
+all, and it is still what those entries hold — which is why enforcement
+needed no migration.
+
+`approved` and `rejected` are written on `call.request` from M6, once a
+human decides a call an `ask` rule held, or once the approval wait runs out
+with nobody deciding (also `rejected` -- see
+docs/decisions/0005-human-approval.md for why a timeout and an explicit
+refusal write the same decision). `ask` itself is never a `call.request`'s
+own decision: it is one more value the column already had to hold for
+`rule.add` and `rule.remove`, alongside `deny` and `allow`, naming a rule's
+effect rather than anything a call was decided to be. While a call is held
+for a human, nothing is written for it at all -- the daemon's wire protocol
+has its own value, `pending`, for that in-flight state, and it never reaches
+this column, because there is nothing to record yet. See *What a decision
+means* below.
+
+`anomaly` is one of `batch`, `malformed_json`, `framing`, `duplicate_id`,
+`duplicate_key`, `unreadable_call`. Since M2 the relay refuses most of them
+rather than relaying them: a frame that is not JSON, a frame carrying two
+messages, an object naming a key twice, a call with no readable tool name, and
+a batch carrying a `tools/call`. A batch carrying none and a reused in-flight
+id are relayed and counted. `nim status` prints which beside each count.
 
 Fields absent for a kind are NULL, and NULL is encoded distinctly from an empty
 string.
 
 Two placements are worth explaining. `protocol_version` sits on `session.end`
-because the negotiated version is only known once `initialize` has been
-answered, which is after `session.start` has already been written; a session
-that is interrupted therefore does not record one. And an `anomaly` entry
+because the negotiated version is only known once the handshake -- `initialize`,
+or `server/discover` on the 2026-07-28 revision -- has been answered, which is
+after `session.start` has already been written; a session that is interrupted
+therefore does not record one. And an `anomaly` entry
 carries no `seq`, because the per-session sequence counts calls, and lending an
 anomaly one of those numbers would read as a missing call later.
 
@@ -121,13 +196,68 @@ The genesis is **not** versioned with the entry encoding — it is still
 has nothing to do with how many fields an entry has; changing it would
 invalidate every existing chain for no reason.
 
+## canonical_encode_v3
+
+Identical to v2 except that the domain is `nim.journal.v3` and there are
+**nineteen** fields, the last two being `exec_path` and `exec_id`:
+
+    output := "nim.journal.v3" 0x0A || field(1) || ... || field(19)
+
+`exec_path` and `exec_id` are the path an enrolment change carries and the
+identity it resolves to, rendered as `"<dev>:<ino>"` in decimal — the same
+pair that decides whether a running process matches the enrolment, encoded as
+one string so a second implementation does not have to guess a separator for
+two integers. Both are null on every kind except `agent.add` and
+`agent.remove`, exactly as `agent` is null off `session.start`, `rule.add` and
+`rule.remove`.
+
+The domain differs from v2 for the same reason v2's differs from v1: two more
+fields hashed under the v2 domain would let the same entry produce a different
+hash depending on which build read it, which is precisely what a version
+exists to prevent. `agent` could not simply be reused for `exec_path` or
+`exec_id` either — it already carries the enrolment's *name* on `agent.add`
+and `agent.remove`, and collapsing the name and the identity into one field
+would make a re-enrolment indistinguishable from the enrolment it replaced.
+
+The genesis is unaffected by v3 for the same reason it is unaffected by v2: it
+is not versioned with the entry encoding.
+
+## canonical_encode_v4
+
+Identical to v3 except that the domain is `nim.journal.v4` and there are
+**twenty** fields, the last being `budget_calls`:
+
+    output := "nim.journal.v4" 0x0A || field(1) || ... || field(20)
+
+`budget_calls` is the cap a budget change carries -- the number of ALLOWED
+calls one session may make, for the scope the entry's `agent`, `connector`
+and `tool` already carry. It is set on `budget.add`, carrying the cap being
+set, and on `budget.remove`, carrying the cap being removed, so the chain
+says what stopped applying rather than only that something did. It is null
+on every other kind, exactly as `exec_path` and `exec_id` are null off
+`agent.add` and `agent.remove`.
+
+The domain differs from v3 for the same reason v3's differs from v2: one
+more field hashed under the v3 domain would let the same entry produce a
+different hash depending on which build read it, which is precisely what a
+version exists to prevent. `decision` could not simply carry the cap either
+-- it already carries a rule's effect on `rule.add`/`rule.remove`, and a
+budget is a magnitude, not an effect; collapsing the two into one field
+would make a reader guess which meaning a number was supposed to have.
+
+The genesis is unaffected by v4 for the same reason it is unaffected by v2
+and v3: it is not versioned with the entry encoding.
+
 ## Verifying a journal that spans versions
 
 `schema_version` is stored per entry and verification dispatches on what each
 entry says, never on what the current build writes. A journal written before
-`agent` existed keeps verifying with the v1 encoder, and a chain containing
-both versions checks out end to end — the chain links by hash, and each
-entry's own encoding is decided by its own stored version.
+`agent` existed keeps verifying with the v1 encoder, one written before
+`exec_path` and `exec_id` existed keeps verifying with the v2 encoder, one
+written before `budget_calls` existed keeps verifying with the v3 encoder,
+and a chain containing all four versions checks out end to end — the chain
+links by hash, and each entry's own encoding is decided by its own stored
+version.
 
 An entry claiming a version this build does not know is refused by name rather
 than encoded under a guess. Encoding it under whatever rules happen to be
@@ -139,10 +269,10 @@ Encoded as the exact UTF-8 bytes held in the column. No escaping, no trimming,
 no case folding, and **no Unicode normalisation**.
 
 Normalisation is deliberately absent. It belongs to the decision path — where
-two spellings of one repository name must not resolve differently — and NIM does
-not decide anything yet. Normalising here would mean the journal recorded
-something other than what was observed, which is the opposite of what a journal
-is for.
+two spellings of one repository name must not resolve differently — and the
+decision path does not normalise either: a rule matches the exact bytes of
+`params.name`. Normalising here would mean the journal recorded something other
+than what was observed, which is the opposite of what a journal is for.
 
 ### Integers
 
@@ -176,14 +306,17 @@ Those questions are real, but they belong to two other places:
 - **Anomaly detection** — batch, malformed JSON and framing are counted and
   recorded as `anomaly` entries, and from M2 the frames that could hide a
   `tools/call` are refused rather than relayed. They are not canonicalised.
-  This is not the full set of JSON ambiguities, and it is not meant to be. In
-  particular **duplicate object keys are not detected**: `{"name":"a","name":"b"}`
-  is accepted by every parser involved, each picks one, and Go picks the last —
-  so the journal records `b` while a server whose parser prefers the first would
-  act on `a`. Noticing that requires parsing strictly and deciding what the
-  message *is*, which is the same work as canonicalising the request, and
-  belongs with it. The standard library gives no signal that a duplicate was
-  seen, so there is no cheap detection to bolt on in the meantime.
+  **Duplicate object keys are detected**, at the two levels Nim reads: the
+  top-level object and `params`. An earlier version of this paragraph said
+  they were not, and understated the consequence -- `"method":5,"method":
+  "tools/call"` did not merely record the wrong name, it put a `tools/call` in
+  front of the connector with no decision at all, because Go's typed decoder
+  read the frame as nothing (F-013). Objects are now read key by key, by the
+  exact bytes of each key; a key that appears twice at a level Nim reads is
+  refused as a `duplicate_key` anomaly, and a key that differs only in case is
+  a different key, to Nim exactly as to a server. Keys inside
+  `params.arguments` are the tool's business: they are digested as bytes and
+  never interpreted, so a repeat there is not one.
 - **Request canonicalisation (not in this milestone)** — when NIM starts
   deciding, the message it authorises must be the message it emits, which needs
   JCS-style canonical JSON with NFC and rejection of duplicate keys. That work
@@ -191,16 +324,28 @@ Those questions are real, but they belong to two other places:
   would change bytes for no benefit.
 
 `params_digest` is therefore still `sha256` over the raw `params.arguments`
-bytes as they arrived. Digests written under `schema_version` 1 are **not**
-comparable with digests written under any later version that canonicalises
-first. The version field is what makes that safe.
+bytes as they arrived. When the `arguments` key is absent the digest is of no
+bytes at all (`e3b0c442…`); when it is present and `null`, of the four bytes
+`null`. A reader comparing digests has to know that "no arguments" has a fixed
+value. A call whose `params` cannot be read as an object with a string `name`
+is refused before any digest is taken, so a digest always belongs to a call
+Nim read. Digests written under `schema_version` 1 are **not** comparable with
+digests written under any later version that canonicalises first. The version
+field is what makes that safe.
 
 ## Chain
 
     genesis        := sha256("nim.journal.v1.genesis" 0x0A || machine_id)
-    hash(n)        := sha256(raw_bytes(prev_hash(n)) || canonical_encode_v1(entry n))
+    hash(n)        := sha256(raw_bytes(prev_hash(n)) || canonical_encode_v{schema_version(n)}(entry n))
     prev_hash(1)   := genesis
     prev_hash(n)   := hash(n-1)
+
+The encoder is the one the entry's own `schema_version` names: `v1` for
+entries written before `agent` existed, `v2` after, `v3` for entries carrying
+`exec_path` and `exec_id`, `v4` for entries carrying `budget_calls`. An
+earlier version of this formula said `canonical_encode_v1` for every entry,
+which a second implementation transcribing it would have followed into
+rejecting every v2 entry. See *Verifying a journal that spans versions*.
 
 `raw_bytes` is the 32-byte decoding of the hex-encoded previous hash, not its
 hex text. Hashes are stored as lowercase hex.
@@ -287,22 +432,30 @@ Do not read `gaps: none of the detectable kinds found` as `no calls were lost`.
 
 From M2 a `call.request` carries the decision the daemon reached: `allow` or
 `deny`. Entries written before then carry `observed`, which recorded that nothing
-had been decided at all.
+had been decided at all. From M6 a call an `ask` rule held gets its entry once a
+human decides it: `approved` behaves exactly as `allow` does below, and
+`rejected` exactly as `deny` does -- the distinction is about *who or what*
+reached the decision, never about what it means for the entry.
 
 One direction holds:
 
 > A call that reached a connector is a call this journal recorded, with the
 > decision that allowed it.
 
-The converse does not. **An `allow` is not evidence the call was made.** The
-relay gives up after two seconds and SQLite's busy timeout is five, so a heavily
-contended write can be committed after the relay has already denied the call and
-answered the client. Nothing distinguishes that entry from a call still running:
-both are an `allow` with no `call.outcome`, and both read as `pending`.
+The converse does not. **An `allow` or `approved` is not evidence the call was
+made.** The relay gives up after two seconds (or, while a call is held for a
+human, after `approval_timeout`) and SQLite's busy timeout is five, so a
+heavily contended write can be committed after the relay has already denied
+the call and answered the client. Nothing distinguishes that entry from a
+call still running: both are an `allow`/`approved` with no `call.outcome`, and
+both read as `readmodel.CallPending` -- a reader's *derived* state for "no
+outcome yet," unrelated to the daemon's wire-only `pending` value below,
+which never reaches this column at all.
 
-**A refusal produces one entry, not two.** There is no `call.outcome` for work
-that never happened, and its absence is not a gap. A reader deriving state from
-these entries should treat `deny` with no outcome as refused, and `deny` with an
+**A refusal produces one entry, not two, whether it is `deny` or
+`rejected`.** There is no `call.outcome` for work that never happened, and
+its absence is not a gap. A reader deriving state from these entries should
+treat `deny` or `rejected` with no outcome as refused, and either with an
 outcome as inconsistent — nothing should produce the latter.
 
 **Some refusals are not here at all.** When the daemon cannot be reached the
@@ -310,7 +463,32 @@ relay denies the call locally, and the only thing that can write to this journal
 is exactly what could not be reached. Those refusals are counted as lost events
 and printed on stderr by the relay; the journal never learns of them. So
 `decision = deny` in this file always means a policy refusal, never an inability
-to decide.
+to decide -- and the same now holds for `rejected`: it always means a human, or
+the approval timeout, actually reached that decision, never that the relay
+gave up waiting to hear one. A relay that gives up waiting on a held call
+denies locally and writes nothing, exactly as it always has for an
+unreachable daemon.
+
+**A call an `ask` rule is still holding has no entry yet, and is not a
+gap.** Between a `call.request` being asked and a human (or the timeout)
+deciding it, the daemon has recorded nothing: not the call, not that a
+decision is pending, nothing. The wire carries its own value for this state
+-- `pending`, distinct from `undecided` -- but it exists only in the message
+the daemon sends the relay while the call is held; it is never written here.
+A reader of this journal cannot see a call in this state at all, by
+construction, which is the same property `docs/decisions/0005-human-approval.md`
+states for why the real arguments never reach it either.
+
+**A budget counts decisions, not outcomes, for the same reason "an allow is
+not evidence the call was made" holds above.** A budget's cap is weighed
+against how many `call.request` entries a session already has with
+`decision` `allow` or `approved` -- never against `call.outcome`, which a
+denied call never has and an allowed one may still be missing if the relay
+gave up first. So a call the relay never actually forwarded still spent its
+share of the budget the moment it was allowed, exactly as it still counts
+toward "a call that reached a connector is a call this journal recorded, with
+the decision that allowed it." docs/decisions/0004-budgets.md is the
+argument in full.
 
 ## What this does not protect against
 

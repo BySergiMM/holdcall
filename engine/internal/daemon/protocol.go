@@ -34,6 +34,50 @@ type Request struct {
 	// it returns a connector's command rather than accepting one.
 	AgentName string `json:"agent_name,omitempty"`
 	AgentPath string `json:"agent_path,omitempty"`
+
+	// RuleTool, RuleAgent and RuleConnector describe a rule for the policy.*
+	// kinds. RuleAgent names an enrolment and is not an identity claim: it
+	// says whose sessions the rule is for, and the daemon checks that such
+	// an enrolment exists rather than taking the name to mean anything on
+	// its own. An empty RuleAgent or RuleConnector means every.
+	//
+	// RuleDefault marks a request as `nim policy default deny|allow|ask` or
+	// `nim policy remove --default`: the rule's tool is
+	// journal.RuleToolDefault ("*") rather than RuleTool, which must be empty
+	// when this is set. A default has no tool of its own to send, and a
+	// caller may not set both -- see ruleTool.
+	RuleTool      string `json:"rule_tool,omitempty"`
+	RuleAgent     string `json:"rule_agent,omitempty"`
+	RuleConnector string `json:"rule_connector,omitempty"`
+	RuleDefault   bool   `json:"rule_default,omitempty"`
+
+	// BudgetTool, BudgetAgent, BudgetConnector and BudgetAllTools describe a
+	// budget's scope for the budget.set and budget.remove kinds -- the same
+	// shape ruleScope validates for a rule, held in fields of their own
+	// rather than the Rule* ones above because a budget and a rule are
+	// different things that happen to share a scope shape, not the same
+	// request. BudgetAllTools marks `nim policy budget <n> --all-tools` the
+	// way RuleDefault marks `nim policy default`: the budget's tool becomes
+	// journal.BudgetToolAll ("*") rather than BudgetTool, and a caller may
+	// not set both.
+	BudgetTool      string `json:"budget_tool,omitempty"`
+	BudgetAgent     string `json:"budget_agent,omitempty"`
+	BudgetConnector string `json:"budget_connector,omitempty"`
+	BudgetAllTools  bool   `json:"budget_all_tools,omitempty"`
+	// BudgetCalls is the cap budget.set stores; ignored by budget.remove and
+	// budget.list.
+	BudgetCalls int `json:"budget_calls,omitempty"`
+	// ApprovalID, ApprovalDecision and ApprovalReason belong to
+	// approval.decide: the id an approval.list answer (or the daemon's own
+	// "pending" reply) named, journal.DecisionApproved or
+	// journal.DecisionRejected, and the human's reason for a rejection.
+	// ApprovalReason is never written to the journal and never reaches the
+	// client the call came from -- only the daemon's own log and the
+	// Response this request gets back see it. See
+	// docs/decisions/0005-human-approval.md.
+	ApprovalID       string `json:"approval_id,omitempty"`
+	ApprovalDecision string `json:"approval_decision,omitempty"`
+	ApprovalReason   string `json:"approval_reason,omitempty"`
 }
 
 const (
@@ -45,6 +89,28 @@ const (
 	KindAgentAdd    = "agent.add"
 	KindAgentList   = "agent.list"
 	KindAgentRemove = "agent.remove"
+
+	KindPolicyDeny    = "policy.deny"
+	KindPolicyAllow   = "policy.allow"
+	KindPolicyAsk     = "policy.ask"
+	KindPolicyRemove  = "policy.remove"
+	KindPolicyList    = "policy.list"
+	KindPolicyExplain = "policy.explain"
+
+	// Budgets are policy too -- a connection that has committed to the
+	// "policy" purpose may send any of these alongside policy.* -- but keep
+	// their own kind names because setting a cap and setting a rule's effect
+	// are different operations, not two spellings of one.
+	KindBudgetSet    = "budget.set"
+	KindBudgetRemove = "budget.remove"
+	KindBudgetList   = "budget.list"
+	// KindApprovalList and KindApprovalDecide are their own purpose (see
+	// requestState.kind): nim approve and nim reject dial the daemon under
+	// it, distinct from policy, and a connection that speaks one may not
+	// pivot to the other or to a credential -- purpose binding is what makes
+	// an approval connection unable to ask for a credential.
+	KindApprovalList   = "approval.list"
+	KindApprovalDecide = "approval.decide"
 )
 
 // String redacts Secret so that even a future fmt.Printf/log.Printf("%v", req)
@@ -81,6 +147,88 @@ type Response struct {
 
 	// agent.list
 	Agents []AgentInfo `json:"agents,omitempty"`
+
+	// policy.list; also the one rule policy.deny, policy.allow and
+	// policy.remove acted on.
+	Rules []RuleInfo `json:"rules,omitempty"`
+
+	// budget.list; also the one budget budget.set and budget.remove acted
+	// on.
+	Budgets []BudgetInfo `json:"budgets,omitempty"`
+
+	// policy.explain
+	Explain *ExplainInfo `json:"explain,omitempty"`
+
+	// approval.list: every call currently held for a human. approval.decide
+	// answers with the one call it just resolved, the same shape nim policy
+	// deny/allow/ask echoes the rule it just added.
+	Pending []PendingInfo `json:"pending,omitempty"`
+}
+
+// PendingInfo is one call on hold for a human, exactly as nim approve shows
+// it: the real arguments, never a summary -- docs/decisions/0005-human-approval.md
+// is why. Arguments is raw JSON, nil when the call carried none, and this is
+// the one place on the whole daemon socket where that is deliberate: nim
+// approve is the human's own inspection of the call, not a channel back to
+// the model that asked for it.
+type PendingInfo struct {
+	ID        string          `json:"id"`
+	Tool      string          `json:"tool"`
+	Agent     string          `json:"agent,omitempty"`
+	Connector string          `json:"connector,omitempty"`
+	Arguments json.RawMessage `json:"arguments,omitempty"`
+	// ArgumentsKnown is whether the relay has reported the call's arguments
+	// yet. False means "not received yet", which nim approve says in those
+	// words; it is not the same as a call that carries none.
+	ArgumentsKnown bool   `json:"arguments_known"`
+	StartedAt      string `json:"started_at"`
+}
+
+// RuleInfo is one rule as reported to the CLI. Agent and Connector are empty
+// when the rule applies to every one; Tool is journal.RuleToolDefault ("*")
+// for a default.
+type RuleInfo struct {
+	Agent     string `json:"agent,omitempty"`
+	Connector string `json:"connector,omitempty"`
+	Tool      string `json:"tool"`
+	Effect    string `json:"effect"`
+	CreatedAt string `json:"created_at"`
+}
+
+// BudgetInfo is one budget as reported to the CLI. Agent and Connector are
+// empty when the budget applies to every one; Tool is journal.BudgetToolAll
+// ("*") for --all-tools.
+type BudgetInfo struct {
+	Agent     string `json:"agent,omitempty"`
+	Connector string `json:"connector,omitempty"`
+	Tool      string `json:"tool"`
+	Calls     int64  `json:"calls"`
+	CreatedAt string `json:"created_at"`
+}
+
+// ExplainInfo answers policy.explain: which rule governs a call from Agent,
+// on Connector, for Tool ("" for Agent or Connector means as an unenrolled
+// agent or with no connector, the same convention journal.Rule uses
+// throughout), and why. Rule is nil when no rule's scope matched at all, in
+// which case Decision is the M4 baseline -- allow -- and Reason says so.
+//
+// Computed by calling journal.Decide on the same candidates the decision
+// path would gather, never by a second copy of the precedence, so what this
+// reports can never drift from what a real call gets.
+type ExplainInfo struct {
+	Agent      string    `json:"agent"`
+	Connector  string    `json:"connector"`
+	Tool       string    `json:"tool"`
+	Decision   string    `json:"decision"`
+	Rule       *RuleInfo `json:"rule,omitempty"`
+	Reason     string    `json:"reason"`
+	Candidates int       `json:"candidates"`
+	// Budgets are every budget whose scope matches this agent, connector and
+	// tool -- shown alongside the rule so nim policy explain can answer
+	// "does a budget apply here, and what is its cap" without inventing
+	// session state it was never given: explain has no session id to weigh
+	// a count against, only a scope. See handlePolicyExplain.
+	Budgets []BudgetInfo `json:"budgets,omitempty"`
 }
 
 // ConnectorInfo is non-secret connector metadata: which env var name a
@@ -109,13 +257,17 @@ type AgentInfo struct {
 	Current bool `json:"current"`
 }
 
+// String never prints Pending[].Arguments, for the same reason it redacts
+// Env: this is what a future fmt.Printf/log.Printf("%v", resp) mistake would
+// print, and a call's real arguments have no more business in a log line
+// than a credential does.
 func (r Response) String() string {
 	env := "<none>"
 	if len(r.Env) > 0 {
 		env = "<redacted>"
 	}
-	return fmt.Sprintf("Response{ID:%s Error:%q Found:%v Env:%s Connectors:%d Agents:%d}",
-		r.ID, r.Error, r.Found, env, len(r.Connectors), len(r.Agents))
+	return fmt.Sprintf("Response{ID:%s Error:%q Found:%v Env:%s Connectors:%d Agents:%d Rules:%d Budgets:%d Pending:%d}",
+		r.ID, r.Error, r.Found, env, len(r.Connectors), len(r.Agents), len(r.Rules), len(r.Budgets), len(r.Pending))
 }
 
 // SendRequest writes req and reads back its Response on conn. Used by the

@@ -20,6 +20,15 @@ import (
 // The two produce comparable identities, which is what makes an enrolment
 // usable: a file enrolled here and a process inspected there are the same
 // agent exactly when the numbers match.
+// FileIdentitySupported reports whether ImageOfFile can answer at all on
+// this platform. True here: a caller that gets an error from ImageOfFile on
+// unix has learned something real about the file -- it does not exist, is a
+// directory, or is not executable -- not about the platform. See
+// image_windows.go for the other side of this, which a reader that persists
+// an Image (the console's STALE check among them) must tell apart before
+// turning "the lookup failed" into "the file changed".
+const FileIdentitySupported = true
+
 func ImageOfFile(path string) (Image, error) {
 	fi, err := os.Stat(path)
 	if err != nil {

@@ -1,5 +1,7 @@
 // Package journal is the local record of what agents did. SQLite is the source
-// of truth; the Supabase mirror is a copy of these rows and never the reverse.
+// of truth. A Supabase mirror of these rows is planned (M8) and blocked on the
+// chain being unkeyed; nothing in the engine syncs anything today, and when
+// something does it will copy from here and never the reverse.
 //
 // The record is append-only and hash-chained. Append-only in fact, not by
 // convention: a call produces two entries, one when it is seen and one when it
@@ -31,6 +33,32 @@ const (
 	KindCallOutcome  = "call.outcome"
 	KindSessionEnd   = "session.end"
 	KindAnomaly      = "anomaly"
+
+	// A policy change is an entry in the chain, so that an audit of the rules
+	// is possible and not only an audit of the calls. Both carry the rule's
+	// scope in agent, connector and tool, its effect in decision, and no
+	// session: session_id is the empty string, which the encoding keeps
+	// distinct from null.
+	KindRuleAdd    = "rule.add"
+	KindRuleRemove = "rule.remove"
+
+	// An enrolment change is an entry in the chain for the same reason a rule
+	// change is: a rule is scoped to a name, and a name's binding to an
+	// executable can move under it. Both carry the name in agent, the
+	// operator-typed path in exec_path and the resolved identity in exec_id,
+	// and no session, exactly like a rule. On agent.remove both exec fields
+	// carry the enrolment that was removed, not nulls, so the chain says what
+	// was removed rather than only that something was.
+	KindAgentAdd    = "agent.add"
+	KindAgentRemove = "agent.remove"
+
+	// A budget change is an entry in the chain for the same reason a rule
+	// change is: nim_budgets sits outside the hash chain, like nim_rules and
+	// nim_agents, so these entries are what make a change to it auditable.
+	// Both carry the budget's scope in agent, connector and tool, its cap in
+	// budget_calls, and no session, exactly like a rule. See budgets.go.
+	KindBudgetAdd    = "budget.add"
+	KindBudgetRemove = "budget.remove"
 )
 
 // The decisions an entry can carry.
@@ -39,44 +67,78 @@ const (
 // authorizing them; journals from that milestone are full of it, so everything
 // reading the record still has to understand it.
 //
-// From M2 a call.request carries what the daemon actually decided. Approved and
-// rejected belong to human approval and are not written yet -- they are here so
-// the vocabulary a reader must handle is stated in one place rather than
-// scattered as literals.
+// From M2 a call.request carries what the daemon actually decided. Approved
+// and rejected belong to human approval (M6) and are written now, once a
+// human decides a call an "ask" rule held -- see
+// docs/decisions/0005-human-approval.md. Nothing is written while a call is
+// still pending: the wire carries a "pending" value of its own
+// (daemon.DecisionPending) that never reaches this column, because there is
+// nothing to record yet.
 const (
 	DecisionObserved = "observed"
 	DecisionAllow    = "allow"
 	DecisionDeny     = "deny"
 	DecisionApproved = "approved"
 	DecisionRejected = "rejected"
+
+	// DecisionAsk is a rule's effect, never a call's own decision -- nothing
+	// is ever written to a call.request with this value. A call whose
+	// winning rule asks is held for a human, and its call.request entry is
+	// written only once they decide (DecisionApproved or DecisionRejected)
+	// or the wait runs out (DecisionRejected, same as an explicit refusal).
+	// It shares this column with DecisionDeny and DecisionAllow because
+	// rule.add and rule.remove record a rule's effect here, exactly as they
+	// always have -- see ruleEntry.
+	DecisionAsk = "ask"
 )
 
-const schema = `
-create table if not exists nim_journal (
+// journalTableBody is everything after the table name in nim_journal's
+// definition. It is held apart from the schema because SQLite stores a table's
+// CREATE statement verbatim after its first two keywords (upper-cased, with IF
+// NOT EXISTS dropped), so the text is also how an existing database says
+// whether it was created by this build -- see rebuildJournalTable.
+//
+// Changing a single byte here makes every existing journal rebuild its table
+// once, on the next open, copying every row across unchanged. That is the
+// intended cost of a schema change, not an accident to avoid; it is what lets
+// a CHECK constraint grow when a milestone adds a kind, which ALTER TABLE
+// cannot do.
+const journalTableBody = `(
     chain_seq        integer primary key,
     schema_version   integer not null,
     kind             text    not null check (kind in
-                       ('session.start','call.request','call.outcome','session.end','anomaly')),
+                       ('session.start','call.request','call.outcome','session.end','anomaly',
+                        'rule.add','rule.remove','agent.add','agent.remove',
+                        'budget.add','budget.remove')),
     session_id       text    not null,
     seq              integer,
     connector        text,
     tool             text,
     params_digest    text,
     decision         text    check (decision is null or decision in
-                       ('observed','allow','deny','approved','rejected')),
+                       ('observed','allow','deny','approved','rejected','ask')),
     ok               integer,
     duration_ms      integer,
     anomaly          text    check (anomaly is null or anomaly in
-                       ('batch','malformed_json','framing','duplicate_id')),
+                       ('batch','malformed_json','framing','duplicate_id','duplicate_key','unreadable_call')),
     occurred_at      text    not null,
     machine_id       text,
     client           text,
     protocol_version text,
     agent            text,
+    exec_path        text,
+    exec_id          text,
+    budget_calls     integer,
     prev_hash        text    not null,
     hash             text    not null
-);
+)`
 
+// journalTableStored is what sqlite_master holds for a table this build made.
+const journalTableStored = "CREATE TABLE nim_journal " + journalTableBody
+
+// journalIndexes are recreated after a rebuild; the schema below creates them
+// too, so they are one list.
+const journalIndexes = `
 create index if not exists nim_journal_occurred_at_idx on nim_journal (occurred_at desc);
 create index if not exists nim_journal_kind_idx        on nim_journal (kind);
 
@@ -90,7 +152,63 @@ create index if not exists nim_journal_kind_idx        on nim_journal (kind);
 -- distinct, so those stay unconstrained -- a session can have as many anomalies
 -- as it produces.
 create unique index if not exists nim_journal_entry_idx on nim_journal (session_id, seq, kind);
+`
 
+// rulesTableBody is everything after the table name in nim_rules's
+// definition, held apart from the schema for the same reason
+// journalTableBody is: SQLite stores a table's CREATE statement verbatim, so
+// the text is also how an existing database says whether it was created by
+// this build -- see rebuildRulesTable. Changing a byte here makes every
+// existing nim_rules rebuild once, on the next open, copying every row
+// across unchanged.
+const rulesTableBody = `(
+    id          integer primary key autoincrement,
+    agent       text,
+    connector   text,
+    tool        text    not null,
+    effect      text    not null check (effect in ('deny','allow','ask')),
+    created_at  text    not null
+)`
+
+// rulesTableStored is what sqlite_master holds for a table this build made.
+const rulesTableStored = "CREATE TABLE nim_rules " + rulesTableBody
+
+// rulesIndexes are recreated after a rebuild; the schema below creates them
+// too, so they are one list, the same pattern journalIndexes uses.
+const rulesIndexes = `
+create unique index if not exists nim_rules_scope_idx
+    on nim_rules (ifnull(agent, ''), ifnull(connector, ''), tool);
+create index if not exists nim_rules_tool_idx on nim_rules (tool);
+`
+
+// budgetsTableBody is everything after the table name in nim_budgets's
+// definition, held apart from the schema for the same reason
+// journalTableBody and rulesTableBody are: it is what a second install's
+// sqlite_master would need to match byte for byte, and keeping it separate
+// is what would let a future rebuild compare against it, the way
+// rebuildRulesTable compares against rulesTableStored today. nim_budgets is
+// new with this milestone, so no earlier install has one to bring forward --
+// unlike nim_journal and nim_rules, nothing here needs a rebuild yet.
+const budgetsTableBody = `(
+    id          integer primary key autoincrement,
+    agent       text,
+    connector   text,
+    tool        text    not null,
+    calls       integer not null check (calls >= 0),
+    created_at  text    not null
+)`
+
+// budgetsIndexes are recreated after a rebuild -- if nim_budgets ever needs
+// one -- and the schema below creates them too, the same pattern
+// rulesIndexes uses.
+const budgetsIndexes = `
+create unique index if not exists nim_budgets_scope_idx
+    on nim_budgets (ifnull(agent, ''), ifnull(connector, ''), tool);
+`
+
+const schema = `
+create table if not exists nim_journal ` + journalTableBody + `;
+` + journalIndexes + `
 -- Connector metadata. Not part of the chain, and deliberately so: the chain
 -- records what happened, and this is configuration that decides what may
 -- happen. Mixing the two would put a mutable row inside an append-only record.
@@ -133,6 +251,56 @@ create table if not exists nim_agents (
     exec_path   text    not null,
     enrolled_at text    not null
 );
+
+-- Policy. A rule holds one effect -- deny, allow or ask -- for one tool, for
+-- every session or for those of one enrolled agent, on every connector or on
+-- one. ask holds a call for a human rather than deciding it here; see
+-- docs/decisions/0005-human-approval.md. tool is either an exact name or
+-- RuleToolDefault ("*"), which
+-- expresses a default rather than a pattern: there is no other way for a
+-- rule to match more than one tool. This is the one table an authorization
+-- decision reads, which is the standing decision config.toml broke; and
+-- every insert or delete here is paired, in the same transaction, with a
+-- rule.add or rule.remove entry in the chain, so the rules have a history
+-- that verifies like the calls do.
+--
+-- No matching rule is still an allow -- the M4 baseline, which a fresh
+-- install with no rules reproduces exactly. What an allow rule adds is a way
+-- to override a less specific deny; docs/decisions/0003 has the precedence
+-- between them, and internal/journal/rules.go's Decide is its one
+-- implementation.
+--
+-- A null agent or connector means "every"; '' is never stored, which is what
+-- lets a session with no derived agent match only the rules that name none.
+--
+-- rulesTableBody is held apart from this string, the same way
+-- journalTableBody is, because the effect CHECK constraint below is exactly
+-- the kind of thing SQLite cannot widen with ALTER TABLE: it had to grow
+-- from ('deny') to ('deny','allow') for this milestone, and
+-- rebuildRulesTable is what lets an existing install's nim_rules catch up to
+-- it. nim_rules is not part of the hash chain -- rule.add and rule.remove
+-- entries in nim_journal are -- so its rebuild is the simpler one: no views
+-- reference it, and nothing needs to verify across the rebuild besides the
+-- rows themselves.
+create table if not exists nim_rules ` + rulesTableBody + `;
+` + rulesIndexes + `
+
+-- Budgets: a cap on the number of ALLOWED calls one session may make for a
+-- tool, or for every tool (BudgetToolAll), scoped like a rule -- see
+-- MatchingBudgets and daemon.checkBudgets. Checked only once the rules have
+-- already allowed a call: a budget never grants, it only lowers what the
+-- rules allow -- docs/decisions/0004-budgets.md.
+--
+-- Configuration, not the record of what happened, so -- like nim_rules and
+-- nim_agents -- it sits outside the hash chain; budget.add and budget.remove
+-- entries in nim_journal are what make a change to it auditable, written in
+-- the same transaction as the change itself.
+--
+-- calls is a magnitude rather than an effect, so unlike nim_rules a scope
+-- never holds two things that could disagree -- there is no allow-vs-deny
+-- precedence to resolve here, only whether a session's count has reached it.
+create table if not exists nim_budgets ` + budgetsTableBody + `;
+` + budgetsIndexes + `
 `
 
 // migrations are additive statements applied after schema, each of which must
@@ -145,6 +313,18 @@ create table if not exists nim_agents (
 var migrations = []string{
 	`alter table nim_connectors add column command text`,
 	`alter table nim_journal add column agent text`,
+	// rebuildJournalTable's column list below names exec_path and exec_id on
+	// the renamed source table, so a database that reaches the rebuild
+	// without them -- any built before this version -- needs them added
+	// first. Without this, a table that predates schema_version 3 fails that
+	// rebuild's SELECT with "no such column: exec_path" instead of gaining it.
+	`alter table nim_journal add column exec_path text`,
+	`alter table nim_journal add column exec_id text`,
+	// budget_calls is named on the renamed source table by
+	// rebuildJournalTable's column list below, so a database that reaches
+	// that rebuild without it -- any built before this version -- needs it
+	// added first, for the same reason exec_path and exec_id needed it.
+	`alter table nim_journal add column budget_calls integer`,
 }
 
 func migrate(db *sql.DB) error {
@@ -153,7 +333,141 @@ func migrate(db *sql.DB) error {
 			return fmt.Errorf("migration %q: %w", stmt, err)
 		}
 	}
-	return nil
+	if _, err := rebuildJournalTable(db); err != nil {
+		return err
+	}
+	_, err := rebuildRulesTable(db)
+	return err
+}
+
+// rebuildJournalTable brings an existing nim_journal up to this build's
+// definition when the two differ, and reports whether it did.
+//
+// Adding a column is an ALTER TABLE; changing a CHECK constraint is not.
+// SQLite has no way to widen `kind in (...)` in place, and a milestone that
+// adds a kind of entry -- rule.add here -- would otherwise be refused by every
+// database created before it. So the table is rebuilt, the way SQLite's own
+// documentation prescribes: a new table under the real name, every row copied
+// across in chain order, the old one dropped. The rows are copied verbatim,
+// chain_seq, prev_hash and hash included, so the chain that comes out is the
+// chain that went in; a test holds it to that.
+//
+// The trigger is the stored CREATE statement not matching journalTableStored
+// byte for byte. Views are dropped first because a rename rewrites any view
+// that names the table, and syncViews puts them back afterwards. The whole
+// thing is one immediate transaction, so a second process opening the same
+// file waits rather than finding half a table.
+func rebuildJournalTable(db *sql.DB) (rebuilt bool, err error) {
+	var stored sql.NullString
+	err = db.QueryRow(
+		`select sql from sqlite_master where type = 'table' and name = 'nim_journal'`).Scan(&stored)
+	if err != nil {
+		return false, fmt.Errorf("reading the journal table definition: %w", err)
+	}
+	if stored.Valid && stored.String == journalTableStored {
+		return false, nil
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return false, fmt.Errorf("rebuilding the journal table: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Re-read under the write lock: another handle may have rebuilt it while
+	// this one waited, and rebuilding a table that is already right is how two
+	// opens would collide.
+	if err := tx.QueryRow(
+		`select sql from sqlite_master where type = 'table' and name = 'nim_journal'`).Scan(&stored); err != nil {
+		return false, fmt.Errorf("reading the journal table definition: %w", err)
+	}
+	if stored.String == journalTableStored {
+		return false, nil
+	}
+
+	const columns = `chain_seq, schema_version, kind, session_id, seq, connector, tool,
+		params_digest, decision, ok, duration_ms, anomaly, occurred_at,
+		machine_id, client, protocol_version, agent, exec_path, exec_id, budget_calls, prev_hash, hash`
+	for _, stmt := range []string{
+		`drop view if exists nim_sessions`,
+		`drop view if exists nim_calls`,
+		`alter table nim_journal rename to nim_journal_rebuild`,
+		`create table nim_journal ` + journalTableBody,
+		`insert into nim_journal (` + columns + `)
+		   select ` + columns + ` from nim_journal_rebuild order by chain_seq`,
+		`drop table nim_journal_rebuild`,
+		journalIndexes,
+	} {
+		if _, err := tx.Exec(stmt); err != nil {
+			return false, fmt.Errorf("rebuilding the journal table: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("rebuilding the journal table: %w", err)
+	}
+	return true, nil
+}
+
+// rebuildRulesTable brings an existing nim_rules up to this build's
+// definition when the two differ, and reports whether it did. Same technique
+// as rebuildJournalTable, and simpler: nim_rules is not part of the hash
+// chain (the rule.add and rule.remove entries describing it, in nim_journal,
+// are), so there is no chain order to preserve and no view to drop first --
+// nothing else in the schema references nim_rules by name.
+//
+// The trigger is the same one rebuildJournalTable uses: the stored CREATE
+// statement not matching rulesTableStored byte for byte, which for this
+// milestone means every nim_rules built under the ('deny') CHECK constraint.
+// Rows are copied by id, which SQLite's own AUTOINCREMENT bookkeeping then
+// picks back up from correctly -- a row inserted with an explicit id updates
+// sqlite_sequence exactly as an automatically assigned one would, so an id
+// freed by a deleted rule is never reused across the rebuild any more than it
+// would be without one.
+func rebuildRulesTable(db *sql.DB) (rebuilt bool, err error) {
+	var stored sql.NullString
+	err = db.QueryRow(
+		`select sql from sqlite_master where type = 'table' and name = 'nim_rules'`).Scan(&stored)
+	if err != nil {
+		return false, fmt.Errorf("reading the rules table definition: %w", err)
+	}
+	if stored.Valid && stored.String == rulesTableStored {
+		return false, nil
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return false, fmt.Errorf("rebuilding the rules table: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Re-read under the write lock: another handle may have rebuilt it while
+	// this one waited, and rebuilding a table that is already right is how two
+	// opens would collide.
+	if err := tx.QueryRow(
+		`select sql from sqlite_master where type = 'table' and name = 'nim_rules'`).Scan(&stored); err != nil {
+		return false, fmt.Errorf("reading the rules table definition: %w", err)
+	}
+	if stored.String == rulesTableStored {
+		return false, nil
+	}
+
+	const columns = `id, agent, connector, tool, effect, created_at`
+	for _, stmt := range []string{
+		`alter table nim_rules rename to nim_rules_rebuild`,
+		`create table nim_rules ` + rulesTableBody,
+		`insert into nim_rules (` + columns + `)
+		   select ` + columns + ` from nim_rules_rebuild order by id`,
+		`drop table nim_rules_rebuild`,
+		rulesIndexes,
+	} {
+		if _, err := tx.Exec(stmt); err != nil {
+			return false, fmt.Errorf("rebuilding the rules table: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("rebuilding the rules table: %w", err)
+	}
+	return true, nil
 }
 
 // Views keep the shape the mirror already expects, without letting anything
@@ -174,6 +488,7 @@ select
     s.session_id      as id,
     s.machine_id      as machine_id,
     s.client          as client,
+    s.agent           as agent,
     s.connector       as connector,
     s.occurred_at     as started_at,
     (select e.occurred_at from nim_journal e
@@ -188,6 +503,13 @@ where s.kind = 'session.start'`},
 	// every outcome written so far carries ok. A denied call has no outcome and
 	// never will, so telling "no outcome" apart from "outcome says nothing"
 	// decides whether it reads as refused or as still running.
+	//
+	// The session is joined on the left. It used to be an inner join, which
+	// made a call whose session.start was never written -- the daemon accepted
+	// the start and failed to commit it, then recovered -- vanish from every
+	// call-shaped surface while the totals still counted it. Such a call is
+	// shown with no connector and no agent, and Loss() counts it, so the
+	// discrepancy is a number rather than something noticed by diffing.
 	{"nim_calls", `create view nim_calls as
 select
     r.chain_seq     as chain_seq,
@@ -195,6 +517,7 @@ select
     r.session_id    as session_id,
     r.seq           as seq,
     s.connector     as connector,
+    s.agent         as agent,
     r.tool          as tool,
     r.params_digest as params_digest,
     r.decision      as decision,
@@ -203,7 +526,7 @@ select
     o.duration_ms   as duration_ms,
     r.occurred_at   as occurred_at
 from nim_journal r
-join nim_journal s
+left join nim_journal s
   on s.kind = 'session.start' and s.session_id = r.session_id
 left join nim_journal o
   on o.kind = 'call.outcome' and o.session_id = r.session_id and o.seq = r.seq
@@ -247,7 +570,7 @@ func syncViews(db *sql.DB) error {
 			tx.Rollback()
 			return err
 		}
-		if err == nil && stored.Valid && stored.String == v.ddl {
+		if err == nil && stored.Valid && stored.String == storedForm(v.ddl) {
 			tx.Rollback()
 			continue
 		}
@@ -279,7 +602,20 @@ func viewMatches(db *sql.DB, name, ddl string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return stored.Valid && stored.String == ddl, nil
+	return stored.Valid && stored.String == storedForm(ddl), nil
+}
+
+// storedForm is how sqlite_master will hold a CREATE statement: the first two
+// keywords upper-cased, the rest verbatim. Comparing against the statement as
+// written never matched, so every open dropped and recreated both views under
+// a write lock while this file said the steady state was a read. A test now
+// holds the comparison to matching.
+func storedForm(ddl string) string {
+	words := strings.SplitN(ddl, " ", 3)
+	if len(words) < 3 {
+		return ddl
+	}
+	return strings.ToUpper(words[0]) + " " + strings.ToUpper(words[1]) + " " + words[2]
 }
 
 // Entry is one immutable record. Nullable fields are pointers so that an absent
@@ -305,9 +641,28 @@ type Entry struct {
 	// the daemon from the kernel. Nil when no enrolment matched, which is the
 	// ordinary state for anyone who has not enrolled one. Never set from the
 	// wire: there is no field on Event for it, deliberately.
-	Agent    *string
-	PrevHash string
-	Hash     string
+	//
+	// On agent.add and agent.remove, Agent is instead the enrolment's name --
+	// the same column, doing the same job it does for a rule's scope: naming
+	// who the entry is about.
+	Agent *string
+	// ExecPath and ExecID are set on agent.add and agent.remove: the path the
+	// operator enrolled, and the resolved identity as "<dev>:<ino>" decimal.
+	// On agent.add they describe the enrolment being made; on agent.remove
+	// they describe the one being removed, so the chain says what was
+	// removed rather than only that something was. Every other kind leaves
+	// both null.
+	ExecPath *string
+	ExecID   *string
+	// BudgetCalls is set on budget.add and budget.remove: the cap the
+	// budget carries. On budget.add it is the cap being set; on
+	// budget.remove it is the cap that was removed, so the chain says what
+	// stopped applying rather than only that something did -- the same
+	// reasoning ExecPath and ExecID follow for an enrolment. Every other
+	// kind leaves it null.
+	BudgetCalls *int64
+	PrevHash    string
+	Hash        string
 }
 
 type Journal struct {
@@ -500,9 +855,26 @@ func (j *Journal) Append(e Entry) error {
 	}
 	defer tx.Rollback()
 
+	if err := j.appendTx(tx, e); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// appendTx links and writes one entry inside a transaction the caller owns and
+// will commit. Callers hold j.mu: the head is read here and the next entry
+// chained to it, and two of these interleaved would both claim the same
+// chain_seq.
+//
+// It exists apart from Append so that a change which must leave an entry --
+// a policy rule added or removed -- can write the change and its entry in one
+// transaction. Either order of two transactions can lie on failure: a rule
+// with no entry, or an entry describing a rule that was never stored. One
+// transaction cannot.
+func (j *Journal) appendTx(tx *sql.Tx, e Entry) error {
 	var headSeq sql.NullInt64
 	var headHash sql.NullString
-	err = tx.QueryRow(
+	err := tx.QueryRow(
 		`select chain_seq, hash from nim_journal order by chain_seq desc limit 1`,
 	).Scan(&headSeq, &headHash)
 	if err != nil && err != sql.ErrNoRows {
@@ -525,16 +897,13 @@ func (j *Journal) Append(e Entry) error {
 		`insert into nim_journal
 		   (chain_seq, schema_version, kind, session_id, seq, connector, tool,
 		    params_digest, decision, ok, duration_ms, anomaly, occurred_at,
-		    machine_id, client, protocol_version, agent, prev_hash, hash)
-		 values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		    machine_id, client, protocol_version, agent, exec_path, exec_id, budget_calls, prev_hash, hash)
+		 values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		e.ChainSeq, e.SchemaVersion, e.Kind, e.SessionID, e.Seq, e.Connector, e.Tool,
 		e.ParamsDigest, e.Decision, e.OK, e.DurationMS, e.Anomaly, e.OccurredAt,
-		e.MachineID, e.Client, e.ProtocolVersion, e.Agent, e.PrevHash, e.Hash,
+		e.MachineID, e.Client, e.ProtocolVersion, e.Agent, e.ExecPath, e.ExecID, e.BudgetCalls, e.PrevHash, e.Hash,
 	)
-	if err != nil {
-		return err
-	}
-	return tx.Commit()
+	return err
 }
 
 // Head reports the length of the chain and its last hash. Both are printed by
@@ -553,6 +922,17 @@ func (j *Journal) Head() (length int64, hash string, err error) {
 		return 0, "", err
 	}
 	return seq.Int64, h.String, nil
+}
+
+// SessionExists reports whether a session.start has ever been recorded under
+// id. The daemon asks before accepting one: a session id names a session, and a
+// second start under the same name would let a second connection write into
+// the first one's story.
+func (j *Journal) SessionExists(id string) (bool, error) {
+	var n int
+	err := j.db.QueryRow(
+		`select count(*) from nim_journal where kind = ? and session_id = ?`, KindSessionStart, id).Scan(&n)
+	return n > 0, err
 }
 
 // CountCalls is the number of tool calls seen. Used by `nim status`.
@@ -699,19 +1079,76 @@ type Agent struct {
 	EnrolledAt time.Time
 }
 
-// SetAgent enrols an agent, replacing any enrolment under the same name.
+// execID renders an enrolment's identity the way it is hashed into the chain:
+// "<dev>:<ino>" in decimal. It exists so the value written by AddAgent and
+// RemoveAgent, and the value docs/journal-format.md defines, are provably the
+// same computation.
+func execID(dev, ino uint64) string {
+	return fmt.Sprintf("%d:%d", dev, ino)
+}
+
+// agentEntry is what an enrolment change looks like in the chain: the name in
+// agent, the enrolled path and resolved identity in exec_path and exec_id,
+// and no session -- an enrolment belongs to no session, exactly like a rule.
+func agentEntry(kind string, a Agent, at string) Entry {
+	name, path, id := a.Name, a.ExecPath, execID(a.ExecDev, a.ExecIno)
+	return Entry{
+		Kind:       kind,
+		SessionID:  "",
+		Agent:      &name,
+		ExecPath:   &path,
+		ExecID:     &id,
+		OccurredAt: at,
+	}
+}
+
+// AddAgent enrols an agent and records the agent.add entry in the same
+// transaction: the enrolment never exists without the chain knowing about it,
+// and the chain never describes an enrolment that was not stored.
 //
-// Replacing is deliberate and is how re-enrolment works. It is needed more
-// often than it looks: an inode survives, but a device number can change when
-// filesystems are mounted differently across a reboot, and an application that
-// updates itself becomes a different file. Both leave an enrolment that no
-// longer matches anything, which must be repairable without deleting and
-// re-adding.
-func (j *Journal) SetAgent(a Agent) error {
+// It replaces any enrolment under the same name -- re-enrolment -- and this is
+// deliberate and needed more often than it looks: an inode survives, but a
+// device number can change when filesystems are mounted differently across a
+// reboot, and an application that updates itself becomes a different file.
+// Both leave an enrolment that no longer matches anything, which must be
+// repairable without deleting and re-adding.
+//
+// A re-enrolment writes a fresh agent.add carrying the NEW identity, not an
+// update to the old entry -- entries are never modified after they are
+// written -- and that is the whole point: every rule scoped to this name now
+// applies to a different executable, and F-018 was that nothing said so.
+func (j *Journal) AddAgent(a Agent) error {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+
 	if j.readOnly {
 		return errReadOnly
 	}
-	_, err := j.db.Exec(
+	tx, err := j.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	// One executable is one agent. Two names for one image would make the
+	// derivation a coin toss, and a coin toss that a same-user process can
+	// weight: enrol a second name against the operator's client binary and
+	// wait for the operator to re-enrol theirs after an update, and whichever
+	// row the lookup happened to return would decide whose rules applied.
+	// Found by review before it shipped; refused here, inside the transaction,
+	// so two enrolments racing for one image cannot both win.
+	var other string
+	err = tx.QueryRow(
+		`select name from nim_agents where exec_dev = ? and exec_ino = ? and name != ?`,
+		a.ExecDev, a.ExecIno, a.Name).Scan(&other)
+	if err == nil {
+		return fmt.Errorf("%w: %q", ErrImageEnrolled, other)
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+
+	if _, err := tx.Exec(
 		`insert into nim_agents (name, exec_dev, exec_ino, exec_path, enrolled_at)
 		 values (?, ?, ?, ?, ?)
 		 on conflict (name) do update set
@@ -721,8 +1158,14 @@ func (j *Journal) SetAgent(a Agent) error {
 		   enrolled_at = excluded.enrolled_at`,
 		a.Name, a.ExecDev, a.ExecIno, a.ExecPath,
 		a.EnrolledAt.UTC().Format(time.RFC3339Nano),
-	)
-	return err
+	); err != nil {
+		return err
+	}
+	at := a.EnrolledAt.UTC().Format(time.RFC3339Nano)
+	if err := j.appendTx(tx, agentEntry(KindAgentAdd, a, at)); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // ListAgents returns every enrolment, ordered by name.
@@ -747,15 +1190,74 @@ func (j *Journal) ListAgents() ([]Agent, error) {
 	return out, rows.Err()
 }
 
-// DeleteAgent removes an enrolment. Removing one that was never enrolled is
-// not an error, so a caller that only wants it gone need not check first.
-func (j *Journal) DeleteAgent(name string) error {
+// RemoveAgent deletes the enrolment named name and records the agent.remove
+// entry -- carrying the enrolment that was removed, not nulls -- in the same
+// transaction.
+//
+// Removing a name that is not enrolled writes nothing and reports found =
+// false: there is no enrolment to describe removing, so nothing is recorded,
+// exactly as RemoveRule refuses a change to nothing rather than treating it as
+// a success. Unlike RemoveRule this is not an error -- the daemon's handler
+// treats found = false as the idempotent success `nim agent remove` has
+// always been; the caller decides what "not found" means, not this method.
+func (j *Journal) RemoveAgent(name string) (a Agent, found bool, err error) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+
 	if j.readOnly {
-		return errReadOnly
+		return Agent{}, false, errReadOnly
 	}
-	_, err := j.db.Exec(`delete from nim_agents where name = ?`, name)
-	return err
+	tx, err := j.db.Begin()
+	if err != nil {
+		return Agent{}, false, err
+	}
+	defer tx.Rollback()
+
+	var enrolledAt string
+	err = tx.QueryRow(
+		`select name, exec_dev, exec_ino, exec_path, enrolled_at from nim_agents where name = ?`, name).
+		Scan(&a.Name, &a.ExecDev, &a.ExecIno, &a.ExecPath, &enrolledAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Agent{}, false, nil
+	}
+	if err != nil {
+		return Agent{}, false, err
+	}
+	a.EnrolledAt, _ = time.Parse(time.RFC3339Nano, enrolledAt)
+
+	if _, err := tx.Exec(`delete from nim_agents where name = ?`, name); err != nil {
+		return Agent{}, false, err
+	}
+	at := time.Now().UTC().Format(time.RFC3339Nano)
+	if err := j.appendTx(tx, agentEntry(KindAgentRemove, a, at)); err != nil {
+		return Agent{}, false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Agent{}, false, err
+	}
+	return a, true, nil
 }
+
+// AgentNamed looks up an enrolment by the name the operator gave it.
+func (j *Journal) AgentNamed(name string) (Agent, bool, error) {
+	var a Agent
+	var enrolledAt string
+	err := j.db.QueryRow(
+		`select name, exec_dev, exec_ino, exec_path, enrolled_at from nim_agents where name = ?`, name).
+		Scan(&a.Name, &a.ExecDev, &a.ExecIno, &a.ExecPath, &enrolledAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Agent{}, false, nil
+	}
+	if err != nil {
+		return Agent{}, false, err
+	}
+	a.EnrolledAt, _ = time.Parse(time.RFC3339Nano, enrolledAt)
+	return a, true, nil
+}
+
+// ErrImageEnrolled is returned by AddAgent when the executable is already
+// enrolled under another name; the error wraps that name.
+var ErrImageEnrolled = errors.New("that executable is already enrolled under another name")
 
 // AgentByImage finds the enrolment matching an executable identity.
 //
@@ -771,8 +1273,13 @@ func (j *Journal) AgentByImage(dev, ino uint64) (name string, found bool, err er
 	if dev == 0 && ino == 0 {
 		return "", false, nil
 	}
+	// AddAgent refuses a second name for one image, so at most one row
+	// matches. The order is stated anyway: a journal edited by hand could
+	// hold two, and a lookup whose answer depended on insertion order would be
+	// the bug this guards against, back again.
 	err = j.db.QueryRow(
-		`select name from nim_agents where exec_dev = ? and exec_ino = ?`, dev, ino).Scan(&name)
+		`select name from nim_agents where exec_dev = ? and exec_ino = ?
+		  order by enrolled_at desc, name limit 1`, dev, ino).Scan(&name)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", false, nil
 	}

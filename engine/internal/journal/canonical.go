@@ -26,8 +26,31 @@ const SchemaVersion1 = 1
 // of carrying schema_version from the start.
 const SchemaVersion2 = 2
 
+// SchemaVersion3 adds two fields, exec_path and exec_id, on agent.add and
+// agent.remove.
+//
+// Same reasoning as v2: an enrolment change is a policy change, so it has to
+// leave an entry a second implementation can reproduce byte for byte, and
+// that needs somewhere to put the path the operator enrolled and the identity
+// the daemon resolved it to. Reusing agent (already field 17) would not do --
+// agent is the enrolment's name, exec_path and exec_id are what that name was
+// bound to at the moment of the change, and collapsing the two would make a
+// re-enrolment indistinguishable from the enrolment it replaced.
+const SchemaVersion3 = 3
+
+// SchemaVersion4 adds one field, budget_calls, field 20, on budget.add and
+// budget.remove.
+//
+// Same reasoning as v3: a budget is policy, like a rule or an enrolment, so
+// setting or removing one has to leave an entry a second implementation can
+// reproduce byte for byte, and that needs somewhere to put the cap. Reusing
+// an existing field would not do, for the same reason v3 could not reuse
+// agent for exec_path and exec_id: budget_calls is what a budget.add or
+// budget.remove entry is actually about, and nothing else carries it.
+const SchemaVersion4 = 4
+
 // CurrentSchemaVersion is what new entries are written under.
-const CurrentSchemaVersion = SchemaVersion2
+const CurrentSchemaVersion = SchemaVersion4
 
 // The normative definition of everything below is docs/journal-format.md. It is
 // worth keeping the two in step: a second implementation has to reproduce these
@@ -35,6 +58,8 @@ const CurrentSchemaVersion = SchemaVersion2
 const (
 	domainV1 = "nim.journal.v1\n"
 	domainV2 = "nim.journal.v2\n"
+	domainV3 = "nim.journal.v3\n"
+	domainV4 = "nim.journal.v4\n"
 
 	// The genesis is not versioned with the entry encoding. It seeds the
 	// chain from the install's identifier and has nothing to do with how many
@@ -66,6 +91,10 @@ func canonicalEncode(e Entry) []byte {
 		return canonicalEncodeV1(e)
 	case SchemaVersion2:
 		return canonicalEncodeV2(e)
+	case SchemaVersion3:
+		return canonicalEncodeV3(e)
+	case SchemaVersion4:
+		return canonicalEncodeV4(e)
 	default:
 		return nil
 	}
@@ -74,7 +103,74 @@ func canonicalEncode(e Entry) []byte {
 // knownSchemaVersion reports whether this build can verify an entry written
 // under v.
 func knownSchemaVersion(v int64) bool {
-	return v == SchemaVersion1 || v == SchemaVersion2
+	return v == SchemaVersion1 || v == SchemaVersion2 || v == SchemaVersion3 || v == SchemaVersion4
+}
+
+// canonicalEncodeV4 is v3 plus budget_calls, field 20.
+//
+// Set on budget.add, carrying the cap being set. On budget.remove it carries
+// the cap that was removed, so the chain says what stopped applying rather
+// than only that something did -- exactly the reasoning v3's exec_path and
+// exec_id follow for an enrolment. Every other kind leaves it null.
+func canonicalEncodeV4(e Entry) []byte {
+	var b bytes.Buffer
+	b.WriteString(domainV4)
+
+	putInt(&b, e.ChainSeq)                 // 1
+	putInt(&b, e.SchemaVersion)            // 2
+	putString(&b, e.Kind)                  // 3
+	putString(&b, e.SessionID)             // 4
+	putIntOrNull(&b, e.Seq)                // 5
+	putStringOrNull(&b, e.Connector)       // 6
+	putStringOrNull(&b, e.Tool)            // 7
+	putStringOrNull(&b, e.ParamsDigest)    // 8
+	putStringOrNull(&b, e.Decision)        // 9
+	putBoolOrNull(&b, e.OK)                // 10
+	putIntOrNull(&b, e.DurationMS)         // 11
+	putStringOrNull(&b, e.Anomaly)         // 12
+	putString(&b, e.OccurredAt)            // 13
+	putStringOrNull(&b, e.MachineID)       // 14
+	putStringOrNull(&b, e.Client)          // 15
+	putStringOrNull(&b, e.ProtocolVersion) // 16
+	putStringOrNull(&b, e.Agent)           // 17
+	putStringOrNull(&b, e.ExecPath)        // 18
+	putStringOrNull(&b, e.ExecID)          // 19
+	putIntOrNull(&b, e.BudgetCalls)        // 20
+
+	return b.Bytes()
+}
+
+// canonicalEncodeV3 is v2 plus exec_path and exec_id, fields 18 and 19.
+//
+// Both are set on agent.add, carrying the enrolment being made. On
+// agent.remove both are set from the enrolment being removed, so the chain
+// says what was removed, not only that something was. Every other kind
+// leaves them null, exactly as v2's agent is null off session.start.
+func canonicalEncodeV3(e Entry) []byte {
+	var b bytes.Buffer
+	b.WriteString(domainV3)
+
+	putInt(&b, e.ChainSeq)                 // 1
+	putInt(&b, e.SchemaVersion)            // 2
+	putString(&b, e.Kind)                  // 3
+	putString(&b, e.SessionID)             // 4
+	putIntOrNull(&b, e.Seq)                // 5
+	putStringOrNull(&b, e.Connector)       // 6
+	putStringOrNull(&b, e.Tool)            // 7
+	putStringOrNull(&b, e.ParamsDigest)    // 8
+	putStringOrNull(&b, e.Decision)        // 9
+	putBoolOrNull(&b, e.OK)                // 10
+	putIntOrNull(&b, e.DurationMS)         // 11
+	putStringOrNull(&b, e.Anomaly)         // 12
+	putString(&b, e.OccurredAt)            // 13
+	putStringOrNull(&b, e.MachineID)       // 14
+	putStringOrNull(&b, e.Client)          // 15
+	putStringOrNull(&b, e.ProtocolVersion) // 16
+	putStringOrNull(&b, e.Agent)           // 17
+	putStringOrNull(&b, e.ExecPath)        // 18
+	putStringOrNull(&b, e.ExecID)          // 19
+
+	return b.Bytes()
 }
 
 // canonicalEncodeV2 is v1 plus agent, field 17.

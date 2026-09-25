@@ -27,6 +27,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 )
 
@@ -36,6 +38,32 @@ const MethodToolsCall = "tools/call"
 // MethodInitialize carries the negotiated protocol version, which decides
 // whether the server accepts JSON-RPC batches at all.
 const MethodInitialize = "initialize"
+
+// MethodDiscover is the other way a session can be negotiated. The 2026-07-28
+// revision replaced initialize with server/discover: the client proposes a
+// version in the request's _meta and the server answers with the versions it
+// supports. A session negotiated this way never sends initialize, so a relay
+// that only watched initialize would never learn the version -- and would
+// answer refusals in a shape such a client cannot read (F-021).
+const MethodDiscover = "server/discover"
+
+// discoverVersionKey is where a server/discover request names the version it
+// proposes: params._meta["io.modelcontextprotocol/protocolVersion"].
+const discoverVersionKey = "io.modelcontextprotocol/protocolVersion"
+
+// resultTypeSince is the first protocol revision under which every result
+// carries a resultType discriminator, which its clients validate strictly.
+// Versions are dates, so string order is chronological.
+const resultTypeSince = "2026-07-28"
+
+// ResultsCarryType reports whether a result written for a session negotiated
+// at version must carry resultType. Under 2026-07-28 and later the field is
+// mandatory and a client refuses to parse a result without it; under the
+// initialize-era versions it is unknown, and a client that never negotiated
+// (version "") is on those.
+func ResultsCarryType(version string) bool {
+	return version >= resultTypeSince
+}
 
 // Anomaly names a message Nim relayed without being able to account for it.
 //
@@ -59,6 +87,28 @@ const (
 	// transport is one message per line; a reader that accumulates instead
 	// would see different messages than Nim did.
 	AnomalyFraming Anomaly = "framing"
+
+	// AnomalyDuplicateKey is an object, at a level Nim reads, that carries the
+	// same key twice. Valid JSON, and the one shape on which parsers
+	// legitimately disagree: Go's typed decoder, Python and JavaScript each
+	// pick a value by their own rule, so `"method":5,"method":"tools/call"` is
+	// a tools/call to a server and was, until this existed, nothing at all to
+	// Nim -- relayed with no decision, no entry and no anomaly. Reproduced
+	// against the real relay before it was closed.
+	AnomalyDuplicateKey Anomaly = "duplicate_key"
+
+	// AnomalyUnreadableCall is a tools/call whose params, or whose name, Nim
+	// could not read as exactly one string. No server executes a tool it
+	// cannot name either, but the daemon would have decided on a name of ""
+	// and the journal would have recorded it, which is a decision about
+	// nothing. Refused instead.
+	AnomalyUnreadableCall Anomaly = "unreadable_call"
+)
+
+// The two ways a frame Nim reads can fail to mean one thing.
+var (
+	ErrDuplicateKey   = errors.New("an object carries the same key twice")
+	ErrUnreadableCall = errors.New("the tools/call cannot be read as a single tool name")
 )
 
 // Classify parses a message and names what is odd about it.
@@ -100,11 +150,86 @@ func Classify(raw []byte) (Envelope, Anomaly) {
 		return Envelope{}, AnomalyBatch
 	}
 
-	var env Envelope
-	if err := json.Unmarshal(value, &env); err != nil {
+	// `null`, a bare number or a string is valid JSON that no server treats as
+	// a request; it is relayed as it always was. An object is read strictly:
+	// by exact key, refusing a key that appears twice. Nothing else can be
+	// trusted to name the same message to Nim and to the server.
+	fields, err := objectFields(value)
+	if errors.Is(err, ErrDuplicateKey) {
+		return Envelope{}, AnomalyDuplicateKey
+	}
+	if err != nil {
 		return Envelope{}, AnomalyNone
 	}
-	return env, AnomalyNone
+	return envelopeOf(fields), AnomalyNone
+}
+
+// objectFields reads one JSON object into its members, by the exact bytes of
+// each key, refusing an object that names a key twice.
+//
+// This is deliberately not json.Unmarshal into a struct. That decoder matches
+// keys case-insensitively and lets the last of several matches win, and it
+// keeps going past a member of the wrong type -- so `"Method":"ping"` after
+// `"method":"tools/call"` read as ping, `"method":5,"method":"tools/call"`
+// read as an error the caller discarded, and a frame that every mainstream
+// server would execute as a tool call was forwarded as something else.
+// Reading by exact key gives the same answer Python and JavaScript give for
+// every object that names each key once, and a repeated key is refused rather
+// than resolved, because the one rule parsers do not share is which
+// repetition wins.
+//
+// errNotAnObject is returned for any other JSON value.
+func objectFields(raw []byte) (map[string]json.RawMessage, error) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	tok, err := dec.Token()
+	if err != nil {
+		return nil, err
+	}
+	if tok != json.Delim('{') {
+		return nil, errNotAnObject
+	}
+	fields := map[string]json.RawMessage{}
+	for dec.More() {
+		keyTok, err := dec.Token()
+		if err != nil {
+			return nil, err
+		}
+		key, ok := keyTok.(string)
+		if !ok {
+			return nil, fmt.Errorf("object key is %v, not a string", keyTok)
+		}
+		if _, seen := fields[key]; seen {
+			return nil, ErrDuplicateKey
+		}
+		var value json.RawMessage
+		if err := dec.Decode(&value); err != nil {
+			return nil, err
+		}
+		fields[key] = value
+	}
+	if _, err := dec.Token(); err != nil { // the closing brace
+		return nil, err
+	}
+	return fields, nil
+}
+
+var errNotAnObject = errors.New("not a JSON object")
+
+// envelopeOf builds the envelope from members read by exact key. A method
+// that is present but not a string is left empty: it names nothing a server
+// can dispatch, and the frame is relayed for the server to reject in its own
+// words.
+func envelopeOf(fields map[string]json.RawMessage) Envelope {
+	env := Envelope{
+		ID:     fields["id"],
+		Params: fields["params"],
+		Error:  fields["error"],
+		Result: fields["result"],
+	}
+	if raw, ok := fields["method"]; ok {
+		_ = json.Unmarshal(raw, &env.Method) // not a string: stays ""
+	}
+	return env
 }
 
 // BatchElements reads the messages a JSON-RPC batch carries.
@@ -123,11 +248,14 @@ func BatchElements(raw []byte) ([]Envelope, bool) {
 	}
 	out := make([]Envelope, 0, len(items))
 	for _, item := range items {
-		var env Envelope
-		if err := json.Unmarshal(item, &env); err != nil {
+		// Strictly, for the same reason Classify is: an element whose method
+		// is named twice is a tools/call to a server and nothing to a decoder
+		// that picks the other value.
+		fields, err := objectFields(item)
+		if err != nil {
 			return nil, false
 		}
-		out = append(out, env)
+		out = append(out, envelopeOf(fields))
 	}
 	return out, true
 }
@@ -164,13 +292,14 @@ type Envelope struct {
 }
 
 // Parse reports what little Nim understands about a message. ok is false when
-// the bytes are not a JSON object, in which case the caller still forwards them.
+// the bytes are not a JSON object that names each key once, in which case the
+// caller still forwards them.
 func Parse(raw []byte) (Envelope, bool) {
-	var env Envelope
-	if err := json.Unmarshal(raw, &env); err != nil {
+	fields, err := objectFields(bytes.TrimSpace(raw))
+	if err != nil {
 		return Envelope{}, false
 	}
-	return env, true
+	return envelopeOf(fields), true
 }
 
 // IsToolCall reports whether this message is a tools/call request.
@@ -178,6 +307,61 @@ func (e Envelope) IsToolCall() bool { return e.Method == MethodToolsCall }
 
 // IsInitialize reports whether this message is the initialize request.
 func (e Envelope) IsInitialize() bool { return e.Method == MethodInitialize }
+
+// IsDiscover reports whether this message is a server/discover request.
+func (e Envelope) IsDiscover() bool { return e.Method == MethodDiscover }
+
+// IsError reports whether a response carries a JSON-RPC error rather than a
+// result.
+func (e Envelope) IsError() bool { return len(e.Error) > 0 }
+
+// ProposedProtocolVersion reads the version a server/discover request
+// proposes, or "" when the request names none. Unlike initialize, the
+// agreed version is not in the answer: the answer lists what the server
+// supports, and the client picks from that list. See NegotiatedVersion.
+func (e Envelope) ProposedProtocolVersion() string {
+	if len(e.Params) == 0 {
+		return ""
+	}
+	var p struct {
+		Meta map[string]json.RawMessage `json:"_meta"`
+	}
+	if err := json.Unmarshal(e.Params, &p); err != nil {
+		return ""
+	}
+	var version string
+	_ = json.Unmarshal(p.Meta[discoverVersionKey], &version) // not a string: stays ""
+	return version
+}
+
+// NegotiatedVersion is what a session negotiated through server/discover
+// settled on, as far as the relay can tell: the version the client proposed
+// when the server's answer lists it, otherwise the newest listed version that
+// is not newer than the proposal, which is the newest the client can choose
+// since a client proposes the newest it knows. "" when the answer is an error
+// or lists nothing usable, in which case the client falls back to initialize
+// and that handshake is watched as before.
+func (e Envelope) NegotiatedVersion(proposed string) string {
+	if e.IsError() || len(e.Result) == 0 {
+		return ""
+	}
+	var r struct {
+		Supported []string `json:"supportedVersions"`
+	}
+	if err := json.Unmarshal(e.Result, &r); err != nil {
+		return ""
+	}
+	best := ""
+	for _, v := range r.Supported {
+		if v == proposed {
+			return v
+		}
+		if v < proposed && v > best {
+			best = v
+		}
+	}
+	return best
+}
 
 // ProtocolVersion reads result.protocolVersion from an initialize response, or
 // "" when absent. It is the version the client and server actually agreed on,
@@ -236,29 +420,61 @@ func (e Envelope) Failed() bool {
 	return r.IsError
 }
 
-// ToolName extracts params.name from a tools/call, or "" when absent.
-func (e Envelope) ToolName() string {
-	if len(e.Params) == 0 {
-		return ""
-	}
-	var p struct {
-		Name string `json:"name"`
-	}
-	if err := json.Unmarshal(e.Params, &p); err != nil {
-		return ""
-	}
-	return p.Name
+// ToolCall is what the decision is about: the tool a tools/call names, and a
+// digest standing in for the arguments it carries.
+type ToolCall struct {
+	// Name is params.name, exactly as sent. No trimming, no case folding, no
+	// normalisation: the deny list compares bytes, and a server matches bytes.
+	Name string
+	// Digest is sha256 over the raw params.arguments bytes as they arrived.
+	// When the key is absent the digest is of no bytes at all; when it is
+	// present and null, of the four bytes `null`. Neither is a secret and both
+	// are stated in docs/journal-format.md, because a reader comparing digests
+	// has to know that "no arguments" has a fixed value.
+	Digest string
+	// Arguments is the raw params.arguments bytes, exactly as they arrived --
+	// the same bytes Digest is taken over, kept rather than discarded. Nil
+	// when the key was absent. Ordinary calls never look at this field: it
+	// exists for the one path that needs the real bytes rather than a
+	// digest, a call an "ask" rule holds for a human -- see
+	// docs/decisions/0005-human-approval.md. It never reaches the journal or
+	// a log line; the digest is what those get, as for every other call.
+	Arguments json.RawMessage
 }
 
-// ArgumentsDigest hashes params.arguments. The arguments themselves never
-// leave the machine; only this digest is ever recorded or synced.
-func (e Envelope) ArgumentsDigest() string {
-	var p struct {
-		Arguments json.RawMessage `json:"arguments"`
+// Call reads the tools/call out of a request Nim has already recognised as
+// one.
+//
+// Read strictly, and refused rather than approximated when it cannot be:
+// params must be an object naming each key once, and name must be a string.
+// The daemon decides on the name this returns and the journal records it, so
+// it has to be the name the server will act on. A params object that names
+// `name` twice, or under two spellings a case-insensitive decoder would merge,
+// could put one tool in front of the daemon and another in front of the
+// server -- reproduced, before this existed, with the deny list refusing the
+// one the journal then said had been called.
+//
+// The error is ErrDuplicateKey or ErrUnreadableCall, and the relay turns each
+// into a refusal and an anomaly rather than a decision about a guess.
+func (e Envelope) Call() (ToolCall, error) {
+	if len(e.Params) == 0 {
+		return ToolCall{}, ErrUnreadableCall
 	}
-	if len(e.Params) > 0 {
-		_ = json.Unmarshal(e.Params, &p)
+	fields, err := objectFields(e.Params)
+	if errors.Is(err, ErrDuplicateKey) {
+		return ToolCall{}, ErrDuplicateKey
 	}
-	sum := sha256.Sum256(p.Arguments)
-	return hex.EncodeToString(sum[:])
+	if err != nil {
+		return ToolCall{}, ErrUnreadableCall
+	}
+	rawName, ok := fields["name"]
+	if !ok {
+		return ToolCall{}, ErrUnreadableCall
+	}
+	var name string
+	if err := json.Unmarshal(rawName, &name); err != nil {
+		return ToolCall{}, ErrUnreadableCall
+	}
+	sum := sha256.Sum256(fields["arguments"])
+	return ToolCall{Name: name, Digest: hex.EncodeToString(sum[:]), Arguments: fields["arguments"]}, nil
 }

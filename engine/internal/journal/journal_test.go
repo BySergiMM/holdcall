@@ -472,6 +472,88 @@ func TestLossReportsGapsAndUnfinishedSessions(t *testing.T) {
 	}
 }
 
+// A call whose session.start never reached the journal is a real, decided
+// call. It used to vanish from nim_calls -- an inner join on a start that was
+// not there -- while the totals still counted it. It is shown without a
+// connector and counted as orphaned instead.
+func TestACallWithoutASessionStartIsShownAndCounted(t *testing.T) {
+	j, _ := openTemp(t)
+	if err := j.Append(session("s1", "github")); err != nil {
+		t.Fatal(err)
+	}
+	if err := j.Append(call("s1", 1, "t")); err != nil {
+		t.Fatal(err)
+	}
+	// s2's start was accepted by the daemon and never committed; its call was.
+	if err := j.Append(call("s2", 1, "t")); err != nil {
+		t.Fatal(err)
+	}
+
+	calls, err := j.RecentCalls(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 2 {
+		t.Fatalf("nim_calls shows %d calls, want 2: the orphaned call is hidden", len(calls))
+	}
+	n, _ := j.CountCalls()
+	if n != len(calls) {
+		t.Fatalf("CountCalls says %d and the listing says %d", n, len(calls))
+	}
+	loss, err := j.Loss()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loss.CallsWithoutSession != 1 {
+		t.Errorf("calls without a session = %d, want 1", loss.CallsWithoutSession)
+	}
+	if loss.MissingCallEntries != 0 || loss.SessionsWithGaps != 0 {
+		t.Errorf("an orphaned call was reported as a seq gap: %+v", loss)
+	}
+	if _, found, _ := j.Session("s2"); found {
+		t.Error("a session with no start was summarised as if it had one")
+	}
+}
+
+// One session by id reads the same as the same session in the list.
+func TestASessionCanBeReadByIdBeyondTheListingWindow(t *testing.T) {
+	j, _ := openTemp(t)
+	for i := 0; i < MaxEntriesPerRead/4; i++ {
+		s := session(fmt.Sprintf("s%d", i), "github")
+		if i == 0 {
+			s.Agent = sp("claude-code")
+		}
+		if err := j.Append(s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, err := j.Sessions(5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range rows {
+		if r.ID == "s0" {
+			t.Fatal("the oldest session is inside the window; the test needs a smaller one")
+		}
+	}
+	row, found, err := j.Session("s0")
+	if err != nil || !found {
+		t.Fatalf("Session(s0) = found %v, err %v", found, err)
+	}
+	if row.Agent == nil || *row.Agent != "claude-code" || row.Connector == nil || *row.Connector != "github" {
+		t.Fatalf("the single lookup lost fields: %+v", row)
+	}
+	if _, found, _ := j.Session("never"); found {
+		t.Error("a session that was never started was found")
+	}
+	if ok, _ := j.SessionExists("s0"); !ok {
+		t.Error("SessionExists missed a recorded session")
+	}
+	if ok, _ := j.SessionExists("never"); ok {
+		t.Error("SessionExists invented a session")
+	}
+}
+
 func TestAnomaliesAreCounted(t *testing.T) {
 	j, _ := openTemp(t)
 	for _, name := range []string{"batch", "batch", "malformed_json"} {

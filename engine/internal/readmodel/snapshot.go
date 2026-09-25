@@ -59,11 +59,33 @@ type JournalState struct {
 // daemon accepted and failed to write leaves nothing to count. Read these as
 // "detected", never as "all".
 type Gaps struct {
-	UnfinishedSessions int            `json:"unfinished_sessions"`
-	SessionsWithGaps   int            `json:"sessions_with_gaps"`
-	MissingCallEntries int            `json:"missing_call_entries"`
-	Anomalies          map[string]int `json:"anomalies"`
-	AnomaliesTotal     int            `json:"anomalies_total"`
+	UnfinishedSessions int `json:"unfinished_sessions"`
+	SessionsWithGaps   int `json:"sessions_with_gaps"`
+	MissingCallEntries int `json:"missing_call_entries"`
+	// CallsWithoutSession are decided calls whose session.start never reached
+	// the journal. They are shown without a connector or agent rather than
+	// hidden, and counted here so the totals and the listing agree.
+	CallsWithoutSession int            `json:"calls_without_session"`
+	Anomalies           map[string]int `json:"anomalies"`
+	AnomaliesTotal      int            `json:"anomalies_total"`
+}
+
+// AnomalyDisposition says what the relay did with a message of this anomaly
+// kind: refused it, or relayed it and merely counted it. One place, so `nim
+// status` and the console cannot describe the same number differently -- they
+// did, for a while, both saying "relayed without inspection" about frames the
+// relay had refused since M2.
+func AnomalyDisposition(kind string) string {
+	switch kind {
+	case "malformed_json", "framing", "duplicate_key", "unreadable_call":
+		return "refused"
+	case "batch":
+		return "refused if it carried a tools/call, otherwise relayed"
+	case "duplicate_id":
+		return "relayed; the second answer cannot be matched"
+	default:
+		return "unknown kind"
+	}
 }
 
 // Snapshot is everything derivable from the journal in one read.
@@ -144,6 +166,7 @@ func Take(src SnapshotSource) (Snapshot, error) {
 	s.Gaps.UnfinishedSessions = loss.UnfinishedSessions
 	s.Gaps.SessionsWithGaps = loss.SessionsWithGaps
 	s.Gaps.MissingCallEntries = loss.MissingCallEntries
+	s.Gaps.CallsWithoutSession = loss.CallsWithoutSession
 
 	anomalies, err := src.Anomalies()
 	if err != nil {
@@ -230,6 +253,9 @@ type Session struct {
 	// labels, never facts Nim established.
 	Connector *string `json:"connector,omitempty"`
 	Client    *string `json:"client,omitempty"`
+	// Agent is the opposite kind of thing from Client: the enrolled program
+	// the daemon derived from the kernel, absent when no enrolment matched.
+	Agent     *string `json:"agent,omitempty"`
 	MachineID *string `json:"machine_id,omitempty"`
 
 	CallsRecorded int `json:"calls_recorded"`
@@ -251,6 +277,7 @@ func SessionFrom(r journal.SessionRow) Session {
 		EndedAt:       copyString(r.EndedAt),
 		Connector:     copyString(r.Connector),
 		Client:        copyString(r.Client),
+		Agent:         copyString(r.Agent),
 		MachineID:     copyString(r.MachineID),
 		CallsRecorded: r.CallsRecorded,
 		Denied:        r.Denied,
@@ -292,19 +319,22 @@ func Detail(src SessionSource, id string, limit int) (SessionDetail, bool, error
 		return SessionDetail{}, false, nil
 	}
 
-	// The summary comes from the same place the list does, so a session reads
-	// the same whichever view asked for it.
-	rows, err := src.Sessions(MaxSessions)
+	// The summary comes from the same query the list uses, so a session reads
+	// the same whichever view asked for it. Looked up by id rather than found
+	// in the list: the list is a page of the newest MaxSessions, and a session
+	// older than that used to come back with its events beside an empty
+	// summary in a state no reader was written to handle.
+	row, found, err := src.Session(id)
 	if err != nil {
 		return SessionDetail{}, false, err
 	}
-	detail := SessionDetail{Events: make([]Event, 0, len(entries))}
-	for _, r := range rows {
-		if r.ID == id {
-			detail.Session = SessionFrom(r)
-			break
-		}
+	if !found {
+		// Entries with no session.start: the start was lost. Real entries, but
+		// not a session the journal can summarise, and pretending otherwise is
+		// how an empty state string reached a browser.
+		return SessionDetail{}, false, nil
 	}
+	detail := SessionDetail{Session: SessionFrom(row), Events: make([]Event, 0, len(entries))}
 	for _, e := range entries {
 		detail.Events = append(detail.Events, EventFrom(e))
 	}

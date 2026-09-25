@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -22,6 +23,12 @@ import (
 // a downstream MCP server, or any local process that got there first.
 func startImpostor(t *testing.T, harvest string) config.Config {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("every test that uses this impostor relies on the daemon side of peer identity " +
+			"refusing an unverified listener; daemonIsGenuine (shim.go) reports !supported || isSelf, " +
+			"so on windows -- where peer.IsSelf is always unsupported (see internal/peer/peer_windows.go) " +
+			"-- it treats this impostor as genuine instead of refusing it")
+	}
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 not available")
 	}
@@ -134,8 +141,32 @@ func TestAnImpostorCannotDecideCalls(t *testing.T) {
 	if r.conn != nil {
 		t.Fatal("the reporter kept a connection to a process that is not Nim")
 	}
-	v := r.ask(daemon.Event{Kind: daemon.KindCallRequest, SessionID: "s1", Seq: 1, Tool: "dangerous_tool"})
+	v := r.ask(daemon.Event{Kind: daemon.KindCallRequest, SessionID: "s1", Seq: 1, Tool: "dangerous_tool"}, nil)
 	if v == verdictAllow {
 		t.Fatal("an impostor was allowed to authorize a call")
+	}
+}
+
+// The management commands used to dial the socket path and trust whatever
+// answered -- and nim connector set carries the plaintext secret. Every
+// command now goes through DialDaemon, which refuses a listener that is not
+// this binary before a byte is sent; this is that refusal, against the same
+// impostor the relay tests use.
+func TestDialDaemonRefusesAnImpostor(t *testing.T) {
+	harvest := filepath.Join(t.TempDir(), "harvest.jsonl")
+	cfg := startImpostor(t, harvest)
+
+	conn, err := DialDaemon(cfg)
+	if err == nil {
+		conn.Close()
+		t.Fatal("DialDaemon handed back a connection to a process that is not Nim")
+	}
+	if !strings.Contains(err.Error(), "not Nim") {
+		t.Errorf("the refusal does not say what was wrong: %v", err)
+	}
+	// Nothing was said to it: a management command that had got this far
+	// would have sent a secret next.
+	if b, _ := os.ReadFile(harvest); len(b) != 0 {
+		t.Errorf("the impostor received %q before the refusal", b)
 	}
 }

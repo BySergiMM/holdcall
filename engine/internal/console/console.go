@@ -11,6 +11,15 @@
 // unreachable from where an agent can talk. Nothing here may ever grow a write
 // endpoint; the day one is wanted, it belongs somewhere else, with a human in
 // front of it.
+//
+// Two reads are not from the journal, and both are still reads. The daemon
+// probe says whether the socket answers. And, since M6, the calls the daemon
+// is holding for a human are read from it and shown with their real
+// arguments, exactly as nim approve prints them -- so the person deciding can
+// see them here and decide with nim approve there. The deciding stays on the
+// CLI: a browser page on loopback is reachable by every other page on this
+// machine, and an approve reachable from it would be an approve reachable
+// from a model with a browser.
 package console
 
 import (
@@ -22,7 +31,10 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
+	"github.com/BySergiMM/nim/engine/internal/daemon"
 	"github.com/BySergiMM/nim/engine/internal/journal"
 	"github.com/BySergiMM/nim/engine/internal/readmodel"
 )
@@ -43,6 +55,12 @@ type Server struct {
 	src    readmodel.Source
 	socket string
 	mux    *http.ServeMux
+
+	// Pending reads the calls the daemon is holding for a human. Optional:
+	// nil means this console cannot ask (no daemon, or a caller that did
+	// not wire one), and /api/pending says so rather than failing. Set by
+	// the command that starts the console, which owns the verified dial.
+	Pending func() ([]daemon.PendingInfo, error)
 }
 
 // New builds the server. src must be a read-only journal: nothing here writes,
@@ -53,13 +71,29 @@ func New(src readmodel.Source, socketPath string) *Server {
 	s.mux.HandleFunc("/api/snapshot", s.handleSnapshot)
 	s.mux.HandleFunc("/api/events", s.handleEvents)
 	s.mux.HandleFunc("/api/sessions/", s.handleSession)
+	s.mux.HandleFunc("/api/policy", s.handlePolicy)
+	s.mux.HandleFunc("/api/explain", s.handleExplain)
+	s.mux.HandleFunc("/api/pending", s.handlePending)
 	return s
 }
 
-// Handler wraps the routes with the two rules that make this safe to leave
-// running: nothing but GET, and no guessing at content types.
+// Handler wraps the routes with the three rules that make this safe to leave
+// running: nothing but GET, no guessing at content types, and no answering to
+// a name that is not loopback.
+//
+// The last one is what Listen's loopback bind does not give. A page on any
+// site can point a script at http://its-own-name:7717 and have DNS answer
+// 127.0.0.1 for that name -- rebinding -- after which the browser treats the
+// console as the page's own origin and hands it the record: tool names,
+// connectors, session ids, digests, the chain head. The bind address never
+// sees the difference; the Host header does, so a request that arrived under
+// any other name is refused before a route runs.
 func (s *Server) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !hostIsLoopback(r.Host) {
+			http.Error(w, "the console answers only to a loopback name", http.StatusMisdirectedRequest)
+			return
+		}
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			w.Header().Set("Allow", "GET, HEAD")
 			http.Error(w, "the console only reads", http.StatusMethodNotAllowed)
@@ -68,6 +102,15 @@ func (s *Server) Handler() http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		s.mux.ServeHTTP(w, r)
 	})
+}
+
+// hostIsLoopback reports whether a Host header names this machine and nothing
+// else: localhost, or a literal loopback address, with or without a port.
+func hostIsLoopback(host string) bool {
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	return isLoopback(strings.Trim(host, "[]"))
 }
 
 // Listen binds the console. The address must be loopback: this serves the
@@ -108,6 +151,9 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	// The page is embedded in the binary, so a cached copy from a previous
+	// build would drive a daemon it was not written for.
+	w.Header().Set("Cache-Control", "no-store")
 	w.Write(page)
 }
 
@@ -193,6 +239,82 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, detail)
+}
+
+// handlePolicy serves what may happen: the rules, agents and connectors held
+// outside the chain in nim_rules, nim_agents and nim_connectors. Unlike
+// everything else this server shows, none of it is a record of something
+// that occurred -- it is the configuration a decision reads, which is why it
+// gets its own endpoint rather than a field on the snapshot.
+func (s *Server) handlePolicy(w http.ResponseWriter, r *http.Request) {
+	pol, err := readmodel.TakePolicy(s.src)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, pol)
+}
+
+// handleExplain serves what nim policy explain says for one call shape,
+// through readmodel.Explain and so through journal.Decide: the console shows
+// what the daemon would do, computed by the same function, never by a copy.
+func (s *Server) handleExplain(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	agent, connector, tool := q.Get("agent"), q.Get("connector"), q.Get("tool")
+	if !validName(tool, 1) || !validName(agent, 0) || !validName(connector, 0) {
+		http.Error(w, "tool is required; agent, connector and tool are short printable names", http.StatusBadRequest)
+		return
+	}
+	ex, err := readmodel.Explain(s.src, agent, connector, tool)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, ex)
+}
+
+// pendingResponse says whether the daemon could be asked at all, so an empty
+// list reads as "nothing is held" only when that is what it means.
+type pendingResponse struct {
+	Available bool                 `json:"available"`
+	Reason    string               `json:"reason,omitempty"`
+	Pending   []daemon.PendingInfo `json:"pending"`
+}
+
+func (s *Server) handlePending(w http.ResponseWriter, r *http.Request) {
+	out := pendingResponse{Pending: []daemon.PendingInfo{}}
+	if s.Pending == nil {
+		out.Reason = "this console was started without a way to ask the daemon"
+		writeJSON(w, out)
+		return
+	}
+	held, err := s.Pending()
+	if err != nil {
+		out.Reason = err.Error()
+		writeJSON(w, out)
+		return
+	}
+	out.Available = true
+	if held != nil {
+		out.Pending = held
+	}
+	writeJSON(w, out)
+}
+
+// validName keeps a query parameter in the shape a tool, agent or connector
+// name has: printable, no control characters, bounded. The parameterised
+// query is what prevents injection; this is what stops a request from being
+// interesting. minLen 0 allows the empty string, which means "every".
+func validName(v string, minLen int) bool {
+	if len(v) < minLen || len(v) > 200 || !utf8.ValidString(v) {
+		return false
+	}
+	for _, c := range v {
+		if unicode.IsControl(c) {
+			return false
+		}
+	}
+	return true
 }
 
 // validSessionID keeps anything surprising out of the query. Ids are opaque

@@ -44,15 +44,35 @@ type SnapshotSource interface {
 // SessionSource backs the session list and one session's detail.
 type SessionSource interface {
 	Sessions(limit int) ([]journal.SessionRow, error)
+	Session(id string) (journal.SessionRow, bool, error)
 	SessionEntries(id string, limit int) ([]journal.Entry, error)
 }
 
-// Source is all three, for wiring: a caller holding a journal passes it once
+// PolicySource backs the rules, budgets, agents and connectors listings:
+// what may happen, as opposed to the journal's record of what did.
+// nim_rules, nim_budgets, nim_agents and nim_connectors sit outside the
+// chain (see journal.go), so this reads them the same way ListRules,
+// ListBudgets, ListAgents and ListConnectors already do, and adds nothing
+// new to what the journal handle can answer.
+type PolicySource interface {
+	ListRules() ([]journal.Rule, error)
+	ListBudgets() ([]journal.Budget, error)
+	ListAgents() ([]journal.Agent, error)
+	ListConnectors() ([]journal.Connector, error)
+	// The two reads a decision makes, so Explain can show what the daemon
+	// would do with a call without a second copy of the precedence: the
+	// candidates come from here and journal.Decide picks among them.
+	MatchingRules(agent, connector, tool string) ([]journal.Rule, error)
+	MatchingBudgets(agent, connector, tool string) ([]journal.Budget, error)
+}
+
+// Source is all four, for wiring: a caller holding a journal passes it once
 // and each projection takes only the part it needs.
 type Source interface {
 	EventSource
 	SnapshotSource
 	SessionSource
+	PolicySource
 }
 
 // Event is one journal entry as a reader sees it.
@@ -89,6 +109,29 @@ type Event struct {
 	Client          *string `json:"client,omitempty"`
 	ProtocolVersion *string `json:"protocol_version,omitempty"`
 
+	// Agent is the enrolled program the daemon derived a session from, on
+	// session.start, and the scope of a rule on rule.add and rule.remove. It
+	// is hashed like every other field, so a reader recomputing an entry's
+	// hash from this projection needs it; it was missing for a while, which
+	// made `nim log --json` an incomplete account of a v2 entry.
+	//
+	// On agent.add and agent.remove it is instead the enrolment's name.
+	Agent *string `json:"agent,omitempty"`
+
+	// ExecPath and ExecID are set on agent.add and agent.remove: the path the
+	// operator enrolled and the resolved identity as "<dev>:<ino>" decimal.
+	// On agent.add they describe the enrolment made; on agent.remove, the one
+	// removed. Both are hashed like every other field, so a reader
+	// recomputing a v3 entry's hash needs them.
+	ExecPath *string `json:"exec_path,omitempty"`
+	ExecID   *string `json:"exec_id,omitempty"`
+
+	// BudgetCalls is set on budget.add and budget.remove: the cap the
+	// budget carries, being set or having been removed. It is hashed like
+	// every other field, so a reader recomputing a v4 entry's hash needs it
+	// -- the same reasoning ExecPath and ExecID were added under for v3.
+	BudgetCalls *int64 `json:"budget_calls,omitempty"`
+
 	PrevHash string `json:"prev_hash"`
 	Hash     string `json:"hash"`
 }
@@ -113,6 +156,10 @@ func EventFrom(e journal.Entry) Event {
 		MachineID:       copyString(e.MachineID),
 		Client:          copyString(e.Client),
 		ProtocolVersion: copyString(e.ProtocolVersion),
+		Agent:           copyString(e.Agent),
+		ExecPath:        copyString(e.ExecPath),
+		ExecID:          copyString(e.ExecID),
+		BudgetCalls:     copyInt(e.BudgetCalls),
 		PrevHash:        e.PrevHash,
 		Hash:            e.Hash,
 	}

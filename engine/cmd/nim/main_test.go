@@ -3,8 +3,14 @@ package main
 import (
 	"flag"
 	"io"
+	"regexp"
+	"runtime"
 	"slices"
+	"strings"
 	"testing"
+
+	"github.com/BySergiMM/nim/engine/internal/journal"
+	"github.com/BySergiMM/nim/engine/internal/readmodel"
 )
 
 // server is the stand-in downstream every case below binds its connector to.
@@ -182,5 +188,83 @@ func TestAgentAddResolvesThePathBeforeSendingIt(t *testing.T) {
 	}
 	if path != "/resolved./Claude" {
 		t.Fatalf("the resolved path was not used, got %q", path)
+	}
+}
+
+// `nim log --follow` and `nim log --json` both go through formatEvent (or
+// json.Marshal, in the --json case) for whatever readmodel.Stream hands back,
+// so an agent.add entry has to render like any other: the enrolment's name in
+// agent, and now the path the operator enrolled, so an enrolment does not
+// show as a bare name with nothing behind it the way a rule.add with no scope
+// would.
+func TestFormatEventRendersAnAgentEntry(t *testing.T) {
+	agent, execPath := "claude-code", "/usr/local/bin/claude"
+	ev := readmodel.Event{
+		ChainSeq: 7, Kind: "agent.add", SessionID: "", OccurredAt: "2026-09-14T00:00:00Z",
+		Agent: &agent, ExecPath: &execPath,
+	}
+	line := formatEvent(ev)
+
+	for _, want := range []string{"agent.add", "agent=claude-code", "exec_path=/usr/local/bin/claude"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("formatEvent did not render %q:\n%s", want, line)
+		}
+	}
+}
+
+// versionShape is the format documented for `nim version`:
+//
+//	nim <version> (<commit>, built <builtAt>, <goos>/<goarch>, <go version>)
+//
+// A build made with plain `go build` has no tag, commit or build time to
+// report, so this must hold for the "unknown" defaults just as much as for a
+// release built with -ldflags -- the release workflow is not what this test
+// exercises, only the shape it depends on.
+var versionShape = regexp.MustCompile(`^nim (\S+) \((\S+), built (\S+), (\S+)/(\S+), (go\S+)\)$`)
+
+// A rule.add or rule.remove entry carries a scope (agent, connector) and an
+// effect (tool, decision), no session and no seq -- see journal.ruleEntry --
+// and formatEvent must read as that, not as a call with some fields missing.
+func TestFormatEventRendersARuleEntry(t *testing.T) {
+	agent, connector, tool, decision := "cursor", "github", "rm", journal.DecisionDeny
+	ev := readmodel.Event{
+		ChainSeq: 9, Kind: journal.KindRuleAdd, SessionID: "",
+		Agent: &agent, Connector: &connector, Tool: &tool, Decision: &decision,
+	}
+
+	got := formatEvent(ev)
+	if !strings.Contains(got, "rule.add") {
+		t.Fatalf("formatEvent(rule.add) = %q, lost the kind", got)
+	}
+	want := "agent=cursor  connector=github  tool=rm  decision=deny"
+	if !strings.Contains(got, want) {
+		t.Fatalf("formatEvent(rule.add) = %q, want it to contain %q", got, want)
+	}
+	if strings.Contains(got, "seq=") {
+		t.Errorf("formatEvent(rule.add) = %q, a rule entry has no seq", got)
+	}
+}
+
+func TestVersionStringHasTheDocumentedShape(t *testing.T) {
+	got := versionString()
+
+	m := versionShape.FindStringSubmatch(got)
+	if m == nil {
+		t.Fatalf("versionString() = %q, does not match the documented shape", got)
+	}
+	if m[1] != version {
+		t.Errorf("version = %q, want %q", m[1], version)
+	}
+	if m[2] != commit {
+		t.Errorf("commit = %q, want %q", m[2], commit)
+	}
+	if m[3] != builtAt {
+		t.Errorf("builtAt = %q, want %q", m[3], builtAt)
+	}
+	if m[4] != runtime.GOOS || m[5] != runtime.GOARCH {
+		t.Errorf("platform = %s/%s, want %s/%s", m[4], m[5], runtime.GOOS, runtime.GOARCH)
+	}
+	if m[6] != runtime.Version() {
+		t.Errorf("go version = %q, want %q", m[6], runtime.Version())
 	}
 }

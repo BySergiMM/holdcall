@@ -5,11 +5,13 @@ that needs it.
 
 ## Where the work lives
 
-`integration/trunk` is the branch to build on. It is the merge of the two
-lineages that grew from M1 in parallel: the append-only hash-chained journal,
-the console and enforcement from one, credentials and daemon lifetime from the
-other. Neither parent contains the whole engine and neither should be developed
-on further.
+`m1-bootstrap` is the branch to build on. It adopted the merged tree
+(`a10e626`) that `integration/trunk` had produced from the two lineages that
+grew from M1 in parallel -- the append-only hash-chained journal, the console
+and enforcement from one, credentials and daemon lifetime from the other --
+and everything since (agent identity, the dashboard, policy in SQLite) landed
+on it. `integration/trunk` is frozen history: it is where the merge was done,
+and it is not developed on.
 
 The numbering below is the merged one. `M2` means **enforcement**; daemon
 lifetime, which the other lineage had called M2, is folded into M2.5. Anything
@@ -25,14 +27,13 @@ written before the merge that says otherwise is describing one half.
 - **`config.toml` configures the daemon** — socket path, data directory, which
   servers to supervise.
 
-  **Weakened in M2, deliberately and temporarily.** M2 reads a deny list from
-  `config.toml` so that the enforcement path can be exercised end to end against
-  something real. The original decision was right and this breaks it: any
-  process able to write `config.toml` can empty the list, which is not a
-  property an authorization input should have. It is scaffolding, kept small on
-  purpose — exact tool names, no wildcards, no scopes, no ordering — and real
-  policy belongs somewhere the daemon owns. Nothing else an authorization
-  decision depends on may go here in the meantime.
+  **Weakened from M2 to M4, deliberately and temporarily, and restored in M4.**
+  M2 read a deny list from `config.toml` so that the enforcement path could be
+  exercised end to end against something real, knowing that any process able
+  to write the file could empty the list. M4 moved the rules into SQLite,
+  behind the daemon, with every change an entry in the chain. A `config.toml`
+  that still carries a `[policy]` section is refused rather than read past.
+  Nothing an authorization decision depends on goes in the file again.
 - **Supabase is a mirror, never a dependency.** It receives a copy of the
   journal for the dashboard. If it is unreachable, nothing changes locally.
 - **Every table is prefixed `nim_`**, in SQLite and in Postgres alike, so the
@@ -108,7 +109,8 @@ invisibility.
 - **Batches and unparseable frames are counted.** A JSON-RPC batch slips past
   envelope parsing entirely, so a `tools/call` inside one reached a server with
   no record at all. In this milestone it still did, and left an `anomaly` entry
-  saying so. M2 refuses both instead.
+  saying so. M2 refuses an unparseable frame, and a batch that carries a
+  `tools/call`; a batch carrying none is still relayed.
 - **`nim log`**, **`nim verify`**, and a `nim status` that prints the chain head.
 
 **What the chain does not do.** It detects corruption and edits that did not
@@ -202,7 +204,8 @@ window needs machinery this milestone does not buy.
   so nothing in M2 depends on the answer; the inversion that would is a later
   milestone, and the spike belongs with it.
 - **Anything that can write `config.toml` can empty the deny list.** See the
-  standing decision above.
+  standing decision above. Closed in M4: the rules live in SQLite and the
+  file is refused if it still carries them.
 
 **Scope, stated as exclusions.** No canonicalization of arguments, no credential
 handling, no agent identity, no policy model beyond exact tool names, no human
@@ -283,19 +286,65 @@ at all.
 
 ## M4 — Identity, and policy that lives in SQLite
 
-**Reordered, with reasons.** M4 was "Grants (Cedar)", starting with a spike on
-`cedar-go`. That is the wrong next step, and the merged engine makes it obvious
-why: **a policy language has nothing to talk about yet.**
+**Status: done, 2026-09-14.** A decision is `(agent, connector, tool)`. The
+acceptance test ran with real processes: two client programs, enrolled under
+two names, each spawning a relay against one connector and sending the same
+call, received different verdicts, and the journal distinguishes them on their
+`session.start` entries (`TestTwoRealAgentsAgainstOneConnectorReceiveDifferentVerdicts`).
 
-Every decision Nim makes today is per-tool and global. Two agents against the
-same connector get the same answer, because there is no way to tell them apart
-— the word "agent" appears in this document and nowhere in the schema. Grants
+What landed:
+
+- **Agent identity**, derived by the daemon from the kernel -- the socket
+  peer's parent process and the file it executes -- matched against
+  enrolments made with `nim agent add`. Nothing on the wire names an agent.
+  Recorded on `session.start` at schema_version 2, and shown by `nim log`,
+  `nim log --json` and the console.
+- **Rules in SQLite.** `nim policy deny <tool> [--agent] [--connector]`, kept
+  in `nim_rules`, read by the daemon at decision time. Rules only deny; a tool
+  no rule names is allowed, as before. A rule may name only an enrolled agent.
+- **Every change in the chain.** A rule and its `rule.add` or `rule.remove`
+  entry are one SQLite transaction, so the rules have a history that verifies
+  like the calls do. This needed the journal table to be rebuilt once on
+  open -- SQLite cannot widen a CHECK constraint in place -- and the rebuild
+  copies every row verbatim, which a test holds it to.
+- **Policy out of `config.toml`.** The file configures the daemon and nothing
+  else; a `[policy]` section, or any key this build does not know, is refused
+  with the way forward in the message.
+- **D-002 answered** for this model, in
+  `docs/decisions/0002-what-an-unknown-agent-may-do.md`: a session no
+  enrolment matched meets only the rules that name no agent. Because rules
+  only deny, that is the ceiling every session had before agents existed, and
+  nobody gains by avoiding enrolment.
+
+What it does not do, stated rather than implied:
+
+- **No allow rules.** "Only Claude Code may touch github" needs a rule that
+  grants, a precedence between allow and deny, and a different answer to
+  D-002. That is a policy language, and it is M4.5 with the spike in front.
+- **Two windows of one program are the same agent.** The identity is the
+  executable, not the instance.
+- **Enrolment changes were not journaled** (F-018) when this milestone closed.
+  Re-enrolling a name moved every rule scoped to it with nothing in the chain
+  saying so. Closed on 2026-09-15: `agent.add` and `agent.remove` are entries
+  at schema_version 3, carrying the enrolled path and the resolved identity,
+  written in one transaction with the enrolment -- `docs/journal-format.md`
+  has the encoding.
+- **The decision costs one more read.** `docs/benchmarks.md` has the figures:
+  p50 moved from 0.075 ms to 0.091 ms and p99 stayed where it was.
+
+**Reordered, with reasons.** M4 was "Grants (Cedar)", starting with a spike on
+`cedar-go`. That was the wrong next step, and the merged engine made it obvious
+why: **a policy language had nothing to talk about yet.**
+
+Every decision Nim made was per-tool and global. Two agents against the
+same connector got the same answer, because there was no way to tell them apart
+— the word "agent" appeared in this document and nowhere in the schema. Grants
 (M4 as written), budgets (M5) and human approval (M6) all need a subject, and
-none of them can be built until one exists. Choosing a policy language before
+none of them could be built until one existed. Choosing a policy language before
 there is a subject to write policies about is picking the syntax before the
 semantics.
 
-Two things belong here, in this order:
+Two things belonged here, in this order:
 
 1. **Agent identity.** A decision becomes `(agent, connector, tool)` rather
    than `tool`. The journal records which agent, and the console shows it. The
@@ -317,19 +366,266 @@ Cedar is deferred, not rejected. It becomes a real question once there is a
 subject, a resource and an action to express, and the spike should happen then
 with those in hand.
 
-## M4.5 — Grants (Cedar), if it is still the answer
+## M4.5 — Allow rules, and the precedence between them and deny
 
-Allow / deny per (agent, connector, tool), expressed in something richer than
-a list. Preceded by the one-day spike on `cedar-go`, now with a real policy
-model to evaluate it against.
+**Status: done, 2026-09-15.** Not Cedar. The one-day spike on `cedar-go` that
+preceded this milestone, and the real policy model available to evaluate it
+against once M4 landed, together said the same thing docs/decisions/0003
+argues in full: two rules and a precedence between them said everything this
+milestone needed to say, and a grammar for conditions nothing here asks for
+would have been syntax chosen before there was a semantics to serve.
+
+What landed:
+
+- **`effect` is `deny` or `allow`.** The column's CHECK constraint widened
+  from `('deny')` to `('deny','allow')` the way `nim_journal`'s widened for
+  `rule.add` in M4: SQLite cannot alter a CHECK in place, so an existing
+  `nim_rules` is rebuilt once, on open, row for row --
+  `rebuildRulesTable`, tested against a database seeded with the exact DDL
+  M4 shipped
+  (`TestANimRulesTableFromTheCurrentDDLIsWidenedForAllowRules`).
+  `nim_rules` is not part of the hash chain, unlike `nim_journal`, so its
+  rebuild needed no view to drop and nothing to re-verify beyond the rows
+  themselves.
+- **`tool` may be `*`, meaning every tool, only through `nim policy default
+  deny|allow`.** Everywhere else -- `nim policy deny`, `allow`, the match at
+  decision time -- it is refused as an ordinary tool name, so there remains
+  exactly one way to write a rule that matches more than one tool. It is not
+  a wildcard or a prefix. A client that genuinely calls a tool named `*` is
+  not specially guarded against; docs/decisions/0003 says why that is
+  honest rather than an oversight.
+- **A stated precedence, in one function.** `journal.Decide`: higher
+  specificity wins (exact tool over default, naming the agent or the
+  connector over not naming it), deny beats allow at equal specificity, and
+  no matching rule at all is left to the caller as the M4 baseline -- allow.
+  Pure, with no database in it, and table-driven tested exhaustively
+  (`TestDecideAppliesSpecificityThenDenyOverAllow`,
+  `internal/journal/decide_test.go`) rather than only through the daemon.
+- **D-002 answered again, for this model**, in docs/decisions/0003 and in
+  0002's last section: `nim policy default deny` plus `nim policy allow
+  <tool> --agent <name>` is the allow-list M4 could not express, and an
+  unenrolled program is denied by the default because no rule naming no
+  agent grants it anything. Proven at the answer level
+  (`TestDefaultDenyDeniesAnUnknownAgentWhileAnAgentScopedAllowAdmitsAnEnrolledOne`)
+  and end to end with real processes
+  (`TestADefaultDenyClosesEverythingAndAnAgentScopedAllowReopensOneToolForOneAgent`),
+  the second following the shape
+  `TestTwoRealAgentsAgainstOneConnectorReceiveDifferentVerdicts` set for M4.
+- **`nim policy explain <tool> [--agent] [--connector]`**, through a new
+  `policy.explain` daemon request, names the rule that would decide a call
+  shaped like that and why -- computed by calling the same `journal.Decide`
+  the decision path uses, so it can never say something a real call would
+  not do. The CLI still never reads `nim_rules` itself.
+- **Every allow and default entry verifies like a deny always did.**
+  `rule.add`/`rule.remove` carry the effect in `decision` and `*` in `tool`
+  exactly as stored, and the chain checks out across them
+  (`TestAllowAndDefaultRuleEntriesCarryTheEffectAndVerify`).
+- **The decision cost the one query it already cost in M4.** `MatchingRules`
+  replaces the single-row lookup with a small `select` -- at most eight
+  candidate rows for any one call, bounded by the same unique index -- and
+  `docs/benchmarks.md`'s method reproduces p50 at essentially the same
+  0.09 ms M4 measured.
+
+What it does not do, stated rather than implied:
+
+- **No conditions on arguments.** A rule is still keyed on `(agent,
+  connector, tool)` alone; nothing here reads `params.arguments`.
+- **No time bounds and no budgets.** Both need a clock or a counter to name,
+  which a precedence between two rules has no reason to grow on its own.
+- **No human approval.** Still M6.
+- **Enrolment changes are journaled since 2026-09-15** (F-018, closed the
+  same day as this milestone). A rule scoped to a name is only as trustworthy
+  as the record of what that name pointed at, and that record now exists:
+  `agent.add` and `agent.remove` entries carry the enrolled path and the
+  resolved identity, so re-enrolling `claude-code` against another executable
+  is visible in the chain beside the allow rules it moves.
+
+**What would still need a language, if one of these is ever asked for:**
+conditions on a call's arguments (a real policy grammar, not a
+precedence between two effects), time-of-day or session-age bounds, and
+budgets that decrement across calls rather than deciding each in isolation.
+None of the three needed anything this milestone built; each would need its
+own subject to talk about, the same argument M4's reordering made about
+agent identity before a policy language had anything to say.
 
 ## M5 — Budgets
 
-Per session, decremented at authorization time, not at execution time.
+**Status: done, 2026-09-15.** Per session, decremented at authorization
+time, not at execution time -- the sentence this section opened with, now
+the thing `daemon.checkBudgets` does. `docs/decisions/0004-budgets.md` is
+the argument behind every choice below.
+
+What landed:
+
+- **A budget is a cap on ALLOWED calls, scoped like a rule.** `(agent,
+  connector, tool, calls)` -- agent and connector null mean every session or
+  every connector, and tool is an exact name or `*` (`journal.BudgetToolAll`)
+  for every tool, set only through `--all-tools`, the same convention
+  `RuleToolDefault` uses for a rule's default. `nim_budgets` holds one budget
+  per scope, unique on `(agent, connector, tool)`.
+- **Checked once the rules already allow a call, and only then.**
+  `checkBudgets` runs inside `daemon.answer` after `journal.Decide` has
+  reached `allow`; a call the rules deny never reaches it. A budget has no
+  effect field and no way to express "allow," so there is no path by which
+  one could turn a `deny` into anything else --
+  `TestABudgetCannotMakeADeniedCallPass`.
+- **The count is of decisions, not outcomes.** `journal.CountAllowedCalls`
+  weighs a session's `call.request` entries whose `decision` is `allow` or
+  `approved`; a refused call, by a rule or by this same budget, spends
+  nothing, and a call the relay gave up waiting on still spent its share the
+  moment it was allowed -- the same "an allow is not evidence the call was
+  made" `docs/journal-format.md` already states, now load-bearing for a
+  second guarantee. `TestTheNthPlusOneAllowedCallIsDeniedAndRefusalsDoNotCount`
+  proves both halves in one sequence: the (N+1)th allowed call is refused,
+  and the refusals woven through the sequence never counted.
+- **Per session means session.start to session.end**, the unit Nim already
+  had; a client that restarts its relay starts a new session with a fresh
+  count (`TestANewSessionStartsWithAFreshBudget`, and end to end with a real
+  relay, `TestABudgetOfTwoRefusesTheThirdCallAndANewRelayStartsFresh`).
+- **Schema version 4, `canonical_encode_v4`, field 20 `budget_calls`.** Set
+  on `budget.add`, carrying the cap being set; on `budget.remove`, carrying
+  the cap being removed, so the chain says what stopped applying rather than
+  only that something did -- the same reasoning `exec_path`/`exec_id`
+  followed for an enrolment. `nim_journal`'s `kind` CHECK widened the same
+  way it did for `rule.add` and `agent.add` before it, rebuilt once on open,
+  rows copied verbatim
+  (`TestADatabaseFromTheCurrentBuildGainsTheBudgetKindsAndStillVerifies`).
+- **`nim_budgets` sits outside the hash chain**, exactly like `nim_rules` and
+  `nim_agents`: configuration, not the record of what happened. `budget.add`
+  and `budget.remove` are what make a change to it auditable, written in the
+  same SQLite transaction as the change itself
+  (`TestABudgetAndItsEntryAreOneChange`,
+  `TestABudgetChangeThatCannotBeRecordedIsNotMade`).
+- **`nim policy budget <n> --tool <tool>|--all-tools [--agent] [--connector]`**
+  and **`nim policy budget remove`** with the same scope, through new daemon
+  request kinds `budget.set`, `budget.remove` and `budget.list` -- budgets
+  are policy, so a connection that has committed to that purpose may send
+  either alongside `policy.deny`/`allow`/`remove`/`list`/`explain`. `nim
+  policy list` shows a BUDGETS table under the rules table.
+- **`nim policy explain` lists the budgets that would apply to a call and
+  their caps, and stops there.** It has no session to weigh a count against
+  -- explain answers "what would apply to a call shaped like this," and a
+  session's usage is not part of that shape. Inventing a count would be a
+  guess dressed up as an answer; `docs/decisions/0004-budgets.md`'s closing
+  section is the argument.
+
+What it does not do, stated rather than implied:
+
+- **No time bounds.** A budget counts calls, not calls per hour or calls
+  since a clock reading -- `docs/decisions/0003`'s closing section named
+  this, alongside budgets, as needing a subject beyond a rule's scope; a
+  session is the subject this milestone chose, a clock is a different one.
+- **No budget that survives a restarted relay.** Per session means exactly
+  that: a crash-and-restart loop is not throttled by a budget scoped to one
+  session, on purpose, and the docs say so plainly rather than let an
+  operator discover it.
+- **No conditions on a call's arguments, and no weighting by cost.** A
+  budget is `(agent, connector, tool, calls)`; it does not read
+  `params.arguments`, and every allowed call spends exactly one unit of
+  whichever budgets cover it, regardless of what the call actually asked a
+  connector to do.
+- **No human approval.** Still M6.
 
 ## M6 — Human approval
 
-Out-of-band prompt showing real parameters, never a model-generated summary.
+**Status: done, 2026-09-15.** A third rule effect, `ask`, holds a call for a
+human instead of deciding it from a rule alone. `nim approve` shows the real
+`params.arguments`, pretty-printed, never a summary and never anything the
+model that asked for the call wrote about itself --
+`docs/decisions/0005-human-approval.md` is the design and the argument for
+why that has to be the real bytes.
+
+What landed:
+
+- **`effect` is `deny`, `allow` or `ask`.** `nim policy ask <tool> [--agent]
+  [--connector]` and `nim policy default ask` -- the third counterpart to
+  M4.5's `deny`/`allow`, through the same `nim_rules` CHECK-widening rebuild
+  that grew the column before. `journal.Decide`'s precedence gained one
+  line: at equal specificity, deny beats ask beats allow -- the 2026-09-15
+  addendum to `docs/decisions/0003-allow-rules-and-precedence.md` is the
+  argument, and `TestDecideAppliesSpecificityThenDenyOverAllow` in
+  `internal/journal/decide_test.go` carries the new cases beside the ones
+  M4.5 wrote.
+- **The wire holds a call rather than deciding it.** The daemon answers a
+  `call.request` an `ask` rule matches with `pending` (a value that exists
+  only on the wire -- `daemon.DecisionPending` -- and never reaches the
+  journal) and a hold id. The relay sends one `call.arguments` event
+  carrying the raw bytes of that call, and waits for the final answer on the
+  same connection, up to `[daemon] approval_timeout` (default `2m`, read by
+  both the daemon and the relay from one `config.Config`) -- the same wait
+  `decisionTimeout` already does for an ordinary verdict, extended only for
+  this case. Nothing about the call is journaled while it is held: no entry
+  exists for a call in this state, by construction, which is what keeps the
+  real arguments out of the record as surely as the digest already kept
+  ordinary arguments out of it.
+- **A human decides through `nim approve`/`nim reject`**, under their own
+  daemon purpose (`approval.list`, `approval.decide`) -- a connection
+  speaking it cannot pivot to asking for a credential, exactly as a policy
+  connection cannot
+  (`TestAnApprovalConnectionCannotAskForACredential`). The `call.request`
+  entry is written -- `approved` or `rejected`, values `docs/journal-format.md`
+  reserved for this back at M1.5 -- *before* the relay is told, the same
+  ordering allow and deny already keep
+  (`TestApprovingACallWritesApprovedBeforeTellingTheRelay`,
+  `TestRejectingACallWritesRejectedBeforeTellingTheRelay`). An approved call
+  forwards the exact bytes it arrived with, like any other allowed call; a
+  rejected one gets its own refusal text, `mcp.DeniedByHuman`, distinct from
+  an ordinary policy denial.
+- **Every way of not deciding fails to reject, not to allow.** Nobody
+  deciding within `approval_timeout` rejects the call and journals it --
+  the daemon's own timer, armed the moment the call starts being held, not
+  merely the relay giving up
+  (`TestAnApprovalTimeoutRejectsAndJournalsTheCall`). A session that ends
+  while one of its calls is still held is rejected the same way, whether
+  the end is explicit (`TestASessionThatEndsWhilePendingIsRejected`) or the
+  relay's connection simply drops
+  (`TestAConnectionThatDropsWhilePendingRejectsWhatItLeftPending`) -- so the
+  journal never ends up holding a call that was neither approved nor
+  rejected. The client is told which kind of refusal it got:
+  `mcp.DeniedByHuman` for an explicit reject or the daemon's own timeout,
+  `mcp.DeniedApprovalTimedOut` for the relay's own local backstop, when even
+  that answer never arrived.
+- **The human's reason for a rejection stays out of the chain.**
+  `nim reject <id> --reason <text>` logs the reason on the daemon's own log
+  and returns it to the CLI that asked; it is never written to the journal
+  and never reaches the client the call came from
+  (`TestTheRealArgumentsNeverReachTheJournalOrTheDaemonsLog` covers the
+  arguments themselves the same way).
+- **Held calls live only in memory.** `pendingRegistry`
+  (`internal/daemon/approval.go`) is the daemon's whole record of what is
+  waiting; nothing about a held call is in SQLite until it is decided.
+  `docs/decisions/0005-human-approval.md` states plainly what that costs: a
+  daemon killed outright loses every call it was holding with no journal
+  entry at all, the same way it already loses an in-flight session; a
+  daemon that shuts down by its connections closing rejects and journals
+  what it was holding on the way out.
+- **End to end with the real binary**
+  (`TestRealApprovalHoldsACallForAHumanWhoDecidesItThroughTheCLI`,
+  `cmd/nim/e2e_test.go`): a real relay makes a call under an `ask` rule,
+  `nim approve` from a separate process lists it with the real arguments,
+  approving it is what lets the connector's own answer reach the client, and
+  a second call under the same rule is rejected -- the client sees the
+  refusal, the connector never sees the call.
+
+What it does not do, stated rather than implied:
+
+- **Who may approve is "anyone who can run `nim` as this user," and that is
+  stated as the honest boundary, not glossed over.** Approval defends
+  against the model driving the client, not against the operator --
+  `docs/decisions/0005-human-approval.md`'s own section on this, and
+  `docs/security.md`'s attack row 32, "approve your own call from the
+  model," which is blocked only by the socket's peer identity and the fact
+  that the model cannot run commands unless the operator gave it a shell.
+- **No conditions on arguments decide whether to ask automatically.** `ask`
+  is a fourth value the same `(agent, connector, tool)`-keyed rule can hold;
+  nothing here reads `params.arguments` to decide when a rule should apply,
+  only after it already has.
+- **No queueing, no notification.** `nim approve` with nothing held prints
+  that nothing is held; an operator has to run it to find out anything is
+  waiting. Building a notification path was not this milestone's job.
+- **No delegation.** There is no second identity to hand approval to --
+  every approver is "whoever can run this binary as this user," which is
+  also everything an enrolment or a rule was already worth.
 
 ## M7 — Journal
 
@@ -341,13 +637,18 @@ record inputs for. Folded into M4.
 
 ## M8 — Dashboard
 
-**Blocked on something more basic than itself.** Syncing a record whose
+**Status: planned, unblocked on 2026-09-16.** Syncing a record whose
 authenticity rests on an unkeyed chain exports a liability rather than
 evidence: anything able to write `nim.db` can rewrite history and the mirror
-would faithfully copy it. Either the journal gains a key the agent cannot
-reach, or the dashboard has to present what it shows as "what this machine
-reported", which is a much weaker claim than the sync contract below implies.
-Decide that before building the viewer.
+would faithfully copy it. D-004 chose the honest side of that: the mirror
+presents what it shows as "what this machine reported", on every row, and
+the one strong claim it may hold is a head the operator pinned from
+`nim verify --expect-head`, stored apart from the synced rows.
+`docs/decisions/0006-what-the-mirror-may-claim.md` is the argument, and
+adds three requirements to the contract below: provenance on every row, heads
+under a separate write path, and a sync that is an opt-in command the daemon
+never depends on. What it still needs is a hosting project and account,
+which are the operator's.
 
 
 Next.js + Supabase. The engine pushes a copy of the journal; the cloud never

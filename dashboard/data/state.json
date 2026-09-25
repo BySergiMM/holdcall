@@ -19,10 +19,10 @@
   "project": {
     "name": "Nim",
     "tagline": "A local process between an MCP client and the MCP servers it uses.",
-    "currentMilestone": "M4",
-    "currentPhase": "Agent identity — enrolment and derivation landed; policy not started",
+    "currentMilestone": "M4.5",
+    "currentPhase": "M1 to M7 done and F-001 closed (an in-place upgrade is diagnosed, nim daemon restart is the remedy); M8 planned as an opt-in mirror of what the machine reported; CI on GitHub blocked by account billing, so linux and windows remain unexecuted",
     "overallStatus": "in_progress",
-    "statusNote": "Nim decides, blocks and records. It has no policy model beyond a list of tool names, and agent identity is recorded but not yet acted on.",
+    "statusNote": "Nim decides per (agent, connector, tool) against allow and deny rules in SQLite -- most specific wins, deny beats allow at equal specificity, no rule means allow -- records every call, every rule change and every enrolment change in one hash chain, and configures Claude Code, Cursor and Claude Desktop to go through it with nim init. Nothing has ever been executed on Windows.",
     "provenance": "declared"
   },
   "ciSnapshot": {
@@ -111,18 +111,23 @@
     "layers": [
       {
         "name": "Agent identity",
-        "state": "partial",
-        "detail": "Enrolled and derived from the kernel, recorded on session.start. Nothing decides on it yet.",
+        "state": "implemented",
+        "detail": "Enrolled and derived from the kernel, recorded on session.start, and every enrolment change is an agent.add or agent.remove entry in the chain. Two windows of one program are the same agent.",
         "guarantees": [
-          "agent-not-claimable"
+          "agent-not-claimable",
+          "policy-per-agent",
+          "enrolment-changes-in-chain"
         ]
       },
       {
         "name": "Policy",
-        "state": "partial",
-        "detail": "A deny list of exact tool names, read from config.toml. Not per-agent, and anything able to write that file can empty it.",
+        "state": "implemented",
+        "detail": "Allow and deny rules in SQLite, per agent and per connector, with defaults; one precedence function decides and nim policy explain shows it. Changed only through the daemon and recorded in the chain.",
         "guarantees": [
-          "enforcement-fail-closed"
+          "enforcement-fail-closed",
+          "policy-in-sqlite",
+          "policy-per-agent",
+          "policy-precedence"
         ]
       },
       {
@@ -156,7 +161,7 @@
       {
         "name": "SQLite",
         "state": "implemented",
-        "detail": "Source of truth for the journal, connectors and agents. The only thing an authorization decision should read.",
+        "detail": "Source of truth for the journal, connectors, agents and rules. The only thing an authorization decision reads.",
         "guarantees": []
       }
     ]
@@ -166,7 +171,7 @@
       "id": "peer-identity-both-ways",
       "title": "Both ends of the daemon socket verify each other",
       "status": "verified",
-      "statement": "A process that is not this binary cannot speak on the daemon socket, in either direction. The daemon checks its callers and the relay checks whatever is listening before sending a byte.",
+      "statement": "A process that is not this binary cannot speak on the daemon socket, in either direction. The daemon checks its callers; the relay and every management command check whatever is listening before sending a byte.",
       "notGuaranteed": "It answers \"is this Nim\", not \"is this a relay the operator meant to run\". Anything able to execute the binary passes it.",
       "implementation": [
         "engine/internal/peer/peer.go",
@@ -177,14 +182,15 @@
         "TestANonNimProcessCannotWriteToTheJournal",
         "TestANonNimProcessCannotObtainADecision",
         "TestAnImpostorOnTheSocketCannotChooseWhatIsSpawned",
-        "TestAnImpostorLearnsNothingFromTheAttempt"
+        "TestAnImpostorLearnsNothingFromTheAttempt",
+        "TestDialDaemonRefusesAnImpostor"
       ],
       "platforms": {
         "darwin": "verified",
         "linux": "verified",
         "windows": "unsupported"
       },
-      "lastVerified": "2026-08-11",
+      "lastVerified": "2026-09-15",
       "provenance": "declared"
     },
     {
@@ -279,7 +285,7 @@
       "platforms": {
         "darwin": "verified",
         "linux": "verified",
-        "windows": "verified"
+        "windows": "unverified"
       },
       "lastVerified": "2026-08-11",
       "provenance": "declared"
@@ -288,21 +294,21 @@
       "id": "journal-append-only",
       "title": "The journal is append-only in fact, not by convention",
       "status": "verified",
-      "statement": "A call produces two immutable entries rather than one row that is updated. Nothing in the write path updates an entry.",
+      "statement": "A call produces two immutable entries rather than one row that is updated. Nothing in the write path updates an entry. Configuration that decides what may happen -- rules and enrolments -- is changed in one transaction with the entry that records the change.",
       "notGuaranteed": "Append-only as far as this code is concerned. Nothing stops another process opening the file and writing to it.",
       "implementation": [
         "engine/internal/journal/journal.go"
       ],
       "tests": [
         "TestReportsBecomeAppendOnlyEntries",
-        "TestEnrolmentAppendsNothingToTheChain"
+        "TestEnrolmentEntersTheChain"
       ],
       "platforms": {
         "darwin": "verified",
         "linux": "verified",
-        "windows": "verified"
+        "windows": "unverified"
       },
-      "lastVerified": "2026-08-11",
+      "lastVerified": "2026-09-15",
       "provenance": "declared"
     },
     {
@@ -322,7 +328,7 @@
       "platforms": {
         "darwin": "verified",
         "linux": "verified",
-        "windows": "verified"
+        "windows": "unverified"
       },
       "lastVerified": "2026-08-11",
       "provenance": "declared"
@@ -345,7 +351,7 @@
       "platforms": {
         "darwin": "verified",
         "linux": "verified",
-        "windows": "verified"
+        "windows": "unverified"
       },
       "lastVerified": "2026-08-11",
       "provenance": "declared"
@@ -354,7 +360,7 @@
       "id": "journal-schema-versioning",
       "title": "A journal spanning schema versions still verifies",
       "status": "verified",
-      "statement": "Verification dispatches on the version each entry stored, so entries written before agent existed keep verifying and a mixed chain checks out end to end.",
+      "statement": "Verification dispatches on the version each entry stored: v1 before agent existed, v2 with it, v3 with the enrolment fields, v4 with a budget's cap. A mixed chain checks out end to end, and a table an earlier build created is rebuilt to the current definition on open with every row copied verbatim, so the chain that comes out is the chain that went in.",
       "notGuaranteed": "An entry claiming a version this build does not know is refused rather than checked. That is intended, but it means a downgrade cannot read a newer journal.",
       "implementation": [
         "engine/internal/journal/canonical.go",
@@ -364,22 +370,33 @@
         "TestAV1EntryStillVerifiesAfterV2Exists",
         "TestAChainSpanningBothVersionsVerifies",
         "TestAnUnknownSchemaVersionIsRefused",
-        "TestTheTwoEncodingsAreDistinct"
+        "TestTheTwoEncodingsAreDistinct",
+        "TestAJournalTableFromAnEarlierBuildIsRebuiltWithoutChangingTheChain",
+        "TestOpeningACurrentJournalRecreatesNothing",
+        "TestAV3EntryVerifies",
+        "TestAChainSpanningV1ToV4Verifies",
+        "TestTheV2AndV3EncodingsAreDistinct",
+        "TestADatabaseFromTheM4BuildGainsTheEnrolmentColumnsAndStillVerifies",
+        "TestANimRulesTableFromTheCurrentDDLIsWidenedForAllowRules",
+        "TestOpeningACurrentRulesTableRecreatesNothing",
+        "TestAV4EntryVerifies",
+        "TestTheV3AndV4EncodingsAreDistinct",
+        "TestADatabaseFromTheCurrentBuildGainsTheBudgetKindsAndStillVerifies"
       ],
       "platforms": {
         "darwin": "verified",
         "linux": "verified",
-        "windows": "verified"
+        "windows": "unverified"
       },
-      "lastVerified": "2026-08-11",
+      "lastVerified": "2026-09-15",
       "provenance": "declared"
     },
     {
       "id": "agent-not-claimable",
       "title": "An agent identity cannot be claimed by the agent",
       "status": "verified",
-      "statement": "The daemon derives the agent from the kernel: socket peer, its parent, the file that parent executes. There is no agent field on the wire.",
-      "notGuaranteed": "Nothing decides on it yet. Two windows of one program are the same agent. Enrolment is as privileged as running Nim.",
+      "statement": "The daemon derives the agent from the kernel: socket peer, its parent, the file that parent executes. There is no agent field on the wire, and one executable is enrolled under one name only, so the derivation has exactly one answer.",
+      "notGuaranteed": "Two windows of one program are the same agent. Enrolment is as privileged as running Nim; since 2026-09-15 every enrolment change is an entry in the chain, so it is visible afterwards, not prevented.",
       "implementation": [
         "engine/internal/daemon/derive.go",
         "engine/internal/daemon/agent.go"
@@ -388,57 +405,371 @@
         "TestNoWireFieldCanSetTheAgent",
         "TestTheClientLabelIsNotTheAgent",
         "TestDeriveAgentMatchesTheEnrolledParent",
-        "TestTheDerivedAgentIsRecordedOnSessionStart"
+        "TestTheDerivedAgentIsRecordedOnSessionStart",
+        "TestAnExecutableIsEnrolledUnderOneNameOnly",
+        "TestASecondNameForOneExecutableIsRefusedNamingTheFirst"
       ],
       "platforms": {
         "darwin": "verified",
         "linux": "verified",
         "windows": "unsupported"
       },
-      "lastVerified": "2026-08-11",
+      "lastVerified": "2026-09-15",
       "provenance": "declared"
     },
     {
       "id": "session-ownership",
       "title": "A connection may only speak for sessions it opened",
       "status": "verified",
-      "statement": "Peer identity cannot tell one run of Nim from another; session ownership stops one connection appending entries under a session another opened.",
+      "statement": "Peer identity cannot tell one run of Nim from another; session ownership stops one connection appending entries under a session another opened. A session id names one session: a start under an id that is live on any connection, or that the journal already holds, is refused and the connection closed.",
       "notGuaranteed": "Anything running this binary can still open its own session and report whatever it likes about it.",
       "implementation": [
         "engine/internal/daemon/daemon.go"
       ],
       "tests": [
         "TestAConnectionCannotSpeakForAnotherConnectionsSession",
-        "TestAConnectionsOwnSessionIsServed"
+        "TestAConnectionsOwnSessionIsServed",
+        "TestASessionCannotBeStartedTwice",
+        "TestAnUnnumberedCallIsRefused"
       ],
       "platforms": {
         "darwin": "verified",
         "linux": "verified",
-        "windows": "verified"
+        "windows": "unverified"
       },
-      "lastVerified": "2026-08-11",
+      "lastVerified": "2026-09-14",
       "provenance": "declared"
     },
     {
       "id": "relay-byte-exact",
       "title": "A client cannot tell it is going through Nim",
-      "status": "partial",
-      "statement": "Everything that is not a tools/call is forwarded as the exact bytes that arrived. Unit tests cover the framing and the relay.",
-      "notGuaranteed": "The end-to-end proof is tools/relay-rig, which needs fastmcp and HAS NOT BEEN RE-RUN since the M1.5 merge. The claim currently rests on unit tests plus an older run.",
+      "status": "verified",
+      "statement": "Everything that is not a tools/call is forwarded as the exact bytes that arrived, and a real MCP client run direct and through Nim observes the same tool list, schemas, unicode, a 512 KiB payload, error propagation and ping. Unit tests cover the framing; tools/relay-rig proves it with a real client, re-run on 2026-09-15 against the current binary, including the two cases that must differ through Nim.",
+      "notGuaranteed": "The rig has run under both the initialize and the server/discover handshake. The rig has run locally and on darwin only; the relay-rig CI job exists but has not yet run on GitHub's runners, so linux stays partial and windows unverified.",
       "implementation": [
         "engine/internal/mcp/mcp.go",
         "engine/internal/shim/shim.go"
       ],
       "tests": [
         "TestResponsesAreRelayedByteForByte",
-        "TestAnAllowedCallReachesTheConnectorByteForByte"
+        "TestAnAllowedCallReachesTheConnectorByteForByte",
+        "TestRealRelayStillPassesEverythingElse"
       ],
       "platforms": {
-        "darwin": "partial",
+        "darwin": "verified",
         "linux": "partial",
         "windows": "unverified"
       },
-      "lastVerified": "2026-08-08",
+      "lastVerified": "2026-09-15",
+      "provenance": "declared"
+    },
+    {
+      "id": "policy-in-sqlite",
+      "title": "Policy lives in SQLite and every change is in the chain",
+      "status": "verified",
+      "statement": "A rule is added or removed through the daemon, over the peer-verified socket, in one transaction with the rule.add or rule.remove entry recording it. The chain never says a rule exists that does not, and no rule exists the chain does not know about. config.toml carries no policy, and a file that still does is refused rather than read past.",
+      "notGuaranteed": "Anything able to run the binary as this user can add or remove a rule, exactly as it can enrol an agent; the entry is what makes that visible, not what prevents it.",
+      "implementation": [
+        "engine/internal/journal/rules.go",
+        "engine/internal/daemon/policy.go",
+        "engine/internal/config/config.go"
+      ],
+      "tests": [
+        "TestARuleAndItsEntryAreOneChange",
+        "TestAPolicyChangeThatCannotBeRecordedIsNotMade",
+        "TestAlteringAPolicyEntryBreaksTheChain",
+        "TestAPolicyChangeTakesEffectAndIsRecorded",
+        "TestAConfigWithAPolicySectionIsRefused",
+        "TestAStaleDenyListInConfigIsRefused"
+      ],
+      "platforms": {
+        "darwin": "verified",
+        "linux": "verified",
+        "windows": "unverified"
+      },
+      "lastVerified": "2026-09-15",
+      "provenance": "declared"
+    },
+    {
+      "id": "policy-per-agent",
+      "title": "Two agents against one connector receive different verdicts",
+      "status": "verified",
+      "statement": "A decision is (agent, connector, tool). A rule scoped to an enrolled agent applies to sessions the daemon derived as that agent and to no other; a rule scoped to a connector applies to sessions started for it. The record distinguishes the agents on their session.start entries. Proven with two real client programs spawning real relays, not only in-process.",
+      "notGuaranteed": "A session no enrolment matched meets only the rules that name no agent (D-002). With deny rules alone that is the ceiling every session had before agents existed; with a default deny and an agent-scoped allow it is a denial -- enrolment is then what grants, and docs/decisions/0003 says so.",
+      "implementation": [
+        "engine/internal/daemon/daemon.go",
+        "engine/internal/journal/rules.go",
+        "engine/internal/daemon/derive.go"
+      ],
+      "tests": [
+        "TestTwoAgentsAgainstOneConnectorReceiveDifferentVerdicts",
+        "TestTwoRealAgentsAgainstOneConnectorReceiveDifferentVerdicts",
+        "TestRuleScopes",
+        "TestARuleScopedToAConnectorStopsAtIt",
+        "TestRulesDecide"
+      ],
+      "platforms": {
+        "darwin": "verified",
+        "linux": "verified",
+        "windows": "unsupported"
+      },
+      "lastVerified": "2026-09-15",
+      "provenance": "declared"
+    },
+    {
+      "id": "relay-reads-one-message",
+      "title": "A tools/call travels only if Nim read it unambiguously",
+      "status": "verified",
+      "statement": "Objects are read by the exact bytes of each key, an object naming a key twice is refused, and a tools/call whose params or name cannot be read as one string is refused before the daemon is asked. What the daemon decides on and the journal records is the name the server will act on.",
+      "notGuaranteed": "Keys inside params.arguments are the tool's business and are digested, never interpreted. A frame refused for a repeated key is not answered, because which id to answer under is the same question. Parser disagreements other than duplicate keys and case-variant keys -- NaN, Infinity -- were already refused as malformed.",
+      "implementation": [
+        "engine/internal/mcp/mcp.go",
+        "engine/internal/shim/shim.go"
+      ],
+      "tests": [
+        "TestAnObjectNamingAKeyTwiceIsRefusedNotGuessed",
+        "TestKeysAreMatchedByExactBytes",
+        "TestACallWithoutOneReadableNameIsRefused",
+        "TestABatchElementNamingAKeyTwiceIsUnreadable",
+        "TestAToolCallHiddenBehindARepeatedKeyIsRefused",
+        "TestACaseVariantKeyCannotRenameTheCall",
+        "TestACallWithoutAReadableNameIsRefusedBeforeAnyDecision"
+      ],
+      "platforms": {
+        "darwin": "verified",
+        "linux": "verified",
+        "windows": "unverified"
+      },
+      "lastVerified": "2026-09-14",
+      "provenance": "declared"
+    },
+    {
+      "id": "enrolment-changes-in-chain",
+      "title": "Enrolment changes are entries in the chain",
+      "status": "verified",
+      "statement": "nim agent add and nim agent remove write the enrolment and an agent.add or agent.remove entry in one SQLite transaction. The entry carries the name, the enrolled path and the resolved identity (schema_version 3), so re-enrolling a name against another executable -- which moves every rule scoped to that name -- is visible in the record beside the rules it moved.",
+      "notGuaranteed": "Visible, not prevented: anything that can run the binary as this user can still re-enrol a name. The identity recorded is device and inode, which a reboot or a reinstall can change; nim agent list reports the enrolment STALE when it no longer matches.",
+      "implementation": [
+        "engine/internal/journal/journal.go",
+        "engine/internal/journal/canonical.go",
+        "engine/internal/daemon/agent.go"
+      ],
+      "tests": [
+        "TestAnEnrolmentAndItsEntryAreOneChange",
+        "TestAnEnrolmentChangeThatCannotBeRecordedIsNotMade",
+        "TestReEnrollingWritesAnAgentAddWithTheNewIdentity",
+        "TestRemovingWritesAnAgentRemoveWithTheOldIdentity",
+        "TestAlteringAnAgentAddEntryBreaksTheChain",
+        "TestAReadOnlyJournalCannotChangeEnrolments",
+        "TestEnrolmentEntersTheChain"
+      ],
+      "platforms": {
+        "darwin": "verified",
+        "linux": "verified",
+        "windows": "unverified"
+      },
+      "lastVerified": "2026-09-15",
+      "provenance": "declared"
+    },
+    {
+      "id": "policy-precedence",
+      "title": "One function decides, and explain shows its work",
+      "status": "verified",
+      "statement": "Among the rules matching a call, the most specific wins (an exact tool over a default, a named agent or connector over an unnamed one); at equal specificity deny beats ask beats allow (ask holds the call for a human, M6); with no matching rule the call is allowed, which is the M4 baseline. journal.Decide is that function, table-tested with no database, reused verbatim by nim policy explain, so the CLI cannot say something a real call would not do.",
+      "notGuaranteed": "No conditions on arguments and no time bounds: a rule is keyed on (agent, connector, tool) and nothing else. A budget (M5) caps how many calls a session may make once the rules allow them; it is a separate cap, not a rule. A client that genuinely names a tool `*` matches a default rule like any other exact name would.",
+      "implementation": [
+        "engine/internal/journal/rules.go",
+        "engine/internal/daemon/policy.go",
+        "engine/internal/daemon/daemon.go"
+      ],
+      "tests": [
+        "TestDecideAppliesSpecificityThenDenyOverAllow",
+        "TestDecideIsOrderIndependent",
+        "TestDefaultDenyDeniesAnUnknownAgentWhileAnAgentScopedAllowAdmitsAnEnrolledOne",
+        "TestADefaultDenyClosesEverythingAndAnAgentScopedAllowReopensOneToolForOneAgent",
+        "TestPolicyExplainNamesTheDecidingRuleAndWhy",
+        "TestAllowAndDefaultRuleEntriesCarryTheEffectAndVerify"
+      ],
+      "platforms": {
+        "darwin": "verified",
+        "linux": "verified",
+        "windows": "unverified"
+      },
+      "lastVerified": "2026-09-15",
+      "provenance": "declared"
+    },
+    {
+      "id": "init-preserves-unrelated-config",
+      "title": "nim init rewrites only the servers it wraps",
+      "status": "verified",
+      "statement": "Unrelated top-level keys, an entry's other fields, env values and the file's own key order survive nim init untouched; only a wrapped or repointed entry's command and args change. Nothing is written without --write, --write copies the file to a 0600 backup first and writes atomically, and --undo restores the backup the same way. A config that is a symlink is written through, so a dotfiles-managed file stays managed, and no two backups ever share a name.",
+      "notGuaranteed": "Untouched values are re-indented to match the rest of the file, so byte-for-byte whitespace is not preserved -- only content, position and key order are. Only stdio servers are wrapped; entries with a url are left alone and said so.",
+      "implementation": [
+        "engine/internal/clientconfig/rewrite.go",
+        "engine/internal/clientconfig/orderedobject.go",
+        "engine/internal/clientconfig/apply.go",
+        "engine/cmd/nim/init.go"
+      ],
+      "tests": [
+        "TestInitPreservesUnrelatedKeys",
+        "TestInitPreservesKeyOrder",
+        "TestInitPreservesEnvVerbatim",
+        "TestInitWriteCreatesABackupAndWritesAtomically",
+        "TestInitDryRunWritesNothing",
+        "TestInitUndoRestoresABackup",
+        "TestInitLeavesAnEntryAlreadyThroughNimAlone",
+        "TestInitLeavesHTTPServersAlone",
+        "TestInitThenDoctorSeeTheSameWrappedServer",
+        "TestTwoWritesInQuickSuccessionKeepBothBackups",
+        "TestWritingThroughASymlinkKeepsTheSymlink",
+        "TestInitNeverShowsAnEnvValue"
+      ],
+      "platforms": {
+        "darwin": "verified",
+        "linux": "verified",
+        "windows": "unverified"
+      },
+      "lastVerified": "2026-09-15",
+      "provenance": "declared"
+    },
+    {
+      "id": "doctor-does-not-start-what-it-checks",
+      "title": "nim doctor never starts the daemon it reports on",
+      "status": "verified",
+      "statement": "nim doctor dials the daemon socket without the auto-start every other command uses, so an unreachable daemon is reported as a warning rather than being brought up as a side effect of asking, and nothing doctor does writes anywhere.",
+      "notGuaranteed": "The warning does not distinguish a daemon that has never run from one that crashed a moment ago; both read the same way. Which checks are FAIL and which are WARN is a judgement, stated in doctor.go.",
+      "implementation": [
+        "engine/internal/shim/shim.go",
+        "engine/cmd/nim/doctor.go"
+      ],
+      "tests": [
+        "TestDoctorWarnsWithoutStartingADaemon",
+        "TestDoctorReportsHealthyWithARunningDaemon",
+        "TestDoctorFailsVerbatimOnAStalePolicySection"
+      ],
+      "platforms": {
+        "darwin": "verified",
+        "linux": "verified",
+        "windows": "unverified"
+      },
+      "lastVerified": "2026-09-15",
+      "provenance": "declared"
+    },
+    {
+      "id": "version-string-shape",
+      "title": "nim version reports what build it is",
+      "status": "verified",
+      "statement": "nim version prints version, commit, build time, platform and Go version in one documented shape, stamped by the release workflow's -ldflags at build time.",
+      "notGuaranteed": "A binary built any other way (go build, go run) reports unknown for commit and build time; the shape holds, the values are only meaningful for a release archive. No release has been published yet.",
+      "implementation": [
+        "engine/cmd/nim/main.go",
+        ".github/workflows/release.yml"
+      ],
+      "tests": [
+        "TestVersionStringHasTheDocumentedShape"
+      ],
+      "platforms": {
+        "darwin": "verified",
+        "linux": "verified",
+        "windows": "unverified"
+      },
+      "lastVerified": "2026-09-15",
+      "provenance": "declared"
+    },
+    {
+      "id": "budgets-cap-allowed-calls",
+      "title": "A budget caps the allowed calls one session may make",
+      "status": "verified",
+      "statement": "Once the rules allow a call, every budget whose scope matches is weighed against that session's call.request entries with decision allow or approved; a call that would exceed a matching budget's cap is denied, with a reason naming the budget, and the decision is written before the relay is told. A budget that exists is shown wherever the policy is shown: nim policy list, nim status and the console.",
+      "notGuaranteed": "A budget never grants: it cannot turn a rule's deny into anything else. It counts decisions, not outcomes, so a call the relay gave up waiting on still counts. It does not survive a restarted relay: a new session starts with a fresh count.",
+      "implementation": [
+        "engine/internal/journal/budgets.go",
+        "engine/internal/daemon/budgets.go",
+        "engine/internal/daemon/daemon.go"
+      ],
+      "tests": [
+        "TestTheNthPlusOneAllowedCallIsDeniedAndRefusalsDoNotCount",
+        "TestANewSessionStartsWithAFreshBudget",
+        "TestABudgetCannotMakeADeniedCallPass",
+        "TestABudgetScopedToAllToolsCountsAcrossTools",
+        "TestABudgetAndItsEntryAreOneChange",
+        "TestABudgetChangeThatCannotBeRecordedIsNotMade",
+        "TestABudgetOfTwoRefusesTheThirdCallAndANewRelayStartsFresh",
+        "TestTakePolicyProjectsBudgets",
+        "TestPolicyReturnsRulesBudgetsAgentsAndConnectors",
+        "TestPolicyListShowsBudgets"
+      ],
+      "platforms": {
+        "darwin": "verified",
+        "linux": "unverified",
+        "windows": "unverified"
+      },
+      "lastVerified": "2026-09-15",
+      "provenance": "declared"
+    },
+    {
+      "id": "approval-shows-real-parameters",
+      "title": "A held call is shown to the human as its real parameters, and decided before the relay acts",
+      "status": "verified",
+      "statement": "A call an ask rule wins is held in the daemon's memory and answered pending; nim approve prints the exact params.arguments bytes the relay read, pretty-printed with every byte shown as itself, never a summary and never text a model wrote about the call. The decision -- approved or rejected -- is written to the journal before the relay is told, and on approval the relay forwards the original frame byte for byte. An approve is refused until that report has arrived, so nothing can be approved before the bytes exist on the daemon's side.",
+      "notGuaranteed": "Who approves is anyone who can run nim as this user; the socket cannot tell an operator from a model that has been given a shell. The arguments are the model's to write: what is shown is what was sent, which may itself be misleading. A held call does not survive a daemon killed outright.",
+      "implementation": [
+        "engine/internal/daemon/approval.go",
+        "engine/internal/shim/shim.go",
+        "engine/cmd/nim/approve.go",
+        "engine/internal/mcp/deny.go"
+      ],
+      "tests": [
+        "TestTheDaemonAnswersPendingAndJournalsNothingUntilAHumanDecides",
+        "TestApprovingACallWritesApprovedBeforeTellingTheRelay",
+        "TestRejectingACallWritesRejectedBeforeTellingTheRelay",
+        "TestAnApprovalTimeoutRejectsAndJournalsTheCall",
+        "TestASessionThatEndsWhilePendingIsRejected",
+        "TestAConnectionThatDropsWhilePendingRejectsWhatItLeftPending",
+        "TestApprovalListShowsTheRealArguments",
+        "TestAnApprovedCallForwardsTheExactBytes",
+        "TestARejectedApprovalAnswersTheClientWithTheHumanRefusalText",
+        "TestAnApprovalTimeoutAnswersTheClientWithItsOwnRefusalText",
+        "TestApproveShowsEveryByteOfTheArgumentsAsItself",
+        "TestRealApprovalHoldsACallForAHumanWhoDecidesItThroughTheCLI",
+        "TestAnApprovalBeforeTheArgumentsArriveIsRefusedButARejectionIsNot",
+        "TestASecondArgumentsReportDoesNotReplaceTheFirst",
+        "TestApproveSaysWhenTheArgumentsHaveNotArrived"
+      ],
+      "platforms": {
+        "darwin": "verified",
+        "linux": "unverified",
+        "windows": "unverified"
+      },
+      "lastVerified": "2026-09-15",
+      "provenance": "declared"
+    },
+    {
+      "id": "upgrade-is-diagnosed",
+      "title": "An in-place upgrade is diagnosed, not read as an impostor",
+      "status": "verified",
+      "statement": "When a daemon and a client differ because the binary was replaced at its own path while the daemon kept running, the peer check still refuses -- the boundary does not move -- but peer.Diagnose tells that shape apart from an unrelated program at a different path, and every refusal surface (the daemon's log, the relay's stderr, nim status, nim doctor) names it with the remedy: nim daemon restart, which signals the old daemon, starts a new one and confirms it answers.",
+      "notGuaranteed": "Best effort: the diagnosis reads the peer's launch path, the weaker signal that identity itself never trusts for authorization, and a peer that closes at the wrong instant falls back to the generic 'not Nim' wording rather than guessing. Nothing here makes the daemon accept a peer it refused before. Unsupported on Windows, where peer identity is unsupported and nim daemon restart says so.",
+      "implementation": [
+        "engine/internal/peer/peer.go",
+        "engine/internal/shim/shim.go",
+        "engine/cmd/nim/daemon_restart_unix.go",
+        "engine/cmd/nim/doctor.go"
+      ],
+      "tests": [
+        "TestDiagnoseTellsASamePathRebuildApartFromADifferentProgram",
+        "TestDiagnoseIsUnavailableForAPidThatHasExited",
+        "TestExecPathOfResolvesALivePeer",
+        "TestWindowsDiagnoseIsAlwaysUnavailable",
+        "TestAnInPlaceUpgradeIsDiagnosedAndDaemonRestartFixesIt",
+        "TestStatusDoesNotCallAnImpostorTheDaemon"
+      ],
+      "platforms": {
+        "darwin": "verified",
+        "linux": "unverified",
+        "windows": "unsupported"
+      },
+      "lastVerified": "2026-09-16",
       "provenance": "declared"
     }
   ],
@@ -493,10 +824,11 @@
       "name": "Report calls under a session another connection opened",
       "category": "journal",
       "status": "pass",
-      "wasLive": false,
-      "evidence": "Refused, and the connection is closed rather than merely erroring, because a caller probing for sessions it does not own is not making an honest mistake. Peer identity cannot separate two runs of Nim, so this is the check that stops one relay appending entries under another's session.",
+      "wasLive": true,
+      "evidence": "Refused, and the connection is closed rather than merely erroring. Found by the 2026-09-14 audit: the check exempted session.start itself, so a second connection could re-announce a live session's id and then report calls, outcomes and an end into it; reproduced against the daemon in a scratch copy. A session id now names one session, daemon-wide and for all time -- live on any connection, or ever recorded, and a second start is refused.",
       "tests": [
-        "TestAConnectionCannotSpeakForAnotherConnectionsSession"
+        "TestAConnectionCannotSpeakForAnotherConnectionsSession",
+        "TestASessionCannotBeStartedTwice"
       ]
     },
     {
@@ -505,10 +837,12 @@
       "category": "identity",
       "status": "pass",
       "wasLive": true,
-      "evidence": "As the daemon, a python script had the relay spawn a command of its choosing, allowed a denied call, and harvested tool names. Introduced by the merge; fixed by verifying both ends.",
+      "evidence": "As the daemon, a python script had the relay spawn a command of its choosing, allowed a denied call, and harvested tool names. Introduced by the merge; fixed by verifying both ends. The 2026-09-14 audit found the management commands still trusted the socket: nim connector set would have written the plaintext secret to an impostor. Every command now dials through one verified path. nim status used to report such a listener as running; it now performs the same verification and says NOT NIM (2026-09-15).",
       "tests": [
         "TestAnImpostorOnTheSocketCannotChooseWhatIsSpawned",
-        "TestAnImpostorCannotDecideCalls"
+        "TestAnImpostorCannotDecideCalls",
+        "TestDialDaemonRefusesAnImpostor",
+        "TestStatusDoesNotCallAnImpostorTheDaemon"
       ]
     },
     {
@@ -546,14 +880,14 @@
     },
     {
       "id": "deny-list-bypass",
-      "name": "Bypass the deny list",
+      "name": "Bypass the rules",
       "category": "enforcement",
       "status": "pass",
       "wasLive": false,
-      "evidence": "Denied call never reaches the connector.",
+      "evidence": "A call a rule names never reaches the connector; the rules are read from SQLite at decision time and exact names only. The list used to live in config.toml, which is F-004.",
       "tests": [
         "TestARefusedCallNeverReachesTheConnector",
-        "TestTheDenyListDecides"
+        "TestRulesDecide"
       ]
     },
     {
@@ -573,7 +907,7 @@
       "category": "enforcement",
       "status": "pass",
       "wasLive": false,
-      "evidence": "A frame Go cannot parse is not forwarded, and neither is a frame carrying more than one message. The rule is that anything the relay cannot fully understand does not reach the connector -- a parser disagreement must not become a way to move a tools/call past the decision point.",
+      "evidence": "A frame Go cannot parse is not forwarded, and neither is a frame carrying more than one message. The rule is that anything the relay cannot fully understand does not reach the connector -- a parser disagreement must not become a way to move a tools/call past the decision point. That rule had a hole until 2026-09-14: see the duplicate-key row.",
       "tests": [
         "TestUnreadableFramesAreNotRelayed",
         "TestMoreThanOneMessageInAFrameIsNotRelayed"
@@ -656,10 +990,13 @@
       "id": "enrolment-overwrite",
       "name": "Overwrite another agent's enrolment",
       "category": "identity",
-      "status": "fail",
+      "status": "pass",
       "wasLive": false,
-      "evidence": "Anything that can run the nim binary as this user can re-enrol any name against any executable. Harmless today because nothing decides on agents; becomes an escalation the moment grants exist.",
-      "tests": []
+      "evidence": "Anything that can run the nim binary as this user can re-enrol any name against any executable, and now that rules are scoped to enrolments that moves the name's rules to the new program. Since 2026-09-15 the re-enrolment is an agent.add entry in the chain carrying the new identity, beside the rules it moved: not prevented -- the same-user threat model grants it -- but recorded where nim verify covers it.",
+      "tests": [
+        "TestReEnrollingWritesAnAgentAddWithTheNewIdentity",
+        "TestAlteringAnAgentAddEntryBreaksTheChain"
+      ]
     },
     {
       "id": "connector-overwrite",
@@ -683,12 +1020,13 @@
       "id": "orphan-connector",
       "name": "Leave a connector running after the relay dies",
       "category": "lifecycle",
-      "status": "pass",
+      "status": "partial",
       "wasLive": false,
-      "evidence": "The downstream is the relay's child and dies with it.",
+      "evidence": "The downstream is the relay's child. When the relay exits or is asked to stop (SIGTERM, SIGINT) it stops the connector: closes its stdin, waits, asks it to terminate, then kills it. Found by the 2026-09-14 audit: the signal path used to exit without touching the child, so a connector that ignored stdin outlived the relay with whatever credential it held. Still open: a relay killed outright (SIGKILL) runs nothing, and then only a connector that reads its stdin notices.",
       "tests": [
         "TestTheDownstreamDiesWithTheRelay",
-        "TestAConnectorReadingStdinDiesWithTheRelay"
+        "TestAConnectorReadingStdinDiesWithTheRelay",
+        "TestAConnectorIgnoringStdinIsStoppedWithTheRelay"
       ]
     },
     {
@@ -798,11 +1136,15 @@
       "id": "unknown-agent",
       "name": "Act as an agent nobody enrolled",
       "category": "policy",
-      "status": "partial",
+      "status": "pass",
       "wasLive": false,
-      "evidence": "The recording behaviour is tested: an underivable agent is stored as absent, not refused. What an unknown agent may DO is undecided — that is M4's open question (D-002), not an answer inherited from here.",
+      "evidence": "Bound by the rules that name no agent, and nothing else: D-002, resolved in docs/decisions/0002 for deny rules and again in docs/decisions/0003 for the allow model. With deny rules alone an unenrolled program has the ceiling every session had before agents existed; with nim policy default deny plus an agent-scoped allow it is denied by the default -- enrolment is then what grants.",
       "tests": [
-        "TestAnUndeterminedAgentIsRecordedAsAbsentNotRefused"
+        "TestAnUndeterminedAgentIsRecordedAsAbsentNotRefused",
+        "TestTwoAgentsAgainstOneConnectorReceiveDifferentVerdicts",
+        "TestRuleScopes",
+        "TestDefaultDenyDeniesAnUnknownAgentWhileAnAgentScopedAllowAdmitsAnEnrolledOne",
+        "TestADefaultDenyClosesEverythingAndAnAgentScopedAllowReopensOneToolForOneAgent"
       ]
     },
     {
@@ -823,8 +1165,11 @@
       "category": "policy",
       "status": "partial",
       "wasLive": false,
-      "evidence": "Allowed. The deny list is a deny list, so anything not on it passes — deliberate for now, and the reason a real policy model is the next milestone.",
-      "tests": []
+      "evidence": "Allowed, unless a default deny is set. Since M4.5 rules can grant as well as refuse: nim policy default deny closes everything and nim policy allow reopens one tool for one agent or connector. With no default rule, anything no rule names still passes, which is the M4 baseline a fresh install keeps. Partial because the closed posture is something the operator opts into, not the default.",
+      "tests": [
+        "TestDecideAppliesSpecificityThenDenyOverAllow",
+        "TestADefaultDenyClosesEverythingAndAnAgentScopedAllowReopensOneToolForOneAgent"
+      ]
     },
     {
       "id": "compromised-same-user",
@@ -870,20 +1215,365 @@
       "category": "meta",
       "status": "partial",
       "wasLive": false,
-      "evidence": "Audited from outside on 2026-08-12 against all three intended hostnames. Refused: .env and .env.local, .git, .vercel/project.json, builds.json and config.json, package.json, vercel.json, next.config.mjs, data/state.json, generate.mjs, nim.db, .nim/, engine sources, .DS_Store, node_modules -- all 404. No source maps exist and no chunk references one. Path traversal returns 400 or a generic edge error. POST/PUT/DELETE/PATCH/TRACE all 405. /_src redirects to Vercel's source viewer, which demands a login. No secret shape, token, JWT or local path appears in any served byte, and no journal data: no chain hash, prev_hash, chain_seq, machine_id or session id. Partial rather than pass because sixteen historical deployment URLs and one stale branch alias also answer publicly -- see F-012 -- serving Vercel failure pages and an abandoned placeholder rather than this dashboard.",
+      "evidence": "Audited from outside on 2026-08-12 against all three intended hostnames. Refused: .env and .env.local, .git, .vercel/project.json, builds.json and config.json, package.json, vercel.json, next.config.mjs, data/state.json, generate.mjs, nim.db, .nim/, engine sources, .DS_Store, node_modules -- all 404. No source maps exist and no chunk references one. Path traversal returns 400 or a generic edge error. POST/PUT/DELETE/PATCH/TRACE all 405. /_src redirects to Vercel's source viewer, which demands a login. No secret shape, token, JWT or local path appears in any served byte, and no journal data: no chain hash, prev_hash, chain_seq, machine_id or session id. Historical deployment URLs and stale branch aliases also answered publicly until 2026-09-16 (F-012); those were removed that day and every one of them answers 404 now, verified by fetching. Still partial rather than pass because no test in this tree can fetch the deployment: the check is a manual one, done on 2026-08-12 and again on 2026-09-16, and a claim with no test behind it stays labelled as such.",
       "tests": []
+    },
+    {
+      "id": "duplicate-key-smuggling",
+      "name": "Smuggle a tools/call behind a repeated or case-variant key",
+      "category": "enforcement",
+      "status": "pass",
+      "wasLive": true,
+      "evidence": "Reproduced against the real relay on 2026-09-14, before the fix: `\"method\":5,\"method\":\"tools/call\"` and `\"method\":\"tools/call\",\"Method\":\"ping\"` both reached the connector with no decision, no journal entry and no anomaly, because Go's typed decoder matches keys case-insensitively, lets the last match win, and carries on past a member of the wrong type -- while every mainstream server reads tools/call. Objects are now read by exact key; a repeated key is refused as an anomaly, and a case-variant key is simply a different key, to Nim as to the server.",
+      "tests": [
+        "TestAToolCallHiddenBehindARepeatedKeyIsRefused",
+        "TestAnObjectNamingAKeyTwiceIsRefusedNotGuessed",
+        "TestABatchElementNamingAKeyTwiceIsUnreadable"
+      ]
+    },
+    {
+      "id": "tool-rename",
+      "name": "Name one tool to the daemon and another to the server",
+      "category": "enforcement",
+      "status": "pass",
+      "wasLive": true,
+      "evidence": "Same root cause, worse consequence: `\"name\":\"delete_repository\",\"Name\":\"list_repos\"` had the daemon decide on list_repos, the journal record it, and the server run delete_repository. A tools/call is now decided on the exact-key name or refused before the daemon is asked; a call with no readable name is refused too, where it used to be decided as tool \"\" and allowed.",
+      "tests": [
+        "TestACaseVariantKeyCannotRenameTheCall",
+        "TestKeysAreMatchedByExactBytes",
+        "TestACallWithoutAReadableNameIsRefusedBeforeAnyDecision"
+      ]
+    },
+    {
+      "id": "policy-file-tamper",
+      "name": "Change the rules by editing config.toml",
+      "category": "policy",
+      "status": "pass",
+      "wasLive": false,
+      "evidence": "Nothing an authorization decision reads is in config.toml any more. A file that still carries a [policy] section is refused by every command, with the way forward in the message, rather than read past -- a deny list an operator believes is enforced and is not would be the worst way for the move to go unnoticed. Unknown keys are refused for the same reason: [polciy] used to deny nothing, silently.",
+      "tests": [
+        "TestAConfigWithAPolicySectionIsRefused",
+        "TestAStaleDenyListInConfigIsRefused",
+        "TestUnknownKeysAreRefused"
+      ]
+    },
+    {
+      "id": "policy-change-unrecorded",
+      "name": "Change the rules without leaving a journal entry",
+      "category": "policy",
+      "status": "pass",
+      "wasLive": false,
+      "evidence": "A rule and its rule.add or rule.remove entry are one SQLite transaction: a trigger that refuses the entry leaves no rule, and one that refuses the rule leaves no entry. The entry is hashed into the chain like a call, so editing it afterwards breaks verification. Since 2026-09-15 the same holds for enrolments (agent.add, agent.remove).",
+      "tests": [
+        "TestARuleAndItsEntryAreOneChange",
+        "TestAPolicyChangeThatCannotBeRecordedIsNotMade",
+        "TestAlteringAPolicyEntryBreaksTheChain",
+        "TestAnEnrolmentAndItsEntryAreOneChange",
+        "TestAnEnrolmentChangeThatCannotBeRecordedIsNotMade"
+      ]
+    },
+    {
+      "id": "cli-impostor",
+      "name": "Bind the socket first and receive the secret from nim connector set",
+      "category": "credential",
+      "status": "pass",
+      "wasLive": false,
+      "evidence": "Found by reading, not by running: the relay verified the daemon before sending a byte, but nim connector set, nim agent add and their siblings dialled the socket path and trusted whatever answered -- and connector set carries the plaintext secret. Every management command now goes through the one dial that verifies the peer, and the CLI refuses to talk to a process that is not Nim.",
+      "tests": [
+        "TestDialDaemonRefusesAnImpostor"
+      ]
+    },
+    {
+      "id": "console-rebinding",
+      "name": "Read the console from another site through DNS rebinding",
+      "category": "console",
+      "status": "pass",
+      "wasLive": false,
+      "evidence": "nim console binds loopback, but a bind address is not a name: a page on any site can have its own hostname resolve to 127.0.0.1 and then read /api/snapshot, /api/events and every session as if they were its own origin. The console now answers only to a loopback Host -- localhost, 127.0.0.1, ::1 -- and refuses any other name with 421 before a route runs.",
+      "tests": [
+        "TestTheConsoleAnswersOnlyToALoopbackName"
+      ]
+    },
+    {
+      "id": "console-secret",
+      "name": "Read a connector's secret through the console",
+      "category": "console",
+      "status": "pass",
+      "wasLive": false,
+      "evidence": "The console's /api/policy lists rules, enrolments and connectors from the read-only journal handle. There is no secret to leak: the credential lives in the OS store and the journal holds only the env key name and the authorized command. A test asserts the endpoint's JSON never carries a key named secret or a credential value, and the route keeps the console's GET-only and loopback-Host rules.",
+      "tests": [
+        "TestPolicyNeverExposesASecret",
+        "TestPolicyReturnsRulesBudgetsAgentsAndConnectors",
+        "TestTheConsoleAnswersOnlyToALoopbackName"
+      ]
+    },
+    {
+      "id": "init-config-damage",
+      "name": "Make nim init damage a client's configuration",
+      "category": "lifecycle",
+      "status": "pass",
+      "wasLive": false,
+      "evidence": "nim init writes nothing without --write; with it, the original is copied to a 0600 backup first and the new file is written to a temporary name and renamed, so a crash leaves either the old file or the new one. A file that does not parse, or is not a JSON object, is refused. Unrelated keys, env values and key order are preserved; an entry already through Nim is left alone rather than wrapped twice; --undo restores the backup atomically.",
+      "tests": [
+        "TestInitWriteCreatesABackupAndWritesAtomically",
+        "TestInitRefusesAFileThatIsNotValidJSON",
+        "TestInitRefusesAFileThatIsNotAJSONObject",
+        "TestInitRunTwiceIsIdempotent",
+        "TestInitUndoRestoresABackup",
+        "TestInitUndoRefusesAPathThatIsNotABackup"
+      ]
+    },
+    {
+      "id": "agent-image-collision",
+      "name": "Enrol a second name against the operator's client binary",
+      "category": "identity",
+      "status": "pass",
+      "wasLive": true,
+      "evidence": "Found by the 2026-09-15 review, reproduced in a scratch test: nothing stopped two names from enrolling one executable, and the lookup that derives a session's agent had no order, so after the operator re-enrolled their own client the other name's rules -- allow rules included -- could apply to it. One executable is now one agent: a second name is refused naming the first, the lookup is ordered, and ownership moves only when the holder removes its enrolment, which the chain records.",
+      "tests": [
+        "TestAnExecutableIsEnrolledUnderOneNameOnly",
+        "TestASecondNameForOneExecutableIsRefusedNamingTheFirst"
+      ]
+    },
+    {
+      "id": "init-output-secret",
+      "name": "Read a secret from nim init's own output",
+      "category": "credential",
+      "status": "pass",
+      "wasLive": true,
+      "evidence": "Found by the 2026-09-15 review, reproduced with the built binary: the before/after a dry run printed included the entry's env block, where client configs keep their API tokens, so a plain nim init put real secrets into terminal scrollback. The preview now shows env keys with every value hidden; the file that is written keeps them untouched.",
+      "tests": [
+        "TestInitNeverShowsAnEnvValue",
+        "TestInitPreservesEnvVerbatim"
+      ]
+    },
+    {
+      "id": "discover-handshake-unreadable-refusal",
+      "name": "Speak the newer server/discover handshake so the client cannot parse Nim's refusals",
+      "category": "protocol",
+      "status": "pass",
+      "wasLive": true,
+      "evidence": "Reproduced on 2026-09-15 with fastmcp 4.0.3 against the unmodified relay: a connector that answers server/discover moves the client onto the 2026-07-28 revision, where every result must name its resultType, and Nim's hand-written refusal did not -- the client raised a local ValidationError instead of reading 'Nim denied this call', which is not a refusal from where the model sits. Nim now watches server/discover as it watches initialize and writes each refusal in the dialect the session negotiated. Re-run after the fix: ToolError with Nim's text under both handshakes; the rig's denial case runs under both.",
+      "tests": [
+        "TestARefusalUnderTheDiscoverHandshakeCarriesResultType",
+        "TestARefusalUnderTheInitializeHandshakeDoesNotCarryResultType",
+        "TestARefusalCarriesResultTypeOnlyWhenTheProtocolRequiresIt",
+        "TestTheDiscoverHandshakeIsRelayedByteForByte"
+      ]
+    },
+    {
+      "id": "exhaust-budget-then-keep-calling",
+      "name": "Exhaust a budget, then keep calling",
+      "category": "policy",
+      "status": "pass",
+      "wasLive": true,
+      "evidence": "Through a real relay against a real daemon, a budget of 2 allowed exactly two calls and refused the third; the refusal was journaled with the budget named in the reason. A session's own refusals do not spend the budget, and a budget cannot make a call a rule denies pass. Restarting the relay starts a new session with a fresh count, which is the documented scope of a budget, not a bypass of it.",
+      "tests": [
+        "TestTheNthPlusOneAllowedCallIsDeniedAndRefusalsDoNotCount",
+        "TestABudgetCannotMakeADeniedCallPass",
+        "TestABudgetOfTwoRefusesTheThirdCallAndANewRelayStartsFresh"
+      ]
+    },
+    {
+      "id": "approve-own-call-from-model",
+      "name": "Approve your own call from the model",
+      "category": "policy",
+      "status": "pass",
+      "wasLive": false,
+      "evidence": "Blocked only by circumstance, and stated as such rather than claimed further: the daemon's approval purpose is reachable only through the nim binary, which peer identity verifies at accept, so a model with no way to execute commands cannot reach nim approve at all; the relay's own connection is bound to the events purpose and refused an approval.decide. A model that has been given a shell runs nim approve exactly as the operator would, and nothing on the socket tells the two apart. docs/decisions/0005-human-approval.md and the threat model say so.",
+      "tests": [
+        "TestAnApprovalConnectionCannotAskForACredential",
+        "TestANonNimProcessCannotObtainADecision"
+      ]
+    },
+    {
+      "id": "leak-arguments-through-approval",
+      "name": "Leak a held call's real arguments into the journal, a log line, or the operator's terminal",
+      "category": "policy",
+      "status": "pass",
+      "wasLive": false,
+      "evidence": "A held call's arguments live only in the daemon's pending registry. Checked directly: with a distinctive marker in the arguments, the database and the daemon's captured log output never contain it, and the Response type's String never prints it. nim approve shows every byte as itself: an escape sequence or a bidirectional override in an argument is printed as its escape, so a terminal cannot be made to hide or reorder what the human is approving.",
+      "tests": [
+        "TestTheRealArgumentsNeverReachTheJournalOrTheDaemonsLog",
+        "TestResponseStringNeverIncludesPendingArguments",
+        "TestApproveShowsEveryByteOfTheArgumentsAsItself",
+        "TestEventStringNeverIncludesArguments"
+      ]
+    },
+    {
+      "id": "approve-before-the-arguments-arrive",
+      "name": "Get a call approved before the daemon has received its arguments",
+      "category": "policy",
+      "status": "pass",
+      "wasLive": true,
+      "evidence": "Found by the 2026-09-15 review of the merged M6 code and reproduced in a scratch test: with the relay's call.arguments report withheld, approval.decide accepted an approve, journaled it and told the relay, and nim approve showed the call as one with no arguments. The daemon now records whether the report has arrived and refuses an approve until it has; a reject goes through regardless; a second report never replaces the first.",
+      "tests": [
+        "TestAnApprovalBeforeTheArgumentsArriveIsRefusedButARejectionIsNot",
+        "TestASecondArgumentsReportDoesNotReplaceTheFirst",
+        "TestApproveSaysWhenTheArgumentsHaveNotArrived"
+      ]
     }
   ],
   "findings": [
+    {
+      "id": "F-022",
+      "severity": "high",
+      "title": "Two enrolments could share one executable, and the lookup between them had no order",
+      "problem": "nim_agents was unique on name only, and the query that derives a session's agent from the relay's parent image had no ORDER BY. A same-user process could enrol a second name against the operator's client binary; a routine re-enrolment by the operator then changed which row the lookup returned.",
+      "impact": "Every rule scoped to the operator's agent, allow rules included, could silently apply to the wrong name, with a chain that verified perfectly. Found by review on 2026-09-15 before anything shipped.",
+      "evidence": "Reproduced in a scratch test by the reviewer: after remove-and-re-add of the operator's name, the lookup answered with the intruder's. Fixed: AddAgent refuses a second name for an enrolled image inside its transaction, the lookup is ordered, and the daemon's refusal names the enrolment in the way.",
+      "status": "fixed",
+      "nextAction": "None. Ownership of an image moves only when its holder removes the enrolment, and that is an agent.remove entry.",
+      "provenance": "declared"
+    },
+    {
+      "id": "F-023",
+      "severity": "medium",
+      "title": "nim init printed env values in its dry-run diff",
+      "problem": "The before/after preview rendered the whole entry, env block included, though env never changes. Client configs keep API tokens there.",
+      "impact": "A plain nim init, the command an operator runs first and pipes or shares, wrote real secrets to stdout.",
+      "evidence": "Reproduced by the reviewer with fake tokens in a fixture config. Fixed: the preview shows env keys with values hidden.",
+      "status": "fixed",
+      "nextAction": "None. The preview hides every env value and a test holds it to that; the file written keeps the values untouched, which a second test holds it to.",
+      "provenance": "declared"
+    },
+    {
+      "id": "F-024",
+      "severity": "medium",
+      "title": "Two nim init --write runs in one second shared a backup name",
+      "problem": "Backup names carried a second-resolution timestamp and were written with os.WriteFile, so the second run overwrote the first run's backup of the true original.",
+      "impact": "nim init --undo could no longer reach the original file after a quick retry or a setup script wrapping two clients back to back.",
+      "evidence": "Reproduced by the reviewer with the built binary. Fixed: nanosecond names, created exclusively, with a numbered suffix if a name is somehow taken; the path returned is the one written.",
+      "status": "fixed",
+      "nextAction": "None. Backup names now carry nanoseconds and are created exclusively; a taken name gets a numbered suffix and the path reported is the one written.",
+      "provenance": "declared"
+    },
+    {
+      "id": "F-025",
+      "severity": "medium",
+      "title": "The relay could wait on its connector from two goroutines at once",
+      "problem": "stopDownstream was reachable from the signal handler and from the normal exit path with no guard, and two concurrent Waits on one exec.Cmd are a data race.",
+      "impact": "A Ctrl-C that closes the pipes and delivers the signal together could hit it; the race detector reported it under a scratch test. The connector was still terminated correctly in every run.",
+      "evidence": "Found by the reviewer with go test -race. Fixed: the stop runs once, guarded like finish already was, and hands both callers the same result.",
+      "status": "fixed",
+      "nextAction": "None. The stop runs under a sync.Once like finish already did; the regression test drives it from two goroutines under the race detector.",
+      "provenance": "declared"
+    },
+    {
+      "id": "F-021",
+      "severity": "medium",
+      "title": "Nim's own refusals predate the result shape a newer client negotiates",
+      "problem": "fastmcp 4's default client mode negotiates a server/discover handshake under which every result carries a resultType field. Nim relays that traffic byte for byte, but the responses Nim writes itself -- the tool error that refuses a call (engine/internal/mcp/deny.go) -- do not carry the field, so a client in that mode fails to parse Nim's refusal instead of reading it as a tool error.",
+      "impact": "A refused call reaches such a client as a local validation error rather than the clear 'Nim denied this call' text, which defeats the point of answering in the shape MCP uses for tool failures. Clients on the standard MCP handshake, including the Go end-to-end tests and the rig pinned to legacy mode, are unaffected.",
+      "evidence": "Found on 2026-09-15 while bringing the relay rig back: fastmcp 4.0.3 in its default mode raised a ValidationError on Nim's denial; pinned to mode=legacy the rig passed. Fixed the same day: the relay watches server/discover as it watches initialize, learns the negotiated version from the proposal and the server's supportedVersions, and writes a refusal with resultType \"complete\" when that version is 2026-07-28 or later. Reproduced before and after with the real client: the same call now raises ToolError with Nim's text in both modes, and the rig's denial case runs under both handshakes (RESULT: IDENTICAL, darwin, 2026-09-15).",
+      "status": "fixed",
+      "nextAction": "None. Older clients are sent the older shape unchanged; a future revision that changes the result shape again will need the same treatment, and the rig's default-mode case is where it would show.",
+      "provenance": "declared",
+      "fixedIn": "2026-09-15",
+      "tests": [
+        "TestARefusalCarriesResultTypeOnlyWhenTheProtocolRequiresIt",
+        "TestARefusalUnderTheDiscoverHandshakeCarriesResultType",
+        "TestAFailedDiscoverFallsBackToWhatInitializeSettles",
+        "TestTheNegotiatedVersionIsReadFromTheDiscoverAnswer"
+      ]
+    },
+    {
+      "id": "F-013",
+      "severity": "high",
+      "title": "A repeated or case-variant JSON key smuggled a tools/call past the decision",
+      "problem": "Go's typed JSON decoder matches keys case-insensitively, lets the last of several matches win, and continues past a member of the wrong type. A frame with `\"method\":5,\"method\":\"tools/call\"` decoded to an empty envelope and was relayed; one with `\"Method\":\"ping\"` beside `\"method\":\"tools/call\"` read as ping; `\"Name\"` beside `\"name\"` renamed the tool the daemon decided on.",
+      "impact": "A tools/call reached the connector with no decision, no journal entry and no anomaly -- the one-direction guarantee did not hold -- and in the rename case the journal recorded a harmless tool while the server ran a denied one.",
+      "evidence": "Reproduced on 2026-09-14 against the unmodified relay: both frames reached the connector, the daemon was asked about 0 calls. Fixed by reading objects by exact key (engine/internal/mcp/mcp.go objectFields) and refusing repeated keys and unreadable calls; seven regression tests.",
+      "status": "fixed",
+      "nextAction": "None. docs/journal-format.md now states the duplicate-key rule the relay applies, and that keys inside params.arguments are not interpreted.",
+      "provenance": "declared"
+    },
+    {
+      "id": "F-014",
+      "severity": "medium",
+      "title": "A second connection could start a session under another connection's id",
+      "problem": "The session-ownership check exempted session.start, and the set of open sessions was per connection, so a second connection could announce a start under a live id and then report calls, outcomes and an end into the first connection's session.",
+      "impact": "On a platform without peer verification, or after any regression of it, one relay could write into another's story. Security.md claimed session ownership held independently of peer identity; it did not.",
+      "evidence": "Found and reproduced in a scratch copy by the 2026-09-14 audit. Fixed: a daemon-wide registry refuses a start for an id that is live on any connection or that the journal has ever recorded, and closes the connection.",
+      "status": "fixed",
+      "nextAction": "None beyond the registry. Kept on the page because 'session ownership holds on its own' was a claim the page made and the code did not back until this.",
+      "provenance": "declared"
+    },
+    {
+      "id": "F-015",
+      "severity": "high",
+      "title": "nim connector set trusted whatever was bound to the socket",
+      "problem": "The relay verified the daemon's executable identity before sending it a byte; the management commands dialled the socket path and did not. nim connector set carries the plaintext secret.",
+      "impact": "A process that bound the socket path first -- the impostor the relay already refused -- would have been handed every secret the operator registered from then on.",
+      "evidence": "Found by reading engine/cmd/nim/connector.go on 2026-09-14; not reproduced live. Fixed: one verified dial (shim.DialDaemon) serves every command, and a test drives it against an impostor.",
+      "status": "fixed",
+      "nextAction": "None. Kept because it is the shape of mistake to look for next time a second caller of the socket appears: every path that talks to the daemon must dial through the one that verifies it.",
+      "provenance": "declared"
+    },
+    {
+      "id": "F-016",
+      "severity": "low",
+      "title": "The console answered to any Host header",
+      "problem": "nim console bound loopback but checked only the request method, so a page on another site could rebind its own name to 127.0.0.1 and read the record from the operator's browser as its own origin.",
+      "impact": "Tool names, connectors, session ids, digests and the chain head readable by a web page the operator happened to visit while the console ran.",
+      "evidence": "Found by the 2026-09-14 audit and confirmed by two independent verifiers. Fixed: requests whose Host is not a loopback name are refused with 421.",
+      "status": "fixed",
+      "nextAction": "None. The Host check is the standing guard; a future console that binds anything other than loopback has to revisit it.",
+      "provenance": "declared"
+    },
+    {
+      "id": "F-017",
+      "severity": "medium",
+      "title": "Every open dropped and recreated the journal's views under a write lock",
+      "problem": "syncViews compared the stored view definition with the statement as written, but SQLite stores CREATE statements with the first keywords upper-cased. The comparison never matched, so the 'only when drifted' path was the only path.",
+      "impact": "Two opens of one file always raced on the views, which is how the concurrent-open collision (TestConcurrentOpensDoNotCollideOnViews) was reachable in the first place, and a read-only command took a write lock on every start.",
+      "evidence": "Reproduced on 2026-09-14: both views reported drifted immediately after creation. Fixed by comparing against the stored form; a test holds the steady state to a read.",
+      "status": "fixed",
+      "nextAction": "None. The stored-form comparison is tested; a change to a view's DDL is now a one-time recreate rather than a recreate on every open.",
+      "provenance": "declared"
+    },
+    {
+      "id": "F-018",
+      "severity": "medium",
+      "title": "Enrolment changes leave no journal entry",
+      "problem": "A rule is journaled when it is added or removed; the enrolment it is scoped to is not. nim agent add can move a name -- and every rule scoped to it -- to a different executable with nothing in the chain saying so.",
+      "impact": "An audit of the rules is possible; an audit of who the rules applied to, over time, is not. Same-user threat model, so not a bypass, but the one policy input that changes silently.",
+      "evidence": "Fixed 2026-09-15: agent.add and agent.remove are chain entries at schema_version 3, carrying the enrolled path and the resolved identity, written in one transaction with the enrolment (AddAgent, RemoveAgent). A journal from the M4 build is rebuilt on open with its rows unchanged.",
+      "status": "fixed",
+      "nextAction": "None. The enrolment a rule is scoped to now has the same history the rule has; F-006 remains what it is, a property of one OS user.",
+      "provenance": "declared"
+    },
+    {
+      "id": "F-019",
+      "severity": "low",
+      "title": "nim log --json stopped after one page and looped on -n 0",
+      "problem": "The stream compared each page against the raw -n value while the journal caps a read at 1000, so -n above the cap ended after one page with exit status 0, and -n 0 never ended.",
+      "impact": "An export of a 3000-entry journal came back with 1000 entries and no message.",
+      "evidence": "Found by the 2026-09-14 audit and confirmed. Fixed: the page size is clamped to what the journal returns and -n must be positive.",
+      "status": "fixed",
+      "nextAction": "None. The page size is clamped where the read is, and -n must be positive; an export now ends when the journal does.",
+      "provenance": "declared"
+    },
+    {
+      "id": "F-020",
+      "severity": "medium",
+      "title": "A connector could outlive a relay that was asked to stop",
+      "problem": "On SIGTERM or SIGINT the relay flushed the journal and exited without touching its child. A connector that does not read stdin -- mid-call, or on its own event loop -- kept running with whatever credential it had been given, after the journal had recorded the session as over.",
+      "impact": "The orphan-connector row claimed 'dies with it' on the strength of tests that never exercised the signal path.",
+      "evidence": "Found by the concurrency finder on 2026-09-14. Fixed: the relay stops its child on every exit path -- stdin closed, then SIGTERM, then kill -- and a test sends SIGTERM to a relay whose connector ignores stdin. SIGKILL to the relay remains what it was, and the row says so.",
+      "status": "fixed",
+      "nextAction": "None for SIGTERM and SIGINT. SIGKILL to the relay remains what it was and the orphan-connector row says so; closing it needs the daemon to own the connector, which is process inversion.",
+      "provenance": "declared"
+    },
     {
       "id": "F-012",
       "severity": "low",
       "title": "Old deployments became public along with the intended one",
       "problem": "Turning deployment protection off applies to every deployment the project has ever made, not only the current one. Sixteen historical deployment URLs answer anonymously, plus a stale branch alias nim-git-m1-bootstrap-seergiiim.vercel.app left over from when the repository was connected to Vercel.",
       "impact": "Fourteen serve Vercel's generic 'Deployment has failed' page, which carries a deployment id and nothing else. One serves the abandoned v0 placeholder that predates this dashboard. No secret, source, build log or local path was found in any of them -- so this is untidy rather than dangerous, and it means the promise 'only the dashboard is public' is not literally true.",
-      "evidence": "Enumerated all 16 deployment URLs and fetched each anonymously. 14 returned the 20331-byte failure page, 1 returned the 12888-byte v0 stub titled 'v0 App', 1 is the current dashboard. Greps for local paths, build errors, npm output and tokens across those bodies returned nothing.",
-      "status": "open",
-      "nextAction": "Delete the historical deployments and the stale branch alias in the Vercel dashboard, so that the only thing this project serves is the page intended to be served. Needs a human: deleting deployments is destructive and is not this repository's call.",
+      "evidence": "Enumerated all 16 deployment URLs and fetched each anonymously. 14 returned the 20331-byte failure page, 1 returned the 12888-byte v0 stub titled 'v0 App', 1 is the current dashboard. Greps for local paths, build errors, npm output and tokens across those bodies returned nothing. Re-listed on 2026-09-16: eleven deployments exist, eight of them in ERROR from the 2026-08-11 git connection with branch aliases nim-git-m1-bootstrap and nim-git-integration-trunk; fetched anonymously, both aliases still answer 200 with an 18 KB Vercel page rather than this project's, and the production domain serves the intended page. Closed on 2026-09-16 through the Vercel CLI after Sergi signed in: the eight ERROR deployments from the git connection, the v0 placeholder and one intermediate production deployment were removed, and the branch aliases nim-git-m1-bootstrap, nim-git-integration-trunk and nim-git-claude-nim-audit-context-8e6c6c were removed. Fetched anonymously afterwards: every removed hostname answers 404 DEPLOYMENT_NOT_FOUND; the production domain and the project's own nim-seergiiim.vercel.app serve the page deployed the same day from 64121e4, with noindex. One previous production deployment was kept as a rollback candidate; it serves an older build of this same page.",
+      "status": "fixed",
+      "nextAction": "None. What the project serves is the intended page, the previous production build as a rollback, and nothing else; the check is a fetch of every hostname, and it stays that way.",
       "provenance": "declared"
     },
     {
@@ -892,9 +1582,9 @@
       "title": "A protected Vercel project served this page publicly anyway",
       "problem": "Vercel Authentication was enabled on the project, but scoped all_except_custom_domains. Vercel treats the project's own assigned production domain (nim-blush.vercel.app) as a custom domain, so that hostname was exempt while every other URL for the same deployment was protected.",
       "impact": "The full page -- every known weakness, undefended attack path and architectural limitation -- was readable by anyone at that URL, with no login, for roughly two minutes on 2026-08-12. Two of the three hostnames behaved correctly, which is what made it easy to believe the whole thing was protected.",
-      "evidence": "Reading the protection settings was not enough and produced a confident wrong conclusion. Fetching every hostname anonymously was: nim-seergiiim.vercel.app and the deployment URL returned 302 to vercel.com/sso-api with a 15-byte body, while nim-blush.vercel.app returned HTTP 200 with 211 KB containing 'Break Nim' and 'journal chain is unkeyed'. The deployment was removed immediately; all hostnames now return 404 with no content.",
-      "status": "open",
-      "nextAction": "Do not deploy again until deployment protection covers all deployments rather than all_except_custom_domains. More generally: verify access control by fetching every hostname anonymously, never by reading the configuration that is supposed to provide it.",
+      "evidence": "Reading the protection settings was not enough and produced a confident wrong conclusion. Fetching every hostname anonymously was: nim-seergiiim.vercel.app and the deployment URL returned 302 to vercel.com/sso-api with a 15-byte body, while nim-blush.vercel.app returned HTTP 200 with 211 KB containing 'Break Nim' and 'journal chain is unkeyed'. The deployment was removed immediately; all hostnames now return 404 with no content. Re-checked on 2026-09-16 through Vercel's own project settings: password protection, Vercel Authentication and trusted IPs are all disabled, so there is no longer a protected scope for a hostname to fall outside of; the page is public by decision (D-003). Fetched anonymously the same day: the production domain answers 200 with the page and X-Robots-Tag noindex.",
+      "status": "accepted",
+      "nextAction": "None while D-003 stands: the project is public on purpose and its protection is off everywhere, which is the consistent state this finding asked for. If protection is ever turned back on, verify by fetching every hostname anonymously, never by reading the setting.",
       "provenance": "declared"
     },
     {
@@ -903,10 +1593,14 @@
       "title": "In-place upgrade breaks a running daemon, opaquely",
       "problem": "Replacing the binary while a daemon runs makes the old daemon and the new client different images, so every operation is refused.",
       "impact": "All Nim operations fail until the daemon is restarted. The client sees 'nim: reading response: EOF' with no hint.",
-      "evidence": "Reproduced live: daemon logs 'refusing a connection from an unverified peer'; the client sees EOF.",
-      "status": "open",
-      "nextAction": "A version/identity handshake so the daemon can say 'I am an older build, restart me' instead of hanging up.",
-      "provenance": "declared"
+      "evidence": "Reproduced live: daemon logs 'refusing a connection from an unverified peer'; the client sees EOF. Fixed on 2026-09-16 and proven by TestAnInPlaceUpgradeIsDiagnosedAndDaemonRestartFixesIt (engine/cmd/nim/e2e_test.go): a real binary rebuilt in place at the same path while its own daemon kept running. nim status reports 'daemon   OLDER BUILD -- run nim daemon restart' instead of NOT NIM, nim doctor fails a daemon-build check with the same remedy, the daemon's own log names the reason, and nim daemon restart signals the old daemon (which now shuts down cleanly), starts a new one and confirms it answers; the rebuilt binary then forwards a real call through it.",
+      "status": "fixed",
+      "nextAction": "None: nim daemon restart is the documented remedy (README, docs/getting-started.md, docs/security.md). Best effort by design: a peer that closes at the wrong instant, or Windows, falls back to the generic wording rather than guessing.",
+      "provenance": "declared",
+      "tests": [
+        "TestAnInPlaceUpgradeIsDiagnosedAndDaemonRestartFixesIt",
+        "TestDiagnoseTellsASamePathRebuildApartFromADifferentProgram"
+      ]
     },
     {
       "id": "F-002",
@@ -927,7 +1621,7 @@
       "impact": "A local attacker can rewrite history and the result verifies cleanly. This is integrity, not authenticity.",
       "evidence": "docs/journal-format.md states it. --expect-head is the only cover, and only for what was committed before the head you recorded.",
       "status": "accepted",
-      "nextAction": "Decide before M8: a key the agent cannot reach, or a dashboard that presents the record as 'what this machine reported'.",
+      "nextAction": "Decided (D-004, 2026-09-16): no key before M8; the mirror presents the record as what this machine reported and holds pinned heads apart from synced rows. A key still needs a second principal on the machine, which is a deployment decision, not a change here.",
       "provenance": "declared"
     },
     {
@@ -936,9 +1630,9 @@
       "title": "Policy lives in config.toml",
       "problem": "The deny list is read from a file, breaking the standing decision that SQLite is the only thing an authorization decision reads.",
       "impact": "Anything able to write that file can empty the policy, and the change leaves no journal entry.",
-      "evidence": "engine/internal/config/config.go documents it as deliberate, temporary scaffolding.",
-      "status": "open",
-      "nextAction": "Move policy into SQLite and journal every policy change. This is M4.",
+      "evidence": "Fixed 2026-09-14: rules live in nim_rules, are changed with nim policy through the peer-verified socket, and every change is a rule.add or rule.remove entry in the chain. config.toml with a [policy] section is refused by every command, so the move cannot go unnoticed.",
+      "status": "fixed",
+      "nextAction": "None. Kept because it is the record of what config.toml used to hold, and of why nothing an authorization decision reads may go back there.",
       "provenance": "declared"
     },
     {
@@ -957,10 +1651,10 @@
       "severity": "medium",
       "title": "Enrolment is as privileged as running Nim",
       "problem": "Anything that can execute the binary as this user can enrol an agent or replace an existing enrolment.",
-      "impact": "Harmless today because nothing decides on agents. It becomes an escalation the moment grants exist.",
-      "evidence": "engine/internal/daemon/agent.go says so in its own comment.",
+      "impact": "Now that rules are scoped to enrolments and can grant, re-enrolling a name against another executable moves that name's rules, allow rules included, to the new program. Both the rule and the enrolment change are in the chain, so it is visible afterwards; it is not prevented.",
+      "evidence": "engine/internal/daemon/agent.go says so in its own comment; docs/decisions/0002 states what an enrolment is worth.",
       "status": "open",
-      "nextAction": "M4 must state what an enrolment is worth before grants are attached to one.",
+      "nextAction": "Needs a second OS principal to close: the daemon owning the enrolments as a user the agent is not. Not a journaling problem any more.",
       "provenance": "declared"
     },
     {
@@ -969,9 +1663,9 @@
       "title": "The relay rig has not been re-run since M1.5",
       "problem": "The end-to-end proof that a real client cannot tell it is going through Nim requires fastmcp, which is not installed here.",
       "impact": "Byte-exactness currently rests on unit tests plus a run from before the merge.",
-      "evidence": "tools/relay-rig/README.md; no run recorded since 2026-08-08.",
-      "status": "open",
-      "nextAction": "Install fastmcp and re-run, or add it to CI.",
+      "evidence": "Re-run on 2026-09-15 against the current binary with fastmcp 4.0.3 in the rig's own venv: RESULT: IDENTICAL on every case that must not differ, and two cases that must differ through Nim asserted precisely -- a call a rule denies comes back as Nim's tool error, and a frame with a repeated method key is refused. A relay-rig CI job now runs it on every push; that job has not yet run on GitHub's runners, only locally.",
+      "status": "fixed",
+      "nextAction": "Watch the first relay-rig job on GitHub go green. Until then the CI part of this is reasoned, not observed.",
       "provenance": "declared"
     },
     {
@@ -1022,9 +1716,10 @@
       "id": "D-002",
       "title": "What may an unknown agent do?",
       "question": "Once grants exist, is an unenrolled spawner denied, or does it fall back to the global policy?",
-      "status": "open",
-      "resolution": "Undecided. If 'not enrolled' were more permissive, enrolling would be a downgrade and an attacker would simply avoid it.",
-      "provenance": "declared"
+      "status": "resolved",
+      "resolution": "A session no enrolment matched is bound by the rules that name no agent, and by nothing else. Rules only deny, so enrolment can only take capabilities away: an unenrolled program has exactly the ceiling every session had before agents existed, and nobody gains by avoiding enrolment. docs/decisions/0002 is the argument. It has to be answered again for allow rules, which are M4.5. Answered again for the allow model on 2026-09-15 in docs/decisions/0003: with nim policy default deny plus an agent-scoped allow, enrolment is what grants and an unenrolled program is denied by the default.",
+      "provenance": "declared",
+      "decidedOn": "2026-09-14"
     },
     {
       "id": "D-003",
@@ -1039,17 +1734,19 @@
       "id": "D-004",
       "title": "Does the journal get a key before M8?",
       "question": "Syncing an unkeyed record to a dashboard exports a liability rather than evidence.",
-      "status": "open",
-      "resolution": "Undecided. Either the journal gains a key the agent cannot reach, or M8 presents the record as 'what this machine reported'.",
-      "provenance": "declared"
+      "status": "resolved",
+      "resolution": "The mirror presents what this machine reported, and says so on every row; the journal does not get a key before M8. A key the agent cannot reach needs a principal the agent is not, which a single-user machine does not offer, and a key the agent could mint would look like authenticity without being it. Heads pinned with nim verify --expect-head are the one strong claim the mirror may hold, stored apart from the synced rows. docs/decisions/0006-what-the-mirror-may-claim.md.",
+      "provenance": "declared",
+      "decidedOn": "2026-09-16"
     },
     {
       "id": "D-005",
       "title": "Should the public page be search-indexed?",
       "question": "Public and indexed are different things. The build still sends X-Robots-Tag: noindex, nofollow, noarchive, nosnippet, so the page is readable by anyone given the link but will not appear in search results.",
-      "status": "open",
-      "resolution": "Left as noindex, which is the reversible direction: a page can be indexed later, but it cannot be reliably un-indexed once crawled and archived. Worth a deliberate answer rather than a default, given the page is a list of this project's weaknesses.",
-      "provenance": "declared"
+      "status": "resolved",
+      "resolution": "noindex stays, deliberately: readable by anyone given the link, absent from search. The reversible direction -- a page can be indexed later, it cannot be reliably un-indexed once crawled and archived -- chosen for a page that lists this project's weaknesses. docs/decisions/0006. Since 2026-09-25 the deployment also serves a product page at /, which is meant to be found; noindex applies to the status page at /status only.",
+      "provenance": "declared",
+      "decidedOn": "2026-09-16"
     }
   ],
   "milestones": [
@@ -1157,63 +1854,104 @@
     {
       "id": "M4",
       "name": "Agent identity + policy in SQLite",
-      "status": "in_progress",
+      "status": "done",
       "objective": "Give a decision a subject, and move policy where an authorization input belongs.",
       "deliverables": [
-        "peer primitives (done)",
-        "nim_agents + nim agent CLI (done)",
-        "daemon-side derivation + journal (done)",
-        "nim_grants + evaluation (not started)",
-        "policy out of config.toml (not started)"
+        "peer primitives",
+        "nim_agents + nim agent CLI",
+        "daemon-side derivation, recorded on session.start",
+        "nim_rules + nim policy CLI, rules scoped per agent and connector",
+        "every rule change a chain entry",
+        "policy out of config.toml, and a stale section refused",
+        "two real agents against one connector receive different verdicts"
       ],
       "guarantees": [
         "agent-not-claimable",
-        "journal-schema-versioning"
+        "journal-schema-versioning",
+        "policy-in-sqlite",
+        "policy-per-agent"
       ],
       "limitations": [
-        "Nothing decides on the agent yet.",
-        "Two windows of one program are the same agent."
+        "Rules only denied until M4.5.",
+        "Two windows of one program are the same agent.",
+        "Enrolment changes were not journaled until 2026-09-15 (F-018, closed)."
       ],
-      "pending": [
-        "Step 4: nim_grants and evaluation.",
-        "Decide what an unknown agent may do (D-002)."
-      ]
+      "pending": []
     },
     {
       "id": "M4.5",
-      "name": "Grants (Cedar), if it is still the answer",
-      "status": "planned",
-      "objective": "Express allow/deny in something richer than a list, once there is a subject to talk about.",
-      "deliverables": [],
-      "guarantees": [],
-      "limitations": [],
-      "pending": [
-        "Deferred until M4 gives it a subject."
-      ]
+      "name": "Allow rules and precedence",
+      "status": "done",
+      "objective": "Allow as well as deny, with a precedence stated in one function and shown by nim policy explain, without a policy language.",
+      "deliverables": [
+        "effect deny|allow on every rule",
+        "defaults with nim policy default deny|allow, scoped like any rule",
+        "journal.Decide: most specific wins, deny beats allow, no rule means allow",
+        "nim policy allow / default / explain, and remove --default",
+        "policy.explain daemon request behind the CLI",
+        "nim_rules CHECK widened by a rebuild existing databases survive",
+        "D-002 answered again for the allow model (docs/decisions/0003)"
+      ],
+      "guarantees": [
+        "policy-precedence",
+        "policy-per-agent"
+      ],
+      "limitations": [
+        "No conditions on arguments, no time bounds, no budgets: those need a language or a counter, and are M5 and later.",
+        "Cedar was not needed for this; the spike stays deferred until something a precedence cannot express is wanted."
+      ],
+      "pending": []
     },
     {
       "id": "M5",
       "name": "Budgets",
-      "status": "planned",
-      "objective": "Per session, decremented at authorization time.",
-      "deliverables": [],
-      "guarantees": [],
-      "limitations": [],
-      "pending": [
-        "Needs agent identity."
-      ]
+      "status": "done",
+      "objective": "Per session, decremented at authorization time, not at execution time.",
+      "deliverables": [
+        "a budget is a cap on ALLOWED calls per session, scoped like a rule: (agent, connector, tool or every tool)",
+        "checked in daemon.answer only once the rules have allowed the call: a budget narrows, never grants",
+        "the count is of allow/approved decisions, never outcomes, so a call the relay gave up on still spent its share and a refusal never does",
+        "nim_budgets outside the chain, every change one transaction with a budget.add / budget.remove entry",
+        "schema_version 4: canonical_encode_v4, field 20 budget_calls; existing databases rebuilt on open",
+        "nim policy budget <n> --tool <tool>|--all-tools [--agent] [--connector], nim policy budget remove, a BUDGETS table in nim policy list, matching budgets in nim policy explain",
+        "docs/decisions/0004-budgets.md"
+      ],
+      "guarantees": [
+        "budgets-cap-allowed-calls"
+      ],
+      "limitations": [
+        "Per session means one relay run: a client that restarts its relay starts with a fresh count, on purpose; a cap meant to survive restarts needs a different subject than a session.",
+        "No time bounds and no conditions on arguments: every allowed call costs one unit.",
+        "What the client is told is the same policy refusal as for a rule, and the journal records the decision, not its reason: the sentence naming the budget exists only on the daemon's answer to the relay. A refusal by a budget and a refusal by a rule read alike in nim log."
+      ],
+      "pending": []
     },
     {
       "id": "M6",
       "name": "Human approval",
-      "status": "planned",
-      "objective": "Out-of-band prompt showing real parameters.",
-      "deliverables": [],
-      "guarantees": [],
-      "limitations": [],
-      "pending": [
-        "Needs agent identity."
-      ]
+      "status": "done",
+      "objective": "Out-of-band prompt showing real parameters, never a model-generated summary.",
+      "deliverables": [
+        "a third rule effect, ask: nim policy ask <tool> [--agent] [--connector] and nim policy default ask; precedence deny > ask > allow at equal specificity, in journal.Decide",
+        "the daemon answers a held call pending with a hold id and keeps it in memory only: tool, agent, connector, digest, the real arguments, the time",
+        "the relay sends the real params.arguments bytes once, in a call.arguments event, and waits on the same connection up to [daemon] approval_timeout (default 2m)",
+        "nim approve lists held calls with their real arguments, pretty-printed, every byte shown as itself; nim approve <id> and nim reject <id> [--reason] decide one",
+        "an approve is refused until the relay's report of the arguments has reached the daemon, and the first report is the one shown and approved; a reject goes through regardless",
+        "the decision is written to the journal as approved or rejected before the relay is told; on approval the relay forwards the exact original bytes",
+        "a session ending, its connection dropping, or the timer running out all reject and journal the call, so none is left neither approved nor rejected",
+        "the human's reason is returned to the CLI and logged by the daemon, never journaled; the arguments never reach the journal or a log line",
+        "docs/decisions/0005-human-approval.md"
+      ],
+      "guarantees": [
+        "approval-shows-real-parameters"
+      ],
+      "limitations": [
+        "Anyone who can run nim as this user can approve a call: the approval defends against the model driving the client, not against the operator, and a model that has been given a shell is indistinguishable from the operator on the socket.",
+        "Held calls live in the daemon's memory; a daemon killed outright loses them with no journal trace, and the relay then denies them locally.",
+        "No notification: an operator learns of a held call by running nim approve. No delegation, no queueing beyond the timeout, no conditions on arguments that would ask automatically.",
+        "A budget is not consulted for a call an ask rule holds: a human's approval is not subject to the cap, though the approved call counts toward it for the session's later allowed calls."
+      ],
+      "pending": []
     },
     {
       "id": "M7",
@@ -1234,15 +1972,17 @@
     {
       "id": "M8",
       "name": "Dashboard",
-      "status": "blocked",
-      "objective": "A hosted view of the journal.",
+      "status": "planned",
+      "objective": "A hosted view of what this machine reported, labelled as such on every row.",
       "deliverables": [],
       "guarantees": [],
       "limitations": [
-        "Blocked on the journal being unkeyed (F-003): syncing it exports a liability rather than evidence."
+        "The chain is unkeyed (F-003): the mirror may say what the machine reported and where it agrees with a pinned head, never that the record is evidence on its own (D-004, docs/decisions/0006)."
       ],
       "pending": [
-        "Resolve D-004."
+        "An opt-in nim sync command, off by default, that copies the sync-contract fields plus machine id and reported head; the daemon never depends on it.",
+        "Heads pinned from nim verify --expect-head stored apart from synced rows, with a viewer that shows agreement or divergence.",
+        "A hosting project and account, which are the operator's to provide; the Supabase schema in supabase/migrations is the prepared target."
       ]
     }
   ]

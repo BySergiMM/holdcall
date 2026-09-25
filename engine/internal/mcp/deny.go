@@ -22,6 +22,29 @@ const (
 	DeniedNoDecision = "Nim could not reach a decision and denied the call. Do not retry automatically."
 )
 
+// DeniedUnreadable explains a tools/call Nim refused because it could not read
+// which tool it named. Its own sentence, because it is neither a rule nor an
+// outage: the frame was the problem, and sending the same bytes again will
+// meet the same refusal.
+const DeniedUnreadable = "Nim refused this call: it could not read the tool name unambiguously. Do not retry automatically."
+
+// DeniedByHuman answers a call an "ask" rule held for a human, once one
+// decided against it. Its own sentence, distinct from DeniedByPolicy: a rule
+// is applied by the daemon and will be applied again, but this call was
+// individually refused by whoever is operating Nim, on the strength of its
+// real arguments -- docs/decisions/0005-human-approval.md is what they saw
+// and why. The reason a human gave, if any, is not in this text: it is kept
+// out of the call this model can read, on the daemon's own log and in the
+// CLI's own output only.
+const DeniedByHuman = "A human reviewing this call's real arguments rejected it. Do not retry automatically."
+
+// DeniedApprovalTimedOut answers a call an "ask" rule held for a human when
+// nobody decided it within approval_timeout. Distinct from DeniedByHuman: no
+// one looked at this one and said no, no one looked at all in time, which is
+// exactly the "no decision reached" shape every other refusal in this file
+// already fails closed on.
+const DeniedApprovalTimedOut = "Nim held this call for a human to approve, and nobody decided within the approval timeout. Do not retry automatically."
+
 // DeniedBatch explains a refused batch.
 const DeniedBatch = "Nim refused this batch: it carries a tools/call, and Nim does not decide batch elements one by one. Send the calls individually."
 
@@ -37,9 +60,16 @@ type toolText struct {
 	Text string `json:"text"`
 }
 
+// ResultTypeComplete is the resultType of an ordinary, finished tool result
+// under the revisions that require the field. The specification's own words:
+// when the field is absent, "the client MUST treat the absent field as
+// "complete"" -- so this is the value the older shape already meant.
+const ResultTypeComplete = "complete"
+
 type toolResult struct {
-	Content []toolText `json:"content"`
-	IsError bool       `json:"isError"`
+	Content    []toolText `json:"content"`
+	IsError    bool       `json:"isError"`
+	ResultType string     `json:"resultType,omitempty"`
 }
 
 // id is json.RawMessage everywhere below. Decoding and re-encoding it would
@@ -71,15 +101,28 @@ type errorResponse struct {
 // model reads the text and can react to it, which is the whole reason MCP
 // reports tool failures this way.
 //
+// protocolVersion is what the session negotiated, and decides the dialect the
+// refusal is written in. Under 2026-07-28 and later every result must name
+// its resultType, and a client on that revision refuses to parse one that
+// does not: reproduced with fastmcp 4.0.3, whose default handshake is that
+// revision, the refusal surfaced as a local validation error rather than the
+// tool error it is meant to read as (F-021). An older client is sent the
+// older shape, unchanged, because nothing says how it would treat a field it
+// does not know.
+//
 // The returned bytes include the trailing newline the transport needs.
-func DenyResponse(id json.RawMessage, text string) []byte {
+func DenyResponse(id json.RawMessage, text, protocolVersion string) []byte {
+	result := toolResult{
+		Content: []toolText{{Type: "text", Text: text}},
+		IsError: true,
+	}
+	if ResultsCarryType(protocolVersion) {
+		result.ResultType = ResultTypeComplete
+	}
 	body, err := json.Marshal(toolResponse{
 		JSONRPC: "2.0",
 		ID:      id,
-		Result: toolResult{
-			Content: []toolText{{Type: "text", Text: text}},
-			IsError: true,
-		},
+		Result:  result,
 	})
 	if err != nil {
 		return nil

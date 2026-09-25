@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -65,13 +66,20 @@ func handleAgentAdd(req Request, j *journal.Journal) Response {
 	if err != nil {
 		return Response{ID: req.ID, Error: err.Error()}
 	}
-	if err := j.SetAgent(journal.Agent{
+	if err := j.AddAgent(journal.Agent{
 		Name:       req.AgentName,
 		ExecDev:    dev,
 		ExecIno:    ino,
 		ExecPath:   req.AgentPath,
 		EnrolledAt: time.Now(),
 	}); err != nil {
+		if errors.Is(err, journal.ErrImageEnrolled) {
+			other, _, _ := j.AgentByImage(dev, ino)
+			return Response{ID: req.ID, Error: fmt.Sprintf(
+				"%s is already enrolled as %q, and one executable is one agent. "+
+					"Reuse that name, or remove it first with nim agent remove %s",
+				req.AgentPath, other, other)}
+		}
 		return Response{ID: req.ID, Error: fmt.Sprintf("recording the enrolment: %v", err)}
 	}
 	return Response{ID: req.ID}
@@ -113,11 +121,16 @@ func stillTheEnrolledFile(a journal.Agent) bool {
 	return dev == a.ExecDev && ino == a.ExecIno
 }
 
+// handleAgentRemove is idempotent by design: removing a name that is not
+// enrolled is success, not an error, so a caller does not have to check first.
+// RemoveAgent reports that case as found = false with no error, and no entry
+// is written for it -- there is nothing to record removing, and the chain
+// records what changed, never what was attempted.
 func handleAgentRemove(req Request, j *journal.Journal) Response {
 	if err := validateAgentName(req.AgentName); err != nil {
 		return Response{ID: req.ID, Error: err.Error()}
 	}
-	if err := j.DeleteAgent(req.AgentName); err != nil {
+	if _, _, err := j.RemoveAgent(req.AgentName); err != nil {
 		return Response{ID: req.ID, Error: fmt.Sprintf("removing the enrolment: %v", err)}
 	}
 	return Response{ID: req.ID}

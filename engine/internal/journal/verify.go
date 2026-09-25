@@ -59,7 +59,7 @@ func (j *Journal) Verify(expectHead string) (VerifyReport, error) {
 	rows, err := j.db.Query(
 		`select chain_seq, schema_version, kind, session_id, seq, connector, tool,
 		        params_digest, decision, ok, duration_ms, anomaly, occurred_at,
-		        machine_id, client, protocol_version, agent, prev_hash, hash
+		        machine_id, client, protocol_version, agent, exec_path, exec_id, budget_calls, prev_hash, hash
 		   from nim_journal order by chain_seq`)
 	if err != nil {
 		return VerifyReport{}, err
@@ -156,12 +156,13 @@ func scanEntry(rows *sql.Rows) (Entry, error) {
 	var seq, durationMS sql.NullInt64
 	var ok sql.NullBool
 	var connector, tool, digest, decision, anomaly sql.NullString
-	var machineID, client, protocolVersion, agent sql.NullString
+	var machineID, client, protocolVersion, agent, execPath, execIDCol sql.NullString
+	var budgetCalls sql.NullInt64
 
 	err := rows.Scan(
 		&e.ChainSeq, &e.SchemaVersion, &e.Kind, &e.SessionID, &seq, &connector, &tool,
 		&digest, &decision, &ok, &durationMS, &anomaly, &e.OccurredAt,
-		&machineID, &client, &protocolVersion, &agent, &e.PrevHash, &e.Hash,
+		&machineID, &client, &protocolVersion, &agent, &execPath, &execIDCol, &budgetCalls, &e.PrevHash, &e.Hash,
 	)
 	if err != nil {
 		return e, err
@@ -176,6 +177,9 @@ func scanEntry(rows *sql.Rows) (Entry, error) {
 	if ok.Valid {
 		e.OK = &ok.Bool
 	}
+	if budgetCalls.Valid {
+		e.BudgetCalls = &budgetCalls.Int64
+	}
 	e.Connector = nullable(connector)
 	e.Tool = nullable(tool)
 	e.ParamsDigest = nullable(digest)
@@ -185,6 +189,8 @@ func scanEntry(rows *sql.Rows) (Entry, error) {
 	e.Client = nullable(client)
 	e.ProtocolVersion = nullable(protocolVersion)
 	e.Agent = nullable(agent)
+	e.ExecPath = nullable(execPath)
+	e.ExecID = nullable(execIDCol)
 	return e, nil
 }
 

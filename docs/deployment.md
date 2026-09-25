@@ -1,29 +1,46 @@
 # Deployment
 
-**There is nothing in this repository to deploy, and that is deliberate.**
+One thing in this repository is deployed: `dashboard/`, a static site built
+from the repository -- the product page at `/` and the status page at
+`/status/` -- plus one function, `api/waitlist.js`, that stores early-access
+addresses and nothing else. `docs/dashboard.md` describes it, and its
+*Deployment* section is the record of how it is published and why it is
+public. This file exists for the engine, which is not deployed anywhere and is
+not meant to be.
+
+## The engine is not a service
 
 Nim is a local engine. It is a Go binary that runs on a developer's machine,
 talks to MCP servers over stdio and to its own daemon over a unix socket. It
-has no server-side component, no hosted API, and no web frontend.
+has no server-side component and no hosted API.
 
-The one HTML file in the tree, `engine/internal/console/index.html`, is
-embedded in the binary and served by `nim console` over **loopback only**. It
-makes three same-origin requests and no external ones. It is an observability
-view of the local journal, deliberately read-only and deliberately unreachable
-from a network interface. It is not a website and cannot be hosted.
+The one HTML file in the engine, `engine/internal/console/index.html`, is
+embedded in the binary and served by `nim console` over **loopback only**, and
+since 2026-09-14 only to a loopback name in the `Host` header -- a page on
+another site that rebinds its own name to 127.0.0.1 is refused. It makes three
+same-origin requests and no external ones. It is an observability view of the
+local journal, deliberately read-only and deliberately unreachable from a
+network interface. It is not a website and cannot be hosted.
 
-## What is deployed at nim-seergiiim.vercel.app
+## Releases
 
-A page generated with **v0** and pushed from the Vercel CLI on 2026-08-02. Its
-source lives in a v0 chat, not in this repository or any other — it has never
-been in version control. It is a scaffold, not a Nim dashboard, and nothing in
-this repo produces it.
+`.github/workflows/release.yml` builds the five cross-compiled targets, runs
+the engine test suite against them first, and publishes a GitHub Release with
+`nim_<tag>_<os>_<arch>` archives and a `SHA256SUMS` covering all of them.
+Nothing in it runs on its own: it triggers only on a tag matching `v*` being
+pushed, which is a human action this repository does not take by itself, and
+`workflow_dispatch` builds and checksums the same five archives as a dry run
+without ever creating a release. The `publish` job is the only one with
+`contents: write`, and only for the length of that job. `install.sh` at the
+root downloads a release archive, verifies its checksum against `SHA256SUMS`,
+and refuses on any mismatch; `tools/install-rig/test.sh` proves the refusal
+bites.
 
 ## History worth keeping
 
 Between 2026-08-11 11:39 and 14:13 the Vercel project `nim` was connected to
-this GitHub repository with the framework preset **Next.js**. There is no
-Next.js app here, so all fourteen deployments failed with:
+this GitHub repository with the framework preset **Next.js**, at a time when
+there was no Next.js app here, so all fourteen deployments failed:
 
 ```
 Error: No Next.js version detected. Make sure your package.json has "next" in
@@ -31,30 +48,28 @@ either "dependencies" or "devDependencies". Also check your Root Directory
 setting matches the directory of your package.json file.
 ```
 
-including the Production build for the M1–M3 merge. The git connection was
-removed on 2026-08-11, so pushes no longer trigger builds. The project, its
-domains and its one live deployment were left in place.
+The git connection was removed the same day, and it has not been restored:
+`dashboard/vercel.json` sets `github.enabled: false`, so a push never deploys
+on its own. Those failed deployments, their branch aliases and a v0
+placeholder pushed on 2026-08-02 from a chat that was never in version control
+answered publicly with Vercel's failure page until 2026-09-16 (F-012), when
+they were removed and each hostname was fetched anonymously to confirm it
+answers 404.
 
-Two things are worth remembering from that. A red deployment on every commit is
-noise, and noise that is always there teaches people to stop reading deployment
-status — the same failure mode as a verification check that cries wolf. And the
-preset was never wrong about the repository; the repository simply had nothing
-of the kind in it.
+Two things are worth remembering from that. A red deployment on every commit
+is noise, and noise that is always there teaches people to stop reading
+deployment status -- the same failure mode as a verification check that cries
+wolf. And the preset was never wrong about the repository; the repository
+simply had nothing of the kind in it, until it did.
 
-## When a dashboard does exist
+## What a hosted journal viewer would be
 
 It is **M8**, and `docs/milestones.md` records why it is blocked on something
 more basic than itself: syncing a record whose authenticity rests on an unkeyed
-chain exports a liability rather than evidence. That decision comes first.
+chain exports a liability rather than evidence (D-004). That decision comes
+first.
 
-When it is built, connecting it means:
-
-1. Put the app somewhere of its own — `web/`, per the shape the README
-   describes.
-2. In the Vercel project, connect the repository again and set **Root
-   Directory** to that path, so the Next.js preset finds a `package.json`.
-3. Set the Production Branch to whichever branch should serve production.
-
-The sync contract in `docs/milestones.md` sets out what such a dashboard would
+The sync contract in `docs/milestones.md` sets out what such a viewer would
 and would not be allowed to receive: never credentials, never call parameters,
-never response bodies.
+never response bodies. `supabase/migrations/` holds the schema it would land
+in; nothing writes to it.

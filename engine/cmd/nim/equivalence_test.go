@@ -265,3 +265,92 @@ func TestEmptyJournalAgreesOnBothSurfaces(t *testing.T) {
 		}
 	}
 }
+
+// Extends the CLI/console agreement check to the policy block. Both
+// renderPolicy and the console's /api/policy read through the same
+// readmodel.TakePolicy, so this is what would catch one of them drifting --
+// a rule counted twice, an enrolment's staleness computed differently -- the
+// way TestCLIAndConsoleAgree already does for the journal block.
+func TestCLIAndConsoleAgreeOnPolicyCounts(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nim.db")
+	w, err := journal.Open(path, "test-machine")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.AddRule(journal.Rule{Tool: "rm", Effect: journal.DecisionDeny}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.AddRule(journal.Rule{Tool: "write_file", Connector: sp("github"), Effect: journal.DecisionDeny}); err != nil {
+		t.Fatal(err)
+	}
+	// The file this enrolment names will never exist, which is what makes the
+	// stale count deterministic here: the question this test asks is whether
+	// the two surfaces agree, not whether the file-identity check itself is
+	// correct -- that is readmodel's TestAReplacedFileReadsAsStale and
+	// neighbours.
+	if err := w.AddAgent(journal.Agent{
+		Name: "agentA", ExecDev: 1, ExecIno: 2,
+		ExecPath:   filepath.Join(t.TempDir(), "does-not-exist"),
+		EnrolledAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.SetConnector("github", "GITHUB_TOKEN",
+		[]string{"npx", "-y", "@modelcontextprotocol/server-github"}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	w.Close()
+
+	j, err := journal.OpenReadOnly(path, "test-machine")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+
+	pol, err := readmodel.TakePolicy(j)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	renderPolicy(&out, pol)
+	text := out.String()
+
+	srv := httptest.NewServer(console.New(j, "/nonexistent.sock").Handler())
+	defer srv.Close()
+	res, err := srv.Client().Get(srv.URL + "/api/policy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	var api readmodel.Policy
+	if err := json.NewDecoder(res.Body).Decode(&api); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := number(t, text, "rules"); got != len(api.Rules) {
+		t.Errorf("rules: CLI says %d, console says %d", got, len(api.Rules))
+	}
+	if len(api.Rules) != 2 {
+		t.Errorf("rules = %d, want 2", len(api.Rules))
+	}
+	if got := number(t, text, "agents"); got != len(api.Agents) {
+		t.Errorf("agents: CLI says %d, console says %d", got, len(api.Agents))
+	}
+	if got := number(t, text, "connectors"); got != len(api.Connectors) {
+		t.Errorf("connectors: CLI says %d, console says %d", got, len(api.Connectors))
+	}
+
+	apiStale := 0
+	for _, a := range api.Agents {
+		if a.Current != nil && !*a.Current {
+			apiStale++
+		}
+	}
+	if apiStale != 1 {
+		t.Errorf("stale = %d, want 1 (the enrolment points at a file that does not exist)", apiStale)
+	}
+	cliMentionsStale := strings.Contains(text, "stale")
+	if cliMentionsStale != (apiStale > 0) {
+		t.Errorf("CLI mentions stale=%v, console counts %d stale", cliMentionsStale, apiStale)
+	}
+}

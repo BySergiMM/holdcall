@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"unicode"
+	"unicode/utf8"
 )
 
 // Size limits for the request/response protocol. These bound Request-kind
@@ -61,6 +63,18 @@ func validateTarget(target string) error {
 		return fmt.Errorf("target %q is invalid: must be 1-127 characters, start and end with a letter or digit, and contain only letters, digits, '-' or '_'", target)
 	}
 	return nil
+}
+
+// ValidConnectorTarget reports whether name would be accepted as a connector
+// target, by the rule validateTarget enforces.
+//
+// Exported so `nim init` can reject an MCP server key before ever writing it
+// into a client config as a --connector name: a key that would fail here
+// should not be offered as something nim init "will fix later" at
+// connector-registration time. The regex itself stays unexported and defined
+// once, here, so the two checks can never drift apart.
+func ValidConnectorTarget(name string) bool {
+	return len(name) <= MaxTargetLen && targetPattern.MatchString(name)
 }
 
 func validateEnvKey(key string) error {
@@ -151,6 +165,55 @@ func validateAgentPath(path string) error {
 	}
 	if !filepath.IsAbs(path) {
 		return fmt.Errorf("agent path %q must be absolute, so it means the same thing wherever the daemon runs", path)
+	}
+	return nil
+}
+
+// MaxToolLen bounds a tool name in a rule. MCP does not fix a maximum; this is
+// generous for any real tool and keeps what a rule stores bounded.
+const MaxToolLen = 256
+
+// validateTool checks the shape of a tool name in a rule.
+//
+// Deliberately loose about characters and strict about nothing else: a rule
+// matches the bytes a client sends as params.name, exactly, so the only names
+// worth refusing are ones no client could send in a JSON string that means
+// what the operator thinks -- control characters, and text that is not UTF-8.
+// No trimming and no case folding, here or at match time.
+func validateTool(tool string) error {
+	if tool == "" {
+		return fmt.Errorf("a rule needs the tool it refuses: nim policy deny <tool>")
+	}
+	if len(tool) > MaxToolLen {
+		return fmt.Errorf("tool name is %d bytes, over the %d limit", len(tool), MaxToolLen)
+	}
+	if !utf8.ValidString(tool) {
+		return fmt.Errorf("tool name is not valid UTF-8")
+	}
+	for _, r := range tool {
+		if unicode.IsControl(r) {
+			return fmt.Errorf("tool name %q contains a control character", tool)
+		}
+	}
+	return nil
+}
+
+// MaxBudgetCalls bounds what a budget's cap may be: a positive integer, far
+// past any session anyone runs today, and small enough that a bug turning it
+// into a loop bound could not do much damage.
+const MaxBudgetCalls = 1_000_000
+
+// validateBudgetCalls checks the shape of a budget's cap. It must be a
+// positive integer -- zero would deny every call outright, which is what a
+// rule is for, and a budget that already denies everything is not what "a
+// cap on how many calls may be made" is asking for.
+func validateBudgetCalls(n int) error {
+	if n <= 0 {
+		return fmt.Errorf(
+			"a budget's calls must be a positive integer: nim policy budget <n> --tool <tool>|--all-tools")
+	}
+	if n > MaxBudgetCalls {
+		return fmt.Errorf("budget calls is %d, over the %d limit", n, MaxBudgetCalls)
 	}
 	return nil
 }

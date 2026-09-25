@@ -1,0 +1,40 @@
+# Tests the dashboard cites as evidence for a "verified" guarantee or a
+# "pass" attack, and that windows-latest legitimately SKIPs rather than
+# fails or passes -- read by .github/scripts/assert-evidence-ran.sh's
+# optional second argument. This file changes nothing for linux or macos:
+# they invoke that script with one argument, and this one is not built.
+#
+# Every entry here traces to the same root cause, in one of two shapes:
+#
+#   Nim never implemented a kernel-verified peer identity for Windows'
+#   AF_UNIX (afunix.sys exposes no SO_PEERCRED/LOCAL_PEERPID equivalent),
+#   and said so rather than ship an unverified one -- see
+#   engine/internal/peer/peer_windows.go and image_windows.go. Production
+#   code treats "unsupported" as "not a denial" throughout (daemon.go's
+#   accept check, shim.go's daemonIsGenuine), which is a real, documented,
+#   known limitation (docs/security.md, docs/milestones.md's M3 audit), not
+#   a testing gap -- these tests exist to prove an attacker is refused, and
+#   on this platform today it is not.
+#
+#   Agent enrolment (peer.ImageOfFile) is an admitted stub on Windows for
+#   the same reason: "nothing in this project has ever run on Windows and
+#   an unverified identity mechanism is worse than an absent one" --
+#   image_windows.go. Enrolling a real file cannot succeed there.
+#
+# Each t.Skip site names this file and its reason inline; this list is
+# what makes the CI gate that would otherwise catch a skip honest about it.
+
+TestDeriveAgentMatchesTheEnrolledParent	peer.ParentOf is unsupported on windows (peer_windows.go); the test's own t.Skipf fires before it can enrol anything to match against
+TestTwoRealAgentsAgainstOneConnectorReceiveDifferentVerdicts	agent derivation (peer.ParentOf/ImageOf) is unsupported on windows; deriveAgent always returns "" there, so two agents cannot be told apart
+TestANonNimProcessCannotWriteToTheJournal	daemon.go refuses a peer only when supported && !isSelf; peer.IsSelf reports unsupported on windows, so an unverified peer is let through rather than refused
+TestANonNimProcessCannotObtainADecision	same as above: the accept-time peer check does not refuse an unverified caller on windows, so the daemon would actually answer it
+TestAnImpostorOnTheSocketCannotChooseWhatIsSpawned	daemonIsGenuine (shim.go) is "!supported || isSelf"; on windows peer.IsSelf is always unsupported, so an impostor daemon is treated as genuine instead of refused
+TestAnImpostorLearnsNothingFromTheAttempt	same daemonIsGenuine gap: on windows the shim would talk to the impostor rather than refuse it
+TestAnImpostorCannotDecideCalls	same daemonIsGenuine gap: on windows the shim would accept a decision from the impostor rather than refuse it
+TestDialDaemonRefusesAnImpostor	same daemonIsGenuine gap: DialDaemon would hand back a connection to the impostor on windows instead of refusing it
+TestAPathSwapDoesNotDefeatPeerIdentity	peer identity is unsupported on windows by design; IsSelf reports supported=false, so the property this test demonstrates cannot be shown there
+TestAReplacedFileIsReportedStaleRatherThanFailing	agent enrolment resolves identity via peer.ImageOfFile, which always errors on windows (image_windows.go); enrolling the file this test needs already fails before it can go stale
+TestTheDaemonsCommandIsSpawnedNotTheCallersEndToEnd	fixture hardcodes /bin/echo and /bin/sh -c, neither of which exists at that path on windows; not a peer-identity gap, a fixture one
+TestWithNoConnectorTheCallersCommandRuns	fixture hardcodes /bin/echo, which does not exist at that path on windows; not a peer-identity gap, a fixture one
+TestStatusDoesNotCallAnImpostorTheDaemon	peer identity is unsupported on windows, so status cannot tell an impostor apart there; the same gap the Known gaps table records
+TestAnInPlaceUpgradeIsDiagnosedAndDaemonRestartFixesIt	peer identity is unsupported on windows, so an older build cannot be told apart from anything; and nim daemon restart is not supported there

@@ -62,9 +62,10 @@ This is not decorative, and it is not theoretical. The first run of the real
 memory that did not exist. The `done`-with-pending-work rule failed on its first
 run too, catching M2. The claims were corrected; the checks were not relaxed.
 
-`scripts/generate.test.mjs` is a mutation-test suite over all of it: 34 tests
-that corrupt a copy of `state.json` in each of the ways above and require a
-refusal. Most of them exist because the attack worked first — a deliberate
+`scripts/generate.test.mjs` is a mutation-test suite over all of it: three
+dozen tests that corrupt a copy of `state.json` in each of the ways above and
+require a refusal, one of which walks every shape in `scripts/sensitive.mjs`
+-- the one list both scanners read -- and proves each is caught. Most of them exist because the attack worked first — a deliberate
 red-team pass on 2026-08-12 tried sixteen bypasses and fourteen got through.
 A check nobody has watched fail has not been shown to work.
 
@@ -77,11 +78,13 @@ go green when a cited test was *skipped* rather than run, via
 ## What it deliberately cannot do
 
 **No runtime state, ever.** The journal, live sessions, enrolled agents,
-connectors and daemon health are not on the page and are not going on it. Nim is
-local-first; that state lives on the machine running Nim, and shipping it to a
-hosted page would export the thing it is supposed to protect. The runtime
-section says NOT AVAILABLE and names the local command for each datum instead.
-`nim console` serves that over loopback, which is where it belongs.
+rules, connectors and daemon health are not on the page and are not going on
+it. Nim is local-first; that state lives on the machine running Nim, and
+shipping it to a hosted page would export the thing it is supposed to protect.
+The runtime section says NOT AVAILABLE and names the local command for each
+datum instead: `nim console` serves the journal and its sessions over
+loopback, and `nim agent list`, `nim policy list` and `nim connector list`
+show the rest.
 
 **No secrets, by construction and then by scanning anyway.** The generator reads
 `engine/`, `docs/` and `git log`. It never opens `nim.db`, the socket, or a
@@ -146,28 +149,54 @@ any path resolving outside `out/`, and needs no network.
 
 ## Deployment
 
-Prepared, not deployed.
+Deployed, publicly, by a deliberate decision (D-003 on the page, 2026-08-12):
+the page is written to be public, states its own limits, and carries no
+runtime data, no secrets and no local paths -- enforced at build time, not
+promised. Deployment protection on the Vercel project is off. That decision is
+about this page only and extends to nothing else the project publishes.
 
-`vercel.json` sets `github.enabled: false`, so even if the repository is ever
-linked to the project again, a push will not deploy on its own. It also sends
-`X-Robots-Tag: noindex, nofollow, noarchive, nosnippet`, a strict
-`Content-Security-Policy` (`default-src 'none'`, no external origins — the page
-loads nothing off-host), `X-Frame-Options: DENY` and `Referrer-Policy:
-no-referrer`.
+Since 2026-09-25 the same deployment serves two pages. The product page at
+`/` is the public face of Nim: a real session's `nim log`, the `nim approve`
+moment, how the relay fits, what Nim does not promise, and an early-access
+form. The status page, this dashboard, moved to `/status/`; every anchor it
+had still works there. Both are built from the same repository by the same
+generator, and the output scan covers both. The product page is meant to be
+found, so the `noindex` header (D-005) now applies to `/status` only.
 
-Checked read-only on 2026-08-12: the Vercel project `nim` already has **Vercel
-Authentication** enabled for `all_except_custom_domains`, and no custom domain
-is attached. A deployment would therefore be readable only by members of the
-Vercel team, not by the public.
+The early-access form is the one thing here with a server behind it:
+`api/waitlist.js`, a Vercel function outside Next that stores an address and
+a timestamp in a private Blob store and nothing else, one record per address.
+Its token is a Vercel environment variable, never in the repository. When the
+store is absent the function answers 503 and the page says sign-ups are not
+open yet, rather than pretending. The store lives in Vercel's Paris region
+(`cdg1`) since 2026-09-25: the addresses are people's, and nothing about
+them needs to leave the EU. The move was proven end to end with one probe
+address that was then deleted; the store held no other record at the time.
 
-Two things to know before that changes:
+How it got there is worth keeping. An earlier version of this section said the
+project had Vercel Authentication enabled and that a deployment would be
+readable only by the team. Reading the setting was not enough: the protection
+was scoped `all_except_custom_domains`, Vercel treats the project's own
+assigned production domain as a custom domain, and the page was readable by
+anyone at that hostname for about two minutes before it was noticed by
+fetching every hostname anonymously (F-011). The lesson is the general one:
+verify access control by fetching, never by reading the configuration that is
+supposed to provide it.
 
-- **A custom domain bypasses it.** The protection is scoped
-  `all_except_custom_domains`. Attaching a domain would make the page public
-  unless Trusted IPs or password protection is enabled first.
-- **Nothing reconnects GitHub to Vercel automatically**, and nothing should.
-  Deployment is a deliberate act: `vercel deploy --prebuilt` from `dashboard/`,
-  or the Vercel dashboard.
+Two things remain true:
 
-Whether to deploy at all is D-003 on the page, and is not a decision this
-repository should take by itself.
+- `vercel.json` sets `github.enabled: false`, so a push never deploys on its
+  own; deployment is by hand from `dashboard/`, with the project linked
+  through `VERCEL_ORG_ID` and `VERCEL_PROJECT_ID`: `vercel build --prod` over
+  the same `npm run build` the checks run, then `vercel deploy --prebuilt
+  --prod`. Last done on 2026-09-16 from this branch, and verified by fetching the
+  production domain anonymously afterwards.
+- Until 2026-09-16, historical deployment URLs and stale branch aliases also
+  answered publicly (F-012), serving Vercel's failure page and an abandoned
+  placeholder. They were removed that day; every one of them answers 404 now,
+  and one previous production build is kept as a rollback candidate.
+
+The build still sends `X-Robots-Tag: noindex, nofollow, noarchive, nosnippet`
+(D-005: public and indexed are different things), a strict
+`Content-Security-Policy` (`default-src 'none'`), `X-Frame-Options: DENY` and
+`Referrer-Policy: no-referrer`.

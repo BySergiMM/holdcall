@@ -63,3 +63,7 @@ func startDaemonProcess(path string, log *os.File) error {
 	go cmd.Wait()
 	return nil
 }
+
+// terminate asks a downstream connector to stop. Windows has no signal to ask
+// with, so the polite step and the forceful one are the same call.
+func terminate(p *os.Process) { p.Kill() }

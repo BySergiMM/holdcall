@@ -3,141 +3,302 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
 <title>nim console</title>
 <style>
+/* One rule, shared with the product page: the only colours are decisions.
+   allow, deny and held/rejected mean something; everything else is ink on
+   paper, so the page can never look reassuring merely because it is tidy. */
 :root{
-  --bg:#0e1116; --panel:#151a21; --panel2:#1b212a; --line:#252c37;
-  --fg:#d7dee8; --dim:#8b97a8; --faint:#5d6878;
-  --accent:#5aa9e6; --ok:#5fb87a; --warn:#d6a44c; --bad:#e0665f; --idle:#6b7embed;
+  --bg:#f3f5f8; --surface:#ffffff; --surface-2:#eaedf2; --line:#d8dce4; --line-strong:#b9c0cc;
+  --ink:#161a20; --ink-2:#4d5766; --ink-3:#78828f;
+  --accent:#2f6ba8; --accent-soft:#e6eef7;
+  --ok:#1f7a4d; --ok-soft:#e2f2e9; --warn:#9a6a12; --warn-soft:#f8efdc; --bad:#ac3f3a; --bad-soft:#f8e6e5;
+  --none:#66717f; --none-soft:#ebedf1;
   --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",sans-serif;
+  --serif:"Iowan Old Style","Palatino Linotype","Book Antiqua",Palatino,Georgia,serif;
+  --radius:4px; --shadow:0 1px 2px rgba(22,26,32,.06);
 }
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+  --bg:#0f1216; --surface:#161a20; --surface-2:#1d222a; --line:#2a313b; --line-strong:#3d4653;
+  --ink:#e4e8ee; --ink-2:#a2acba; --ink-3:#78828f; --accent:#6ba3dc; --accent-soft:#172533;
+  --ok:#4fb37c; --ok-soft:#12281d; --warn:#d2a04a; --warn-soft:#2b2312; --bad:#e0736c; --bad-soft:#2e1a19;
+  --none:#8b95a3; --none-soft:#1e232b; --shadow:none; } }
+:root[data-theme="dark"]{
+  --bg:#0f1216; --surface:#161a20; --surface-2:#1d222a; --line:#2a313b; --line-strong:#3d4653;
+  --ink:#e4e8ee; --ink-2:#a2acba; --ink-3:#78828f; --accent:#6ba3dc; --accent-soft:#172533;
+  --ok:#4fb37c; --ok-soft:#12281d; --warn:#d2a04a; --warn-soft:#2b2312; --bad:#e0736c; --bad-soft:#2e1a19;
+  --none:#8b95a3; --none-soft:#1e232b; --shadow:none; }
+
 *{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--fg);
-  font:13px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
-header{display:flex;align-items:center;gap:14px;padding:10px 16px;
-  background:var(--panel);border-bottom:1px solid var(--line)}
-.brand{font-weight:600;letter-spacing:.02em}
-.brand span{color:var(--faint);font-weight:400}
-.badge{font-family:var(--mono);font-size:11px;padding:2px 7px;border-radius:3px;
-  border:1px solid var(--line);color:var(--dim);white-space:nowrap}
-.badge.ro{border-color:#2f3a46;color:var(--faint)}
-.dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px;vertical-align:1px}
-.dot.on{background:var(--ok)} .dot.off{background:var(--faint)}
+html{scroll-behavior:smooth}
+@media (prefers-reduced-motion: reduce){ *,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important} }
+body{margin:0;background:var(--bg);color:var(--ink);font:13.5px/1.55 var(--sans);-webkit-font-smoothing:antialiased}
+a{color:var(--accent);text-decoration-thickness:1px;text-underline-offset:2px}
+button{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:var(--radius)}
+code,.mono{font-family:var(--mono);font-size:.92em;font-variant-numeric:tabular-nums}
+h1,h2,h3{margin:0;font-weight:600;line-height:1.25}
+.dim{color:var(--ink-2)} .faint{color:var(--ink-3)}
+.ok{color:var(--ok)} .bad{color:var(--bad)} .warn{color:var(--warn)}
+
+/* ---------- top bar ---------- */
+.top{position:sticky;top:0;z-index:5;background:var(--surface);border-bottom:1px solid var(--line);
+  display:flex;align-items:center;gap:14px;padding:0 20px;height:48px}
+.brand{font-family:var(--serif);font-size:20px;letter-spacing:-.02em;text-decoration:none;color:var(--ink)}
+.brand span{color:var(--ink-3);font-family:var(--sans);font-size:12px;letter-spacing:.04em;margin-left:8px;vertical-align:2px}
+.chip{display:inline-flex;align-items:center;gap:6px;font-family:var(--mono);font-size:11.5px;padding:3px 8px;
+  border:1px solid var(--line);border-radius:var(--radius);color:var(--ink-2);white-space:nowrap;background:var(--surface)}
+.chip .dot{width:7px;height:7px;border-radius:50%;background:var(--ink-3)}
+.chip .dot.on{background:var(--ok)}
+.chip.copy{cursor:pointer} .chip.copy:hover{border-color:var(--line-strong);color:var(--ink)}
 .spacer{flex:1}
-nav{display:flex;gap:1px;padding:0 16px;background:var(--panel);border-bottom:1px solid var(--line)}
-nav button{background:none;border:0;border-bottom:2px solid transparent;color:var(--dim);
-  padding:8px 14px;font:inherit;cursor:pointer}
-nav button:hover{color:var(--fg)}
-nav button.sel{color:var(--fg);border-bottom-color:var(--accent)}
-main{padding:16px;display:grid;grid-template-columns:1fr;gap:16px}
-main.split{grid-template-columns:minmax(0,1fr) 420px}
+.iconbtn{background:none;border:1px solid var(--line);border-radius:var(--radius);padding:3px 8px;font-size:11.5px;color:var(--ink-2);cursor:pointer}
+.iconbtn:hover{color:var(--ink);border-color:var(--line-strong)}
+
+/* ---------- held strip: the one thing that wants attention ---------- */
+.held-strip{display:none;align-items:center;gap:12px;padding:8px 20px;background:var(--warn-soft);color:var(--warn);
+  border-bottom:1px solid var(--line);font-size:13px}
+.held-strip.on{display:flex}
+.held-strip b{font-variant-numeric:tabular-nums}
+.held-strip a{color:inherit;font-weight:600}
+@keyframes pulse{0%{transform:scale(1)}50%{transform:scale(1.35)}100%{transform:scale(1)}}
+.held-strip .pulse{width:8px;height:8px;border-radius:50%;background:var(--warn);animation:pulse 1.2s ease-in-out 2}
+
+/* ---------- nav ---------- */
+nav{position:sticky;top:48px;z-index:4;display:flex;gap:2px;padding:0 20px;background:var(--surface);border-bottom:1px solid var(--line);overflow-x:auto;scrollbar-width:none}
+nav::-webkit-scrollbar{display:none}
+nav button{background:none;border:0;border-bottom:2px solid transparent;color:var(--ink-2);padding:9px 12px;cursor:pointer;white-space:nowrap;display:flex;gap:7px;align-items:center}
+nav button:hover{color:var(--ink)}
+nav button.sel{color:var(--ink);border-bottom-color:var(--ink)}
+nav button .n{font-family:var(--mono);font-size:11px;padding:0 6px;border-radius:9px;background:var(--surface-2);color:var(--ink-2)}
+nav button .n.warn{background:var(--warn-soft);color:var(--warn)}
+nav button kbd{font:10.5px var(--mono);color:var(--ink-3);border:1px solid var(--line);border-radius:3px;padding:0 4px}
+
+/* ---------- layout ---------- */
+main{padding:20px;display:grid;grid-template-columns:minmax(0,1fr);gap:18px;max-width:1440px;margin:0 auto}
+main.split{grid-template-columns:minmax(0,1fr) 400px}
+@media (max-width:1100px){ main.split{grid-template-columns:1fr} #detail{position:static!important} }
 .view{display:none;min-width:0} .view.sel{display:block}
-h2{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);
-  margin:0 0 8px;font-weight:600}
-.panel{background:var(--panel);border:1px solid var(--line);border-radius:5px;margin-bottom:16px}
-.panel>.hd{padding:9px 12px;border-bottom:1px solid var(--line);
-  font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim)}
-.panel>.bd{padding:12px}
-.kv{display:grid;grid-template-columns:auto 1fr;gap:4px 18px;font-size:13px}
-.kv dt{color:var(--dim)} .kv dd{margin:0;font-family:var(--mono);word-break:break-all}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:1px;background:var(--line)}
-.cell{background:var(--panel);padding:11px 12px}
-.cell .n{font-family:var(--mono);font-size:20px;line-height:1.2}
-.cell .l{color:var(--dim);font-size:11px;margin-top:2px}
-.cell .s{color:var(--faint);font-size:11px;margin-top:3px}
-table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:12px}
-th{text-align:left;color:var(--dim);font-weight:500;padding:6px 10px;
-  border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--panel);
-  font-size:11px;text-transform:uppercase;letter-spacing:.05em}
-td{padding:4px 10px;border-bottom:1px solid #1b2029;white-space:nowrap}
-tbody tr{cursor:pointer}
-tbody tr:hover{background:var(--panel2)}
-tbody tr.sel{background:#1d2836}
-.scroll{max-height:calc(100vh - 260px);overflow:auto}
-/* Columns scroll rather than crush: a squeezed table hides the values that
-   matter, and this one is meant to be read. */
-.scroll table{min-width:660px}
-@media (max-width:1100px){ main.split{grid-template-columns:1fr} }
-.num{color:var(--faint)}
-.k{padding:1px 6px;border-radius:3px;font-size:11px;border:1px solid var(--line)}
-.k-session\.start{color:var(--accent)} .k-session\.end{color:var(--dim)}
-.k-call\.request{color:#c9a7e8} .k-call\.outcome{color:var(--ok)}
-.k-anomaly{color:var(--warn);border-color:#4a3d24}
-.ok{color:var(--ok)} .bad{color:var(--bad)} .warn{color:var(--warn)} .dim{color:var(--dim)}
-.note{color:var(--faint);font-size:12px;line-height:1.55;margin:0}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);margin-bottom:18px;box-shadow:var(--shadow)}
+.panel>.hd{display:flex;align-items:baseline;gap:12px;padding:10px 14px;border-bottom:1px solid var(--line)}
+.panel>.hd h2{font-size:13px;letter-spacing:.02em}
+.panel>.hd .sub{color:var(--ink-3);font-size:12px}
+.panel>.bd{padding:14px}
+.note{color:var(--ink-3);font-size:12.5px;line-height:1.55;margin:0}
 .note+.note{margin-top:8px}
-.empty{color:var(--faint);padding:22px 12px;text-align:center;font-size:12px}
-.hash{font-family:var(--mono);font-size:11px;color:var(--dim);word-break:break-all}
-.alert{border-left:2px solid var(--warn);padding:8px 12px;background:#191713;margin-bottom:8px}
-.alert.info{border-left-color:var(--accent);background:#12181f}
-.alert .t{color:var(--fg);margin-bottom:3px}
-#detail{position:sticky;top:16px;align-self:start}
-.pill{font-family:var(--mono);font-size:11px;padding:1px 6px;border:1px solid var(--line);border-radius:3px}
+.empty{color:var(--ink-3);padding:26px 14px;text-align:center;font-size:12.5px}
+.grid{display:grid;grid-template-columns:repeat(4,1fr)}
+.grid.three{grid-template-columns:repeat(3,1fr)}
+.cell{background:var(--surface);padding:12px 14px;border-right:1px solid var(--line);border-bottom:1px solid var(--line);min-width:0}
+.cell:nth-child(4n){border-right:0} .grid.three .cell{border-right:1px solid var(--line)} .grid.three .cell:nth-child(3n){border-right:0}
+.grid:last-child .cell{border-bottom:0}
+@media (max-width:800px){ .grid,.grid.three{grid-template-columns:repeat(2,1fr)} .grid .cell:nth-child(n){border-right:1px solid var(--line)} .grid .cell:nth-child(2n){border-right:0} }
+.cell .n{font-family:var(--mono);font-size:22px;line-height:1.2;letter-spacing:-.01em}
+.cell .n.word{font-family:var(--serif);font-size:24px;letter-spacing:-.015em}
+.cell .l{color:var(--ink-2);font-size:12px;margin-top:3px}
+.cell .s{color:var(--ink-3);font-size:11.5px;margin-top:3px}
+
+/* ---------- tables ---------- */
+.scroll{overflow:auto;max-height:calc(100vh - 250px)}
+table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:12px;font-variant-numeric:tabular-nums}
+th{text-align:left;color:var(--ink-3);font-weight:500;padding:7px 12px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--surface);font-size:11px;letter-spacing:.05em;text-transform:uppercase;z-index:1}
+td{padding:6px 12px;border-bottom:1px solid var(--line);white-space:nowrap;vertical-align:top}
+.scroll table{min-width:720px}
+.scroll th{width:1%} .scroll th:last-child{width:auto}
+tbody tr{cursor:pointer}
+tbody tr:hover{background:var(--surface-2)}
+tbody tr.sel{background:var(--accent-soft)}
+tbody tr.arrive{animation:arrive .35s ease-out both}
+@keyframes arrive{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:none}}
+.num{color:var(--ink-3)}
+.wrap{white-space:normal;overflow-wrap:anywhere;font-family:var(--sans);color:var(--ink-2);min-width:36ch;max-width:56ch}
+.d{display:inline-block;padding:1px 7px;border-radius:var(--radius);font-weight:600;letter-spacing:.02em}
+.d-allow,.d-approved{color:var(--ok);background:var(--ok-soft)}
+.d-deny{color:var(--bad);background:var(--bad-soft)}
+.d-ask,.d-rejected,.d-pending{color:var(--warn);background:var(--warn-soft)}
+.d-observed{color:var(--none);background:var(--none-soft)}
+.k{display:inline-block;padding:0 6px;border-radius:var(--radius);font-size:11px;border:1px solid var(--line);color:var(--ink-2);white-space:nowrap}
+.k-session\.start,.k-session\.end{color:var(--ink-3)}
+.k-call\.request{color:var(--ink)}
+.k-call\.outcome{color:var(--ink-2)}
+.k-anomaly{color:var(--warn);border-color:var(--warn)}
+.k-rule\.add,.k-rule\.remove,.k-budget\.add,.k-budget\.remove,.k-agent\.add,.k-agent\.remove{color:var(--ink-2);background:var(--surface-2)}
+
+/* ---------- filter bar ---------- */
+.bar{display:flex;gap:8px;align-items:center;padding:10px 14px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.bar input,.bar select{font:inherit;font-family:var(--mono);font-size:12.5px;padding:5px 8px;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);color:var(--ink)}
+.bar input{min-width:0} .bar label,.bar .toggle{flex-shrink:0}
+.bar input[type=search]{flex:1;min-width:180px}
+.bar label{display:inline-flex;align-items:center;gap:6px;color:var(--ink-2);font-size:12.5px}
+.toggle{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:var(--ink-2);cursor:pointer;user-select:none}
+.toggle .sw{width:26px;height:14px;border-radius:7px;background:var(--line-strong);position:relative;transition:background .15s}
+.toggle .sw::after{content:"";position:absolute;top:2px;left:2px;width:10px;height:10px;border-radius:50%;background:var(--surface);transition:left .15s}
+.toggle.on .sw{background:var(--ink)} .toggle.on .sw::after{left:14px}
+.count{margin-left:auto;color:var(--ink-3);font-size:12px;font-family:var(--mono)}
+
+/* ---------- held cards ---------- */
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,560px),1fr));gap:14px}
+.card{border:1px solid var(--warn);border-radius:var(--radius);background:var(--surface);overflow:hidden}
+.card .ch{display:flex;align-items:baseline;gap:10px;padding:10px 14px;background:var(--warn-soft);color:var(--warn)}
+.card .ch b{font-family:var(--mono)} .card .ch .age{margin-left:auto;font-family:var(--mono);font-size:12px}
+.card .meta{display:grid;grid-template-columns:auto 1fr;gap:3px 14px;padding:10px 14px;font-size:12.5px}
+.card .meta dt{color:var(--ink-3)} .card .meta dd{margin:0;font-family:var(--mono)}
+.card pre{margin:0;padding:12px 14px;border-top:1px solid var(--line);background:var(--surface-2);font:12px/1.5 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere;max-height:280px;overflow:auto;unicode-bidi:isolate;direction:ltr}
+.card .cmds{padding:10px 14px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:6px}
+.cmd{display:flex;align-items:center;gap:8px}
+.cmd code{flex:1;padding:6px 8px;background:var(--surface-2);border-radius:var(--radius);white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px}
+.cmd button{border:1px solid var(--line);background:var(--surface);border-radius:var(--radius);padding:5px 9px;font-size:12px;cursor:pointer;white-space:nowrap}
+.cmd button:hover{border-color:var(--line-strong)}
+.cmd button.done{color:var(--ok);border-color:var(--ok)}
+
+/* ---------- detail drawer ---------- */
+#detail{position:sticky;top:110px;align-self:start;display:none}
+#detail.on{display:block}
+#detail .panel>.hd{align-items:center}
+#detail .close{margin-left:auto}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:5px 16px;font-size:12.5px;margin:0}
+.kv dt{color:var(--ink-3)} .kv dd{margin:0;font-family:var(--mono);word-break:break-all}
+.chain{margin-top:12px;padding:10px 12px;border:1px dashed var(--line-strong);border-radius:var(--radius);font-family:var(--mono);font-size:11.5px;color:var(--ink-2)}
+.chain .h{word-break:break-all;color:var(--ink)}
+.chain .arrow{color:var(--ink-3);margin:2px 0}
+.timeline{list-style:none;margin:12px 0 0;padding:0;font-family:var(--mono);font-size:12px}
+.timeline li{display:grid;grid-template-columns:92px 1fr auto;gap:10px;padding:5px 0;border-bottom:1px solid var(--line)}
+.timeline li:last-child{border-bottom:0}
+
+/* ---------- decisions bar ---------- */
+.dbar{display:flex;height:10px;border-radius:5px;overflow:hidden;background:var(--surface-2);margin:8px 0 6px}
+.dbar span{display:block;height:100%}
+.legend{display:flex;gap:14px;font-family:var(--mono);font-size:11.5px;color:var(--ink-2);flex-wrap:wrap}
+.legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+
+/* ---------- explain ---------- */
+.explain{display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:8px;align-items:end}
+.explain label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--ink-2)}
+.explain input{font:inherit;font-family:var(--mono);font-size:12.5px;padding:6px 8px;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);color:var(--ink)}
+.explain button{padding:7px 12px;border:1px solid var(--ink);background:var(--ink);color:var(--bg);border-radius:var(--radius);cursor:pointer}
+.verdict{margin-top:14px;padding:12px 14px;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface-2)}
+.verdict .big{font-family:var(--serif);font-size:20px;letter-spacing:-.01em;display:flex;align-items:center;gap:10px}
+.verdict ul{margin:8px 0 0;padding-left:18px;font-family:var(--mono);font-size:12px}
+.verdict li.win{font-weight:600}
+@media (max-width:800px){ .explain{grid-template-columns:1fr 1fr} .cards{grid-template-columns:1fr} main{padding:12px} }
+@media (max-width:700px){
+  .top{padding:0 12px;gap:8px} nav{padding:0 8px} #head,#entries,.top .chip:last-child{display:none}
+  #journal-rows td:nth-child(1),#journal-rows td:nth-child(2),#journal-rows td:nth-child(8),#journal-rows td:nth-child(9),#journal-rows td:nth-child(10),
+  #v-journal th:nth-child(1),#v-journal th:nth-child(2),#v-journal th:nth-child(8),#v-journal th:nth-child(9),#v-journal th:nth-child(10){display:none}
+  .scroll table{min-width:0} .wrap{min-width:0;max-width:none}
+}
+
+/* ---------- first run ---------- */
+.firstrun{padding:22px 18px;display:grid;grid-template-columns:1fr 1fr;gap:18px}
+.firstrun h3{font-family:var(--serif);font-weight:500;font-size:20px;margin-bottom:6px}
+.firstrun pre{margin:8px 0 0;padding:10px 12px;background:var(--surface-2);border-radius:var(--radius);font:12px/1.55 var(--mono);overflow-x:auto}
+@media (max-width:800px){ .firstrun{grid-template-columns:1fr} }
+.toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:8px 14px;border-radius:var(--radius);font-size:12.5px;opacity:0;transition:opacity .2s;pointer-events:none}
+.toast.on{opacity:1}
 </style>
 </head>
 <body>
 
-<header>
-  <div class="brand">nim <span>console</span></div>
-  <span class="badge ro">read-only</span>
-  <span class="badge" id="daemon"><span class="dot off"></span>daemon —</span>
-  <span class="badge" id="entries">— entries</span>
+<header class="top">
+  <a class="brand" href="#overview">nim<span>console</span></a>
+  <span class="chip" id="daemon"><span class="dot"></span>daemon —</span>
+  <span class="chip" id="entries">— entries</span>
+  <span class="chip copy" id="head" title="the journal head; click to copy the full hash">head —</span>
   <div class="spacer"></div>
-  <span class="badge" id="head" title="journal head">head —</span>
+  <button class="iconbtn" id="theme" title="theme: system, light, dark">theme</button>
+  <span class="chip" title="This page only reads. It cannot change anything Nim recorded or decided.">read-only</span>
 </header>
 
-<nav>
-  <button data-v="overview" class="sel">Overview</button>
-  <button data-v="live">Live activity</button>
-  <button data-v="journal">Journal</button>
-  <button data-v="sessions">Sessions</button>
+<div class="held-strip" id="held-strip">
+  <span class="pulse"></span>
+  <span><b id="held-n">0</b> <span id="held-word">calls</span> held for you</span>
+  <a href="#held">See what is waiting →</a>
+</div>
+
+<nav aria-label="Views">
+  <button data-v="overview" class="sel" title="key 1">Overview</button>
+  <button data-v="held" title="key 2">Held <span class="n" id="nav-held">0</span></button>
+  <button data-v="journal" title="key 3, / to search">Journal <span class="n" id="nav-journal">0</span></button>
+  <button data-v="sessions" title="key 4">Sessions <span class="n" id="nav-sessions">0</span></button>
+  <button data-v="policy" title="key 5">Policy <span class="n" id="nav-policy">0</span></button>
 </nav>
 
 <main id="main">
-<div>
+<div id="content">
+
   <!-- OVERVIEW -->
   <section class="view sel" id="v-overview">
     <div id="alerts"></div>
-
-    <div class="panel"><div class="hd">Journal</div>
-      <div class="grid" id="ov-journal"></div>
-    </div>
-
-    <div class="panel"><div class="hd">Detectable gaps</div>
-      <div class="grid" id="ov-gaps"></div>
-      <div class="bd">
-        <p class="note">These are the gaps that leave evidence behind. Reporting from the
-        relay to the daemon is asynchronous and one-way, so an event the daemon accepted and
-        then failed to write leaves nothing to count — it cannot be told apart from no event
-        having been sent. Read these as detected, never as all.</p>
+    <div class="panel" id="firstrun" style="display:none">
+      <div class="firstrun">
+        <div>
+          <h3>Nothing recorded yet.</h3>
+          <p class="note">Point a client at Nim, make one tool call, and it appears here as it is written. The daemon starts on its own the first time a relay needs it.</p>
+          <pre>nim init            # shows what it would rewrite
+nim init --write    # applies it, with backups
+nim doctor          # every check, with a remedy</pre>
+        </div>
+        <div>
+          <h3>Then decide something.</h3>
+          <p class="note">A rule is <code>deny</code>, <code>allow</code> or <code>ask</code>, scoped to a tool and, if you want, one agent and one connector. A held call shows up under <b>Held</b> with its real arguments.</p>
+          <pre>nim policy deny delete_repository
+nim policy ask force_push --connector github
+nim policy budget 20 --tool list_repos --all-tools</pre>
+        </div>
       </div>
     </div>
 
-    <div class="panel"><div class="hd">Anomalies by type</div>
-      <div class="bd" id="ov-anomalies"></div>
+    <div class="panel"><div class="hd"><h2>The record</h2><span class="sub">what the journal on this machine holds right now</span></div>
+      <div class="grid three" id="ov-journal"></div>
+    </div>
+
+    <div class="panel"><div class="hd"><h2>Decisions</h2><span class="sub" id="ov-decisions-sub">across every call.request the page has read</span></div>
+      <div class="bd">
+        <div class="dbar" id="dbar"></div>
+        <div class="legend" id="dlegend"></div>
+        <p class="note" style="margin-top:10px">Counts of decisions, not of what a server did afterwards: a refused call has no outcome, and an allowed one may still fail on the server's side. <b>held</b> is a call that waited for a human and was approved or rejected.</p>
+      </div>
+    </div>
+
+    <div class="panel"><div class="hd"><h2>Latest calls</h2><span class="sub">the newest call.request entries; the Journal holds every kind</span></div>
+      <div class="scroll" style="max-height:none"><table><thead><tr><th>#</th><th>when</th><th>tool</th><th>decision</th><th>agent</th><th>connector</th><th>session</th></tr></thead><tbody id="ov-latest"></tbody></table></div>
+    </div>
+
+    <div class="panel"><div class="hd"><h2>Detectable gaps</h2><span class="sub">what the record can see is missing from itself</span></div>
+      <div class="grid" id="ov-gaps"></div>
+      <div class="bd"><p class="note">Reporting from the relay to the daemon is asynchronous and one-way, so an event the daemon accepted and then failed to write leaves nothing to count. Read these as detected, never as all.</p></div>
+    </div>
+
+    <div class="panel"><div class="hd"><h2>Policy in effect</h2><span class="sub">what may happen, not what did</span></div>
+      <div class="grid" id="ov-policy"></div>
     </div>
   </section>
 
-  <!-- LIVE -->
-  <section class="view" id="v-live">
-    <div class="panel">
-      <div class="hd">Live activity — newest first, ordered by chain_seq</div>
-      <div class="scroll"><table>
-        <thead><tr><th>#</th><th>kind</th><th>session</th><th>seq</th><th>tool</th>
-          <th>decision</th><th>outcome</th><th>ms</th><th>occurred_at</th></tr></thead>
-        <tbody id="live-rows"></tbody>
-      </table></div>
-      <div class="bd"><p class="note" id="live-note">Waiting for the journal…</p></div>
+  <!-- HELD -->
+  <section class="view" id="v-held">
+    <div class="panel"><div class="hd"><h2>Held for a human</h2><span class="sub" id="held-sub">calls an <code>ask</code> rule stopped, waiting for your decision</span></div>
+      <div class="bd">
+        <div class="cards" id="held-cards"></div>
+        <div class="empty" id="held-empty">Nothing is waiting.</div>
+        <p class="note" style="margin-top:12px">What you see is exactly what the server would receive, every byte as itself, never a summary. Deciding happens on the command line on purpose: a page any other page on this machine can reach must not be able to approve. Nobody deciding within the approval timeout rejects the call, and the client is told a human said no.</p>
+      </div>
     </div>
   </section>
 
   <!-- JOURNAL -->
   <section class="view" id="v-journal">
     <div class="panel">
-      <div class="hd">Journal entries — ordered by chain_seq</div>
+      <div class="bar">
+        <input type="search" id="q" placeholder="search tool, agent, connector, session…  ( / )" aria-label="Search">
+        <label>kind <select id="f-kind"><option value="">all</option></select></label>
+        <label>decision <select id="f-dec"><option value="">all</option><option>allow</option><option>deny</option><option>ask</option><option>approved</option><option>rejected</option></select></label>
+        <span class="toggle on" id="follow" role="switch" aria-checked="true"><span class="sw"></span>follow</span>
+        <span class="count" id="journal-count"></span>
+      </div>
       <div class="scroll"><table>
-        <thead><tr><th>#</th><th>kind</th><th>session</th><th>seq</th><th>detail</th>
-          <th>occurred_at</th></tr></thead>
+        <thead><tr><th>#</th><th>when</th><th>kind</th><th>tool</th><th>decision</th><th>result</th><th>ms</th><th>agent</th><th>connector</th><th>session</th></tr></thead>
         <tbody id="journal-rows"></tbody>
       </table></div>
     </div>
@@ -145,308 +306,385 @@ tbody tr.sel{background:#1d2836}
 
   <!-- SESSIONS -->
   <section class="view" id="v-sessions">
-    <div class="panel">
-      <div class="hd">Sessions — newest first</div>
+    <div class="panel"><div class="hd"><h2>Sessions</h2><span class="sub">one relay run each, newest first</span></div>
       <div class="scroll"><table>
-        <thead><tr><th>#</th><th>session</th><th>state</th><th>connector</th><th>client</th>
-          <th>calls recorded</th><th>denied</th><th>outcomes</th><th>anomalies</th><th>started</th></tr></thead>
+        <thead><tr><th>#</th><th>started</th><th>state</th><th>agent</th><th>connector</th><th>client</th><th>calls</th><th>denied</th><th>outcomes</th><th>anomalies</th><th>session</th></tr></thead>
         <tbody id="session-rows"></tbody>
       </table></div>
       <div class="bd">
-        <p class="note"><b>unfinished</b> means no <code>session.end</code> was recorded. That
-        covers a session running right now and one whose daemon died without writing an end —
-        the journal cannot tell them apart, so neither can this page.</p>
-        <p class="note"><b>denied</b> counts the calls Nim refused. A refused call never
-        gets an outcome, so <b>calls recorded</b> minus <b>outcomes</b> is not a count of
-        anything that went missing.</p>
-        <p class="note"><b>connector</b> and <b>client</b> are labels the relay reported for
-        itself. They are self-asserted, not facts Nim established.</p>
+        <p class="note"><b>unfinished</b> covers a session running right now and one whose daemon died without writing an end; the journal cannot tell them apart, so neither can this page. <b>agent</b> is what the daemon derived from the kernel; <b>connector</b> and <b>client</b> are labels the relay reported for itself.</p>
       </div>
+    </div>
+  </section>
+
+  <!-- POLICY -->
+  <section class="view" id="v-policy">
+    <div class="panel"><div class="hd"><h2>Explain a call</h2><span class="sub">what a call shaped like this would get, decided by the same function the daemon uses</span></div>
+      <div class="bd">
+        <form class="explain" id="explain">
+          <label>tool <input id="x-tool" list="dl-tools" placeholder="delete_repository" required></label>
+          <label>agent <input id="x-agent" list="dl-agents" placeholder="(unenrolled)"></label>
+          <label>connector <input id="x-conn" list="dl-conns" placeholder="(any)"></label>
+          <button type="submit">Explain</button>
+        </form>
+        <datalist id="dl-tools"></datalist><datalist id="dl-agents"></datalist><datalist id="dl-conns"></datalist>
+        <div class="verdict" id="verdict" style="display:none"></div>
+      </div>
+    </div>
+
+    <div class="panel"><div class="hd"><h2>Rules</h2><span class="sub">most specific wins; deny beats ask beats allow; no rule is allow</span></div>
+      <div class="scroll"><table><thead><tr><th>effect</th><th>tool</th><th>agent</th><th>connector</th><th>since</th></tr></thead><tbody id="policy-rules"></tbody></table></div>
+    </div>
+    <div class="panel"><div class="hd"><h2>Budgets</h2><span class="sub">allowed calls one session may make; a budget narrows, never grants</span></div>
+      <div class="scroll"><table><thead><tr><th>calls</th><th>tool</th><th>agent</th><th>connector</th><th>since</th></tr></thead><tbody id="policy-budgets"></tbody></table></div>
+    </div>
+    <div class="panel"><div class="hd"><h2>Agents</h2><span class="sub">enrolled programs, identified by the executable the kernel reports</span></div>
+      <div class="scroll"><table><thead><tr><th>name</th><th>state</th><th>enrolled</th><th>executable</th></tr></thead><tbody id="policy-agents"></tbody></table></div>
+      <div class="bd"><p class="note"><b>stale</b> means the file at that path is no longer the one enrolled: not tampering, just a rebuild or an update, and the enrolment needs repeating. <b>unknown</b> means this platform cannot check a file's identity.</p></div>
+    </div>
+    <div class="panel"><div class="hd"><h2>Connectors</h2><span class="sub">the one command each credential may be injected into</span></div>
+      <div class="scroll"><table><thead><tr><th>target</th><th>env key</th><th>command</th><th>updated</th></tr></thead><tbody id="policy-connectors"></tbody></table></div>
+      <div class="bd"><p class="note">The credential value is never here and never was: only the env var name and the argv authorized to receive it.</p></div>
     </div>
   </section>
 </div>
 
-<aside id="detail" style="display:none">
-  <div class="panel"><div class="hd" id="detail-hd">Entry</div>
-    <div class="bd"><dl class="kv" id="detail-kv"></dl>
+<aside id="detail">
+  <div class="panel">
+    <div class="hd"><h2 id="detail-hd">Entry</h2><button class="iconbtn close" id="detail-close" title="close (Esc)">close</button></div>
+    <div class="bd">
+      <dl class="kv" id="detail-kv"></dl>
+      <div id="detail-extra"></div>
       <p class="note" id="detail-note" style="margin-top:12px"></p>
     </div>
   </div>
 </aside>
 </main>
+<div class="toast" id="toast"></div>
 
 <script>
 "use strict";
-const SNAPSHOT_MS = 3000;   // how often the state of the record is re-read
-const EVENTS_MS   = 1000;   // how often new entries are pulled
-const PAGE        = 200;
+const SNAPSHOT_MS = 3000, EVENTS_MS = 1000, PENDING_MS = 2000, PAGE = 200, KEEP = 3000;
+const $ = (s) => document.querySelector(s);
+const el = (t, c, txt) => { const e = document.createElement(t); if (c) e.className = c; if (txt !== undefined) e.textContent = txt; return e; };
 
-const $  = (s) => document.querySelector(s);
-const el = (t, c, txt) => { const e = document.createElement(t);
-  if (c) e.className = c; if (txt !== undefined) e.textContent = txt; return e; };
+let cursor = 0, events = [], snapshot = null, policy = null, pending = null, selected = null, lastHeldCount = 0;
+const seen = new Set();
 
-let cursor = 0;            // highest chain_seq seen; the only client-side state
-let events = [];           // newest first, for rendering only
-let snapshot = null;
-let selected = null;
-
-/* ---------- rendering helpers ---------- */
+/* ---------- helpers ---------- */
 const shortId = (s) => s ? s.slice(0, 8) : "";
-const shortHash = (h) => h ? h.slice(0, 16) : "";
-const when = (s) => { if (!s) return ""; const d = new Date(s);
-  return isNaN(d) ? s : d.toLocaleTimeString(undefined, {hour12:false}) +
-    "." + String(d.getMilliseconds()).padStart(3,"0"); };
+const sessionOf = (e) => ((snapshot && snapshot.sessions) || []).find(x => x.id === e.session_id);
+const agentOf = (e) => e.agent || (sessionOf(e) || {}).agent || "";
+const connectorOf = (e) => e.connector || (sessionOf(e) || {}).connector || "";
+const shortHash = (h) => h ? h.slice(0, 12) : "";
+const when = (s) => { if (!s) return ""; const d = new Date(s); return isNaN(d) ? s :
+  d.toLocaleTimeString(undefined, {hour12:false}) + "." + String(d.getMilliseconds()).padStart(3, "0"); };
+const age = (s) => { const ms = Date.now() - new Date(s).getTime(); if (isNaN(ms)) return ""; const sec = Math.max(0, Math.round(ms / 1000));
+  return sec < 60 ? sec + "s" : sec < 3600 ? Math.floor(sec / 60) + "m " + (sec % 60) + "s" : Math.floor(sec / 3600) + "h"; };
+function toast(msg) { const t = $("#toast"); t.textContent = msg; t.classList.add("on"); setTimeout(() => t.classList.remove("on"), 1400); }
+async function copy(text, msg) { try { await navigator.clipboard.writeText(text); toast(msg || "copied"); } catch { toast("could not copy"); } }
+// Arguments are the model's to write. A browser does not obey escape
+// sequences the way a terminal does, but it does obey bidirectional
+// overrides, which can make text read backwards; those are shown as escapes.
+const visible = (s) => s.replace(/[‪-‮⁦-⁩​-‏\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g,
+  (c) => "\\u" + c.charCodeAt(0).toString(16).toUpperCase().padStart(4, "0"));
+function prettyArgs(raw) { if (raw === undefined || raw === null || raw === "") return "(none)";
+  if (typeof raw === "string") { try { raw = JSON.parse(raw); } catch { return visible(raw); } }
+  return visible(JSON.stringify(raw, null, 2)); }
+function decisionChip(d) { if (!d) return document.createTextNode(""); return el("span", "d d-" + d, d); }
+function kindChip(kind) { const s = el("span", "k", kind); s.classList.add("k-" + kind); return s; }
+function cell(n, label, sub, cls, word) { const c = el("div", "cell");
+  c.appendChild(el("div", "n " + (cls || "") + (word ? " word" : ""), n)); c.appendChild(el("div", "l", label)); if (sub) c.appendChild(el("div", "s", sub)); return c; }
+const isRule = (k) => k === "rule.add" || k === "rule.remove" || k === "budget.add" || k === "budget.remove";
+const isEnrol = (k) => k === "agent.add" || k === "agent.remove";
+function scopeText(e) { const p = []; if (e.agent) p.push("agent=" + e.agent); if (e.connector) p.push("connector=" + e.connector); if (e.tool) p.push("tool=" + e.tool);
+  if (e.budget_calls !== undefined && e.budget_calls !== null) p.push("calls=" + e.budget_calls); return p.join(" "); }
 
-function kindCell(kind) {
-  const s = el("span", "k k-" + kind.replace(".", "\\."), kind);
-  s.className = "k k-" + kind; return s;
-}
-function cell(n, label, sub, cls) {
-  const c = el("div", "cell");
-  c.appendChild(el("div", "n " + (cls || ""), n));
-  c.appendChild(el("div", "l", label));
-  if (sub) c.appendChild(el("div", "s", sub));
-  return c;
-}
+/* ---------- theme ---------- */
+const THEMES = ["system", "light", "dark"];
+function applyTheme(t) { if (t === "system") document.documentElement.removeAttribute("data-theme"); else document.documentElement.dataset.theme = t; $("#theme").textContent = "theme: " + t; }
+let theme = "system"; try { theme = localStorage.getItem("nim.theme") || "system"; } catch {}
+{ const q = new URLSearchParams(location.search).get("theme"); if (THEMES.includes(q)) theme = q; }
+applyTheme(theme);
+$("#theme").onclick = () => { theme = THEMES[(THEMES.indexOf(theme) + 1) % THEMES.length]; try { localStorage.setItem("nim.theme", theme); } catch {} applyTheme(theme); };
 
 /* ---------- overview ---------- */
 const CHAIN_TEXT = {
-  empty:          ["nothing to check", "dim",
-                   "Nothing recorded yet — nothing to check. This is not a journal that passed verification."],
-  self_consistent:["self-consistent", "ok",
-                   "Every entry hashes to what it stores and links to the one before it. This does not mean nothing was removed: anyone who can write the journal file can recompute the chain, and a shorter chain checks out just as cleanly."],
-  partial:        ["self-consistent from entry 2", "warn",
-                   "Checked from the second entry on. The install identifier that seeds the chain could not be read, so entry 1 has nothing to be compared against."],
-  broken:         ["broken", "bad", ""],
+  empty: ["nothing to check", "faint", "Nothing recorded yet, so nothing was checked. This is not a journal that passed."],
+  self_consistent: ["self-consistent", "ok", "Every entry hashes to what it stores and links to the one before it. Not proof nothing was removed: anyone who can write the file can recompute the chain."],
+  partial: ["self-consistent from entry 2", "warn", "The install identifier that seeds the chain could not be read, so entry 1 has nothing to be compared against."],
+  broken: ["broken", "bad", ""],
 };
-
 function renderOverview() {
   const s = snapshot; if (!s) return;
   const j = s.journal, g = s.gaps;
+  $("#firstrun").style.display = j.entries === 0 ? "" : "none";
 
   const jr = $("#ov-journal"); jr.replaceChildren();
-  jr.appendChild(cell(j.entries, "entries in the journal"));
-  jr.appendChild(cell(j.entries, "current chain_seq", "the journal's own order"));
-  jr.appendChild(cell(s.calls_recorded, "calls recorded",
-    "reached the journal — not calls made or executed"));
-  const [chainLabel, chainCls] = CHAIN_TEXT[j.chain] || ["unknown", "dim"];
-  jr.appendChild(cell(chainLabel, "chain", j.problem || "", chainCls));
-  jr.appendChild(cell(j.verification_material ? "available" : "missing",
-    "verification material", j.verification_material ? "machine-id readable" : "machine-id not readable",
-    j.verification_material ? "ok" : "warn"));
-  jr.appendChild(cell("v" + j.schema_version, "schema version"));
+  const [chainLabel, chainCls] = CHAIN_TEXT[j.chain] || ["unknown", "faint"];
+  jr.appendChild(cell(chainLabel, "chain", j.problem || CHAIN_TEXT[j.chain]?.[2] || "", chainCls, true));
+  jr.appendChild(cell(j.entries, "entries", "the journal's own order, chain_seq"));
+  jr.appendChild(cell(s.calls_recorded, "calls recorded", "reached the journal; not calls made or executed"));
+  jr.appendChild(cell((s.sessions || []).filter(x => x.state === "unfinished").length, "sessions open", (s.sessions || []).length + " recorded in total"));
+  jr.appendChild(cell(j.verification_material ? "readable" : "missing", "verification material", j.verification_material ? "machine-id present" : "machine-id could not be read", j.verification_material ? "" : "warn", true));
+  jr.appendChild(cell("v" + j.schema_version, "schema", "docs/journal-format.md"));
+
+  // decisions bar, from what this page has read
+  const counts = {allow: 0, deny: 0, held: 0};
+  for (const e of events) if (e.kind === "call.request") { if (e.decision === "allow") counts.allow++; else if (e.decision === "deny") counts.deny++; else if (e.decision === "approved" || e.decision === "rejected") counts.held++; }
+  const total = counts.allow + counts.deny + counts.held;
+  const bar = $("#dbar"); bar.replaceChildren();
+  const leg = $("#dlegend"); leg.replaceChildren();
+  const parts = [["allow", counts.allow, "var(--ok)"], ["deny", counts.deny, "var(--bad)"], ["held", counts.held, "var(--warn)"]];
+  for (const [name, n, color] of parts) {
+    const sp = el("span"); sp.style.width = (total ? n / total * 100 : 0) + "%"; sp.style.background = color; bar.appendChild(sp);
+    const li = el("span"); const i = el("i"); i.style.background = color; li.appendChild(i); li.append(name + " " + n); leg.appendChild(li);
+  }
+  $("#ov-decisions-sub").textContent = total ? "across the " + total + " call.request entries this page has read" : "no calls recorded yet";
+
+  const lr = $("#ov-latest"); lr.replaceChildren();
+  const latest = events.filter(e => e.kind === "call.request").slice(0, 8);
+  if (!latest.length) lr.appendChild(el("tr")).appendChild(Object.assign(el("td", "empty"), {colSpan: 7, textContent: "No calls yet."}));
+  for (const e of latest) { const tr = el("tr"); const add = (v, c) => { const td = el("td", c); if (v instanceof Node) td.appendChild(v); else td.textContent = v ?? ""; tr.appendChild(td); };
+    add(e.chain_seq, "num"); add(when(e.occurred_at), "num"); add("#" + e.seq + " " + (e.tool || "")); add(decisionChip(e.decision)); add(agentOf(e), agentOf(e) ? "" : "num"); add(connectorOf(e)); add(shortId(e.session_id), "num");
+    tr.onclick = () => select(e); lr.appendChild(tr); }
 
   const gr = $("#ov-gaps"); gr.replaceChildren();
-  gr.appendChild(cell(g.unfinished_sessions, "sessions unfinished", "no session.end recorded",
-    g.unfinished_sessions ? "warn" : ""));
-  gr.appendChild(cell(g.missing_call_entries, "call entries missing",
-    "gaps in a session's seq", g.missing_call_entries ? "warn" : ""));
-  gr.appendChild(cell(g.sessions_with_gaps, "sessions with gaps"));
-  gr.appendChild(cell(g.anomalies_total, "anomalies recorded",
-    "messages relayed without inspection", g.anomalies_total ? "warn" : ""));
-
-  const an = $("#ov-anomalies"); an.replaceChildren();
-  const kinds = Object.keys(g.anomalies || {}).sort();
-  if (!kinds.length) {
-    an.appendChild(el("p", "note", "None of the detectable kinds found."));
-  } else {
-    const dl = el("dl", "kv");
-    for (const k of kinds) {
-      dl.appendChild(el("dt", null, k));
-      dl.appendChild(el("dd", null, String(g.anomalies[k])));
-    }
-    an.appendChild(dl);
-    an.appendChild(el("p", "note",
-      "These messages were relayed without being inspected. Nothing is blocked at this stage; they are counted so the blind spot has a number."));
-  }
+  gr.appendChild(cell(g.unfinished_sessions, "sessions unfinished", "no session.end recorded", g.unfinished_sessions ? "warn" : ""));
+  gr.appendChild(cell(g.missing_call_entries, "call entries missing", "gaps in a session's seq", g.missing_call_entries ? "warn" : ""));
+  gr.appendChild(cell(g.calls_without_session, "calls without a session", "decided, but their session.start never arrived", g.calls_without_session ? "warn" : ""));
+  gr.appendChild(cell(g.anomalies_total, "anomalies", Object.keys(g.anomalies || {}).sort().map(k => k + " " + g.anomalies[k]).join(", ") || "frames Nim could not account for", g.anomalies_total ? "warn" : ""));
 
   const alerts = $("#alerts"); alerts.replaceChildren();
-  if (j.chain === "broken") {
-    const a = el("div", "alert"); a.appendChild(el("div", "t", "Chain check failed"));
-    a.appendChild(el("div", "note", j.problem || "")); alerts.appendChild(a);
-  }
-  if (!j.verification_material && j.entries > 0) {
-    const a = el("div", "alert");
-    a.appendChild(el("div", "t", "Verification material missing"));
-    a.appendChild(el("div", "note",
-      "machine-id could not be read, so the first entry cannot be checked against anything. " +
-      "This is missing verification material — it is not evidence that the journal was altered. " +
-      "Restore the file and the whole chain can be checked again."));
-    alerts.appendChild(a);
-  }
-  if (j.chain === "empty") {
-    const a = el("div", "alert info");
-    a.appendChild(el("div", "t", "Nothing recorded yet"));
-    a.appendChild(el("div", "note", "The journal has no entries, so there was nothing to check."));
-    alerts.appendChild(a);
+  if (j.chain === "broken") { const a = el("div", "panel"); const b = el("div", "bd"); b.appendChild(el("h2", "bad", "Chain check failed")); b.appendChild(el("p", "note", j.problem || "")); a.appendChild(b); alerts.appendChild(a); }
+
+  const pr = $("#ov-policy"); pr.replaceChildren();
+  if (!policy) pr.appendChild(cell("—", "loading…"));
+  else {
+    const agents = policy.agents || [], stale = agents.filter(a => a.current === false).length;
+    const eff = {deny: 0, allow: 0, ask: 0}; for (const r of policy.rules || []) eff[r.effect] = (eff[r.effect] || 0) + 1;
+    pr.appendChild(cell((policy.rules || []).length, "rules", `${eff.deny} deny · ${eff.ask} ask · ${eff.allow} allow`));
+    pr.appendChild(cell((policy.budgets || []).length, "budgets", "caps on allowed calls, per session"));
+    pr.appendChild(cell(agents.length, "agents enrolled", stale ? stale + " stale" : "", stale ? "warn" : ""));
+    pr.appendChild(cell((policy.connectors || []).length, "connectors", "commands a credential may go to"));
   }
 }
 
-/* ---------- tables ---------- */
-function eventRow(e, mode) {
-  const tr = el("tr"); tr.dataset.seq = e.chain_seq;
-  const add = (v, c) => { const td = el("td", c); if (v instanceof Node) td.appendChild(v);
-    else td.textContent = v === undefined || v === null ? "" : v; tr.appendChild(td); };
-  add(e.chain_seq, "num");
-  add(kindCell(e.kind));
-  add(shortId(e.session_id));
-  add(e.seq);
-  if (mode === "live") {
-    add(e.tool);
-    add(e.decision, "dim");
-    add(e.ok === undefined ? "" : (e.ok ? "ok" : "failed"), e.ok === false ? "bad" : "ok");
-    add(e.duration_ms);
-  } else {
-    add(e.tool || e.connector || e.anomaly || "", e.anomaly ? "warn" : "");
+/* ---------- held ---------- */
+function renderHeld() {
+  const list = pending && pending.pending ? pending.pending : [];
+  const n = list.length;
+  $("#nav-held").textContent = n; $("#nav-held").classList.toggle("warn", n > 0);
+  $("#held-n").textContent = n; $("#held-word").textContent = n === 1 ? "call" : "calls";
+  const strip = $("#held-strip"); strip.classList.toggle("on", n > 0);
+  if (n > lastHeldCount) { const p = strip.querySelector(".pulse"); p.style.animation = "none"; void p.offsetWidth; p.style.animation = ""; }
+  lastHeldCount = n;
+  const sub = $("#held-sub");
+  if (pending && !pending.available) sub.textContent = "the daemon could not be asked: " + (pending.reason || "not running");
+  else sub.textContent = n ? n + " waiting; nobody deciding within the approval timeout rejects them" : "calls an ask rule stopped, waiting for your decision";
+  const cards = $("#held-cards"); cards.replaceChildren();
+  $("#held-empty").style.display = n ? "none" : "";
+  $("#held-empty").textContent = pending && !pending.available ? "Nothing to show: this console cannot reach the daemon." : "Nothing is waiting.";
+  for (const p of list) {
+    const c = el("div", "card");
+    const ch = el("div", "ch"); ch.appendChild(el("span", null, "held")); ch.appendChild(el("b", null, p.tool)); ch.appendChild(el("span", "age", age(p.started_at) + " ago")); c.appendChild(ch);
+    const dl = el("dl", "meta");
+    const row = (k, v) => { dl.appendChild(el("dt", null, k)); dl.appendChild(el("dd", null, v || "—")); };
+    row("agent", p.agent || "(unenrolled)"); row("connector", p.connector); row("since", when(p.started_at)); row("id", p.id);
+    c.appendChild(dl);
+    const pre = el("pre"); pre.textContent = p.arguments_known ? prettyArgs(p.arguments) : "(arguments not received from the relay yet; the daemon refuses to approve until they are)"; c.appendChild(pre);
+    const cmds = el("div", "cmds");
+    for (const [label, cmd] of [["approve", "nim approve " + p.id], ["reject", 'nim reject ' + p.id + ' --reason ""']]) {
+      const w = el("div", "cmd"); w.appendChild(el("code", null, cmd));
+      const b = el("button", null, "copy " + label); b.onclick = () => { copy(cmd, "copied: " + cmd); b.classList.add("done"); b.textContent = "copied"; setTimeout(() => { b.classList.remove("done"); b.textContent = "copy " + label; }, 1500); };
+      w.appendChild(b); cmds.appendChild(w);
+    }
+    c.appendChild(cmds); cards.appendChild(c);
   }
-  add(when(e.occurred_at), "dim");
+}
+
+/* ---------- journal ---------- */
+function eventRow(e) {
+  const tr = el("tr"); tr.dataset.seq = e.chain_seq;
+  const add = (v, c) => { const td = el("td", c); if (v instanceof Node) td.appendChild(v); else td.textContent = v === undefined || v === null ? "" : v; tr.appendChild(td); };
+  add(e.chain_seq, "num"); add(when(e.occurred_at), "num"); add(kindChip(e.kind));
+  if (isRule(e.kind) || isEnrol(e.kind)) { const td = el("td", "wrap"); td.textContent = isEnrol(e.kind) ? (e.agent || "") + (e.exec_path ? " " + e.exec_path : "") : scopeText(e); tr.appendChild(td); }
+  else if (e.kind === "session.start") add("client " + (e.client || "?") + (e.protocol_version ? ", protocol " + e.protocol_version : ""), "dim");
+  else if (e.kind === "call.outcome") add("#" + e.seq + " answered", "dim");
+  else add((e.seq ? "#" + e.seq + " " : "") + (e.tool || e.anomaly || ""), e.anomaly ? "warn" : "");
+  add(decisionChip(e.kind === "rule.add" ? e.decision : (e.kind === "call.request" ? e.decision : "")));
+  add(e.ok === undefined ? "" : (e.ok ? "ok" : "failed"), e.ok === false ? "bad" : "ok"); add(e.duration_ms, "num");
+  const ag = agentOf(e), co = connectorOf(e);
+  add(ag, ag ? "" : "num"); add(co); add(shortId(e.session_id), "num");
   tr.onclick = () => select(e);
   if (selected && selected.chain_seq === e.chain_seq) tr.classList.add("sel");
+  if (!seen.has(e.chain_seq)) { tr.classList.add("arrive"); seen.add(e.chain_seq); }
   return tr;
 }
-
-function renderLive() {
-  const rows = $("#live-rows"); rows.replaceChildren();
-  for (const e of events.slice(0, 500)) rows.appendChild(eventRow(e, "live"));
-  $("#live-note").textContent = events.length
-    ? "Newest first. New entries appear as the daemon writes them; the browser asks only for what came after the last chain_seq it saw."
-    : "Nothing recorded yet — nothing to show.";
+function journalFilter() {
+  const q = $("#q").value.trim().toLowerCase(), kind = $("#f-kind").value, dec = $("#f-dec").value;
+  return events.filter(e => (!kind || e.kind === kind) && (!dec || e.decision === dec) &&
+    (!q || [e.tool, agentOf(e), connectorOf(e), e.session_id, e.kind, e.anomaly, e.client, e.exec_path].some(v => v && String(v).toLowerCase().includes(q))));
 }
-
 function renderJournal() {
   const rows = $("#journal-rows"); rows.replaceChildren();
-  for (const e of events.slice(0, 1000)) rows.appendChild(eventRow(e, "journal"));
-  if (!events.length) rows.appendChild(el("tr")).appendChild(
-    Object.assign(el("td", "empty"), {colSpan: 6, textContent: "Nothing recorded yet."}));
+  const list = journalFilter();
+  for (const e of list.slice(0, 1000)) rows.appendChild(eventRow(e));
+  $("#journal-count").textContent = list.length === events.length ? events.length + " entries" : list.length + " of " + events.length;
+  $("#nav-journal").textContent = events.length;
+  if (!events.length) rows.appendChild(el("tr")).appendChild(Object.assign(el("td", "empty"), {colSpan: 10, textContent: "Nothing recorded yet."}));
+  else if (!list.length) rows.appendChild(el("tr")).appendChild(Object.assign(el("td", "empty"), {colSpan: 10, textContent: "Nothing matches these filters."}));
+  const kinds = [...new Set(events.map(e => e.kind))].sort(); const sel = $("#f-kind"); const cur = sel.value;
+  if (sel.options.length !== kinds.length + 1) { sel.replaceChildren(el("option", null, "all")); sel.options[0].value = ""; for (const k of kinds) { const o = el("option", null, k); sel.appendChild(o); } sel.value = cur; }
 }
 
+/* ---------- sessions ---------- */
 function renderSessions() {
   const rows = $("#session-rows"); rows.replaceChildren();
   const list = (snapshot && snapshot.sessions) || [];
-  if (!list.length) {
-    const tr = el("tr"), td = el("td", "empty", "No sessions recorded.");
-    td.colSpan = 10; tr.appendChild(td); rows.appendChild(tr); return;
-  }
+  $("#nav-sessions").textContent = list.length;
+  if (!list.length) { rows.appendChild(el("tr")).appendChild(Object.assign(el("td", "empty"), {colSpan: 11, textContent: "No sessions recorded."})); return; }
   for (const s of list) {
     const tr = el("tr");
-    const add = (v, c) => { const td = el("td", c);
-      td.textContent = v === undefined || v === null ? "" : v; tr.appendChild(td); };
-    add(s.chain_seq, "num");
-    add(shortId(s.id));
-    add(s.state, s.state === "unfinished" ? "warn" : "dim");
-    add(s.connector); add(s.client);
-    add(s.calls_recorded); add(s.denied, s.denied ? "warn" : "dim"); add(s.outcomes);
-    add(s.anomalies, s.anomalies ? "warn" : "");
-    add(when(s.started_at), "dim");
-    tr.onclick = () => selectSession(s);
-    rows.appendChild(tr);
+    const add = (v, c) => { const td = el("td", c); td.textContent = v === undefined || v === null ? "" : v; tr.appendChild(td); };
+    add(s.chain_seq, "num"); add(when(s.started_at), "num"); add(s.state, s.state === "unfinished" ? "warn" : "dim");
+    add(s.agent || "(unenrolled)", s.agent ? "" : "num"); add(s.connector); add(s.client);
+    add(s.calls_recorded); add(s.denied, s.denied ? "bad" : "num"); add(s.outcomes); add(s.anomalies, s.anomalies ? "warn" : "num"); add(shortId(s.id), "num");
+    tr.onclick = () => selectSession(s); rows.appendChild(tr);
   }
 }
 
-/* ---------- detail ---------- */
-function verdictFor(e) {
-  if (!snapshot) return "";
-  const c = snapshot.journal.chain;
-  if (c === "self_consistent") return "Covered by the chain check, which passed for every entry.";
-  if (c === "partial") return e.chain_seq === 1
-    ? "Not checked: the install identifier that seeds the chain could not be read, so this entry has nothing to be compared against."
-    : "Covered by the chain check, which passed from entry 2 on.";
-  if (c === "broken") return "The chain check failed — see Overview for where.";
-  return "";
+/* ---------- policy ---------- */
+function fillTable(id, items, cols, emptyText) {
+  const tb = $(id); tb.replaceChildren();
+  if (!items.length) { tb.appendChild(el("tr")).appendChild(Object.assign(el("td", "empty"), {colSpan: cols.length, textContent: emptyText})); return; }
+  for (const it of items) { const tr = el("tr"); tr.style.cursor = "default"; for (const f of cols) { const td = el("td"); const v = f(it); if (v instanceof Node) td.appendChild(v); else if (Array.isArray(v)) { td.textContent = v[0]; if (v[1]) td.className = v[1]; } else td.textContent = v ?? ""; tr.appendChild(td); } tb.appendChild(tr); }
 }
+function renderPolicy() {
+  const p = policy || {rules: [], budgets: [], agents: [], connectors: []};
+  $("#nav-policy").textContent = (p.rules || []).length + (p.budgets || []).length;
+  fillTable("#policy-rules", p.rules || [], [r => decisionChip(r.effect), r => r.tool === "*" ? ["* (default)", "dim"] : r.tool, r => r.agent ? r.agent : ["every", "dim"], r => r.connector ? r.connector : ["every", "dim"], r => [when(r.created_at), "num"]], "No rules: every call is allowed for every agent on every connector.");
+  fillTable("#policy-budgets", p.budgets || [], [b => String(b.calls), b => b.tool === "*" ? ["every tool", "dim"] : b.tool, b => b.agent ? b.agent : ["every", "dim"], b => b.connector ? b.connector : ["every", "dim"], b => [when(b.created_at), "num"]], "No budgets set.");
+  fillTable("#policy-agents", p.agents || [], [a => a.name, a => a.current === null ? ["unknown", "dim"] : a.current ? ["ok", "ok"] : ["stale", "warn"], a => [when(a.enrolled_at), "num"], a => [a.exec_path, "dim"]], "No agents enrolled: every session is unenrolled and bound only by rules that name no agent.");
+  fillTable("#policy-connectors", p.connectors || [], [c => c.target, c => [c.env_key, "dim"], c => [(c.command || []).join(" "), "dim"], c => [when(c.updated_at), "num"]], "No connectors registered.");
+  const tools = [...new Set(events.filter(e => e.tool).map(e => e.tool).concat((p.rules || []).map(r => r.tool).filter(t => t !== "*")))].sort();
+  $("#dl-tools").replaceChildren(...tools.map(t => Object.assign(el("option"), {value: t})));
+  $("#dl-agents").replaceChildren(...(p.agents || []).map(a => Object.assign(el("option"), {value: a.name})));
+  const conns = [...new Set((snapshot?.sessions || []).map(s => s.connector).filter(Boolean).concat((p.connectors || []).map(c => c.target)))].sort();
+  $("#dl-conns").replaceChildren(...conns.map(c => Object.assign(el("option"), {value: c})));
+}
+$("#explain").onsubmit = async (ev) => {
+  ev.preventDefault();
+  const tool = $("#x-tool").value.trim(), agent = $("#x-agent").value.trim(), conn = $("#x-conn").value.trim();
+  if (!tool) return;
+  const r = await fetch("/api/explain?tool=" + encodeURIComponent(tool) + "&agent=" + encodeURIComponent(agent) + "&connector=" + encodeURIComponent(conn));
+  const v = $("#verdict"); v.replaceChildren(); v.style.display = "";
+  if (!r.ok) { v.appendChild(el("p", "note", "Could not explain: " + await r.text())); return; }
+  const x = await r.json();
+  const big = el("div", "big"); big.appendChild(decisionChip(x.decision));
+  big.append(` ${x.tool} for ${x.agent || "an unenrolled program"} on ${x.connector || "any connector"}`); v.appendChild(big);
+  v.appendChild(el("p", "note", x.by_rule ? "Decided by the most specific matching rule: " + ruleText(x.rule) + "." : "No rule matches this call, and a call no rule matches is allowed: rules only ever narrow."));
+  if ((x.matching || []).length > 1) { const ul = el("ul"); for (const r of x.matching) { const li = el("li", x.rule && sameRule(r, x.rule) ? "win" : "", ruleText(r)); ul.appendChild(li); } v.appendChild(el("p", "note", "Every rule that matched:")); v.appendChild(ul); }
+  if ((x.budgets || []).length) { const ul = el("ul"); for (const b of x.budgets) ul.appendChild(el("li", null, b.calls + " calls for " + (b.tool === "*" ? "every tool" : "tool " + b.tool) + " for " + (b.agent ? "agent " + b.agent : "every agent") + " on " + (b.connector ? "connector " + b.connector : "every connector")));
+    v.appendChild(el("p", "note", x.decision === "allow" ? "Once allowed, these budgets are weighed against the session:" : "Budgets that would apply if a rule allowed it:")); v.appendChild(ul); }
+};
+const ruleText = (r) => `${r.effect} ${r.tool === "*" ? "every tool (default)" : r.tool} for ${r.agent ? "agent " + r.agent : "every agent"} on ${r.connector ? "connector " + r.connector : "every connector"}`;
+const sameRule = (a, b) => a.tool === b.tool && (a.agent || "") === (b.agent || "") && (a.connector || "") === (b.connector || "") && a.effect === b.effect;
 
+/* ---------- detail ---------- */
+function openDetail() { $("#detail").classList.add("on"); $("#main").classList.add("split"); }
+function closeDetail() { selected = null; $("#detail").classList.remove("on"); $("#main").classList.remove("split"); history.replaceState(null, "", "#" + currentView()); render(); }
+$("#detail-close").onclick = closeDetail;
+function verdictFor(e) { if (!snapshot) return ""; const c = snapshot.journal.chain;
+  if (c === "self_consistent") return "Covered by the chain check, which passed for every entry.";
+  if (c === "partial") return e.chain_seq === 1 ? "Not checked: the install identifier could not be read, so entry 1 has nothing to be compared against." : "Covered by the chain check, which passed from entry 2 on.";
+  if (c === "broken") return "The chain check failed; see Overview for where."; return ""; }
 function select(e) {
   selected = e;
-  $("#detail-hd").textContent = "Entry #" + e.chain_seq + " — " + e.kind;
+  $("#detail-hd").textContent = "#" + e.chain_seq + " " + e.kind;
   const dl = $("#detail-kv"); dl.replaceChildren();
-  const row = (k, v, cls) => { if (v === undefined || v === null || v === "") return;
-    dl.appendChild(el("dt", null, k)); dl.appendChild(el("dd", cls, String(v))); };
-  row("chain_seq", e.chain_seq); row("kind", e.kind);
-  row("schema_version", e.schema_version);
-  row("session_id", e.session_id); row("occurred_at", e.occurred_at);
-  row("seq", e.seq); row("connector", e.connector); row("client", e.client);
-  row("machine_id", e.machine_id); row("tool", e.tool);
-  row("params_digest", e.params_digest);
-  row("decision", e.decision);
-  if (e.ok !== undefined) row("ok", e.ok);
-  row("duration_ms", e.duration_ms); row("anomaly", e.anomaly);
-  row("protocol_version", e.protocol_version);
-  row("prev_hash", e.prev_hash, "hash"); row("hash", e.hash, "hash");
-  $("#detail-note").textContent = verdictFor(e) +
-    " Only fields the journal stores are shown: arguments and responses are never recorded.";
-  $("#detail").style.display = ""; $("#main").classList.add("split");
-  render();
+  const row = (k, v) => { if (v === undefined || v === null || v === "") return; dl.appendChild(el("dt", null, k)); const dd = el("dd"); if (v instanceof Node) dd.appendChild(v); else dd.textContent = String(v); dl.appendChild(dd); };
+  row("occurred_at", e.occurred_at); row("session", e.session_id); row("seq", e.seq); row("agent", e.agent); row("connector", e.connector); row("client", e.client);
+  row("tool", e.tool); row("decision", e.decision ? decisionChip(e.decision) : null); if (e.ok !== undefined) row("ok", e.ok); row("duration_ms", e.duration_ms);
+  row("params_digest", e.params_digest); row("anomaly", e.anomaly); row("exec_path", e.exec_path); row("exec_id", e.exec_id); row("budget_calls", e.budget_calls);
+  row("protocol_version", e.protocol_version); row("machine_id", e.machine_id); row("schema_version", e.schema_version);
+  const ex = $("#detail-extra"); ex.replaceChildren();
+  const ch = el("div", "chain"); ch.appendChild(el("div", "faint", "prev_hash")); ch.appendChild(el("div", "h", e.prev_hash)); ch.appendChild(el("div", "arrow", "↓ canonical encoding v" + e.schema_version + " hashed with it")); ch.appendChild(el("div", "faint", "hash")); ch.appendChild(el("div", "h", e.hash)); ex.appendChild(ch);
+  $("#detail-note").textContent = verdictFor(e) + " Only what the journal stores is shown: arguments and responses are never recorded; a digest stands in for the arguments.";
+  if (currentView() === "journal") history.replaceState(null, "", "#journal/" + e.chain_seq);
+  openDetail(); render();
 }
-
 async function selectSession(s) {
-  const r = await fetch("/api/sessions/" + encodeURIComponent(s.id));
-  if (!r.ok) return;
-  const d = await r.json();
-  $("#detail-hd").textContent = "Session " + shortId(s.id);
+  const r = await fetch("/api/sessions/" + encodeURIComponent(s.id)); if (!r.ok) return;
+  const d = await r.json(); selected = null;
+  $("#detail-hd").textContent = "session " + shortId(s.id);
   const dl = $("#detail-kv"); dl.replaceChildren();
-  const row = (k, v) => { if (v === undefined || v === null || v === "") return;
-    dl.appendChild(el("dt", null, k)); dl.appendChild(el("dd", null, String(v))); };
-  row("session_id", d.session.id); row("state", d.session.state);
-  row("connector", d.session.connector); row("client", d.session.client);
-  row("machine_id", d.session.machine_id);
-  row("started_at", d.session.started_at); row("ended_at", d.session.ended_at);
-  row("calls recorded", d.session.calls_recorded); row("denied", d.session.denied);
-  row("outcomes", d.session.outcomes); row("anomalies", d.session.anomalies);
-  row("entries", d.events.length);
-  $("#detail-note").textContent = d.session.state === "unfinished"
-    ? "No session.end was recorded. That covers a session running now and one whose daemon died — the journal cannot tell them apart."
-    : "A session.end was recorded for this session.";
-  $("#detail").style.display = ""; $("#main").classList.add("split");
+  const row = (k, v) => { if (v === undefined || v === null || v === "") return; dl.appendChild(el("dt", null, k)); dl.appendChild(el("dd", null, String(v))); };
+  row("state", d.session.state); row("agent", d.session.agent || "(unenrolled)"); row("connector", d.session.connector); row("client", d.session.client);
+  row("started", d.session.started_at); row("ended", d.session.ended_at); row("calls", d.session.calls_recorded); row("denied", d.session.denied); row("outcomes", d.session.outcomes); row("anomalies", d.session.anomalies);
+  const ex = $("#detail-extra"); ex.replaceChildren();
+  const ul = el("ul", "timeline");
+  for (const e of d.events.filter(x => x.kind === "call.request" || x.kind === "call.outcome" || x.kind === "anomaly")) {
+    const li = el("li"); li.appendChild(el("span", "num", when(e.occurred_at)));
+    const mid = el("span"); if (e.kind === "call.request") { mid.textContent = (e.seq ? "#" + e.seq + " " : "") + (e.tool || ""); } else if (e.kind === "call.outcome") { mid.textContent = "#" + e.seq + " " + (e.ok ? "answered" : "failed") + (e.duration_ms != null ? ", " + e.duration_ms + " ms" : ""); mid.className = e.ok ? "dim" : "bad"; } else { mid.textContent = "anomaly " + (e.anomaly || ""); mid.className = "warn"; }
+    li.appendChild(mid); li.appendChild(e.kind === "call.request" ? decisionChip(e.decision) : el("span")); ul.appendChild(li);
+  }
+  ex.appendChild(ul);
+  $("#detail-note").textContent = d.session.state === "unfinished" ? "No session.end was recorded: a session running now, or one whose daemon died. The journal cannot tell them apart." : "A session.end was recorded for this session.";
+  history.replaceState(null, "", "#sessions/" + shortId(s.id));
+  openDetail();
 }
 
 /* ---------- polling ---------- */
+function currentView() { return document.querySelector("nav button.sel").dataset.v; }
+function resolveWanted() {
+  if (!wanted) return;
+  if (wanted.kind === "entry") { const e = events.find(x => x.chain_seq === wanted.seq); if (e) { wanted = null; select(e); } }
+  else if (wanted.kind === "session" && snapshot) { const s = (snapshot.sessions || []).find(x => x.id.startsWith(wanted.id)); if (s) { wanted = null; selectSession(s); } }
+}
 function render() {
-  renderOverview();
-  const v = document.querySelector("nav button.sel").dataset.v;
-  if (v === "live") renderLive();
-  if (v === "journal") renderJournal();
-  if (v === "sessions") renderSessions();
+  resolveWanted();
+  renderOverview(); renderHeld();
+  const v = currentView();
+  if (v === "journal") renderJournal(); if (v === "sessions") renderSessions(); if (v === "policy") renderPolicy();
+  $("#nav-journal").textContent = events.length; $("#nav-sessions").textContent = ((snapshot && snapshot.sessions) || []).length;
+  if (policy) $("#nav-policy").textContent = (policy.rules || []).length + (policy.budgets || []).length;
 }
+async function pullSnapshot() { try { const r = await fetch("/api/snapshot"); if (!r.ok) return; snapshot = await r.json();
+  const d = $("#daemon"); d.replaceChildren(el("span", "dot " + (snapshot.daemon.running ? "on" : ""))); d.append("daemon " + (snapshot.daemon.running ? "running" : "not running"));
+  $("#entries").textContent = snapshot.journal.entries + " entries"; $("#head").textContent = "head " + (shortHash(snapshot.journal.head) || "—"); $("#head").dataset.full = snapshot.journal.head || "";
+  render(); } catch {} }
+async function pullEvents() { try { for (;;) { const r = await fetch("/api/events?since=" + cursor + "&limit=" + PAGE); if (!r.ok) return; const page = await r.json();
+  if (!page.events.length) break; events = page.events.slice().reverse().concat(events); if (events.length > KEEP) events.length = KEEP; cursor = page.cursor; if (page.events.length < PAGE) break; }
+  if (currentView() === "journal" && !$("#follow").classList.contains("on")) return; render(); } catch {} }
+async function pullPolicy() { try { const r = await fetch("/api/policy"); if (!r.ok) return; policy = await r.json(); render(); } catch {} }
+async function pullPending() { try { const r = await fetch("/api/pending"); if (!r.ok) return; pending = await r.json(); renderHeld(); } catch {} }
 
-async function pullSnapshot() {
-  try {
-    const r = await fetch("/api/snapshot");
-    if (!r.ok) return;
-    snapshot = await r.json();
-    const d = $("#daemon");
-    d.replaceChildren(el("span", "dot " + (snapshot.daemon.running ? "on" : "off")));
-    d.append("daemon " + (snapshot.daemon.running ? "running" : "not running"));
-    $("#entries").textContent = snapshot.journal.entries + " entries";
-    $("#head").textContent = "head " + (shortHash(snapshot.journal.head) || "—");
-    render();
-  } catch (_) { /* the console keeps trying; Nim is unaffected either way */ }
-}
-
-async function pullEvents() {
-  try {
-    // Drain: a full page means there is probably more.
-    for (;;) {
-      const r = await fetch("/api/events?since=" + cursor + "&limit=" + PAGE);
-      if (!r.ok) return;
-      const page = await r.json();
-      if (!page.events.length) break;
-      events = page.events.slice().reverse().concat(events);
-      cursor = page.cursor;
-      if (page.events.length < PAGE) break;
-    }
-    render();
-  } catch (_) { /* ignored */ }
-}
-
-document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
-  document.querySelectorAll("nav button").forEach(x => x.classList.remove("sel"));
-  document.querySelectorAll(".view").forEach(x => x.classList.remove("sel"));
-  b.classList.add("sel"); $("#v-" + b.dataset.v).classList.add("sel"); render();
+/* ---------- views, keys ---------- */
+let wanted = null; // a deep link waiting for the data it names: {kind:"entry", seq} or {kind:"session", id}
+function showView(v) { const parts = v.split("/"); v = parts[0];
+  if (parts[1]) wanted = v === "journal" ? {kind: "entry", seq: Number(parts[1])} : v === "sessions" ? {kind: "session", id: parts[1]} : null;
+  const b = document.querySelector('nav button[data-v="' + v + '"]') || document.querySelector("nav button");
+  if (b.dataset.v !== currentView() && $("#detail").classList.contains("on")) { selected = null; $("#detail").classList.remove("on"); $("#main").classList.remove("split"); }
+  document.querySelectorAll("nav button").forEach(x => x.classList.remove("sel")); document.querySelectorAll(".view").forEach(x => x.classList.remove("sel"));
+  b.classList.add("sel"); $("#v-" + b.dataset.v).classList.add("sel"); render(); }
+document.querySelectorAll("nav button").forEach(b => b.onclick = () => { location.hash = b.dataset.v; });
+window.addEventListener("hashchange", () => showView(location.hash.slice(1)));
+if (location.hash.length > 1) showView(location.hash.slice(1));
+$("#head").onclick = () => { if ($("#head").dataset.full) copy($("#head").dataset.full, "head copied"); };
+$("#q").oninput = renderJournal; $("#f-kind").onchange = renderJournal; $("#f-dec").onchange = renderJournal;
+$("#follow").onclick = () => { const f = $("#follow"); f.classList.toggle("on"); f.setAttribute("aria-checked", f.classList.contains("on")); if (f.classList.contains("on")) render(); };
+document.addEventListener("keydown", (ev) => {
+  if (ev.target.matches("input, select, textarea")) { if (ev.key === "Escape") ev.target.blur(); return; }
+  const views = ["overview", "held", "journal", "sessions", "policy"];
+  if (ev.key >= "1" && ev.key <= "5") location.hash = views[Number(ev.key) - 1];
+  else if (ev.key === "/") { ev.preventDefault(); location.hash = "journal"; setTimeout(() => $("#q").focus(), 0); }
+  else if (ev.key === "Escape" && $("#detail").classList.contains("on")) closeDetail();
 });
+setInterval(() => { document.querySelectorAll(".card .age").forEach(a => {}); if (currentView() === "held") renderHeld(); }, 1000);
 
-pullSnapshot(); pullEvents();
-setInterval(pullSnapshot, SNAPSHOT_MS);
-setInterval(pullEvents, EVENTS_MS);
+pullSnapshot(); pullEvents(); pullPolicy(); pullPending();
+setInterval(pullSnapshot, SNAPSHOT_MS); setInterval(pullEvents, EVENTS_MS); setInterval(pullPolicy, SNAPSHOT_MS); setInterval(pullPending, PENDING_MS);
 </script>
 </body>
 </html>
