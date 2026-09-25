@@ -1722,6 +1722,17 @@
       "status": "fixed",
       "nextAction": "The same floor for any future package whose tests start a daemon in-process; today only internal/daemon does.",
       "provenance": "declared"
+    },
+    {
+      "id": "F-028",
+      "severity": "medium",
+      "title": "Upgrading in place left a binary macOS refuses to run",
+      "problem": "install.sh copied the new binary over the old one in place. On macOS, writing into a Mach-O file that a running daemon was started from invalidates the file's code-signature cache, and every later exec of that path is killed by the kernel: exit status 137 and no message. Found on 2026-09-26 while installing v0.1.0 over the dev build on the operator's own machine: holdcall version, status and daemon restart all died silently.",
+      "impact": "An operator upgrading with the daemon running, the normal case, ends up with a holdcall that cannot be run at all, and no output to say why; the running daemon keeps working, so the failure looks like the CLI, not the upgrade.",
+      "evidence": "Fixed: install.sh now copies to holdcall.new beside the target and renames over it, which gives the new binary its own inode while the running daemon keeps the old one, and it tells the operator to run holdcall daemon restart. Reproduced by hand (cp in place, exit 137) and resolved by the rename on the same machine, after which holdcall daemon restart took the real daemon from the dev build to v0.1.0 as F-001 designed. tools/install-rig/test.sh still passes.",
+      "status": "fixed",
+      "nextAction": "The same rule for anything else that ever writes the binary: a package manager formula, a self-update if one is added.",
+      "provenance": "declared"
     }
   ],
   "decisions": [

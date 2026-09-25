@@ -11,7 +11,12 @@ test names behind each claim live.
 
 ## [Unreleased]
 
-Nothing since 0.1.0.
+### Fixed
+
+- **`install.sh` no longer overwrites the binary in place (F-028).** On
+  macOS that left a `holdcall` the kernel killed on every exec once a daemon
+  from the previous build was running. The installer now copies beside the
+  target and renames over it, and says to run `holdcall daemon restart`.
 
 ## [0.1.0] - 2026-09-26
 

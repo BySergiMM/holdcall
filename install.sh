@@ -123,10 +123,17 @@ extracted="$work_dir/holdcall_${VERSION}_${goos}_${goarch}"
 [ -f "$extracted/holdcall" ] || die "archive did not contain a holdcall binary at the expected path"
 
 mkdir -p "$INSTALL_DIR"
-cp "$extracted/holdcall" "$INSTALL_DIR/holdcall"
-chmod 755 "$INSTALL_DIR/holdcall"
+# Never overwrite the binary in place: on macOS, writing into a Mach-O file
+# that a running daemon was started from invalidates its code-signature cache
+# and every later exec of that file is killed (exit 137, no message). A copy
+# beside it and a rename give the new binary its own inode; the running
+# daemon keeps the old one until `holdcall daemon restart` (F-001).
+cp "$extracted/holdcall" "$INSTALL_DIR/holdcall.new"
+chmod 755 "$INSTALL_DIR/holdcall.new"
+mv -f "$INSTALL_DIR/holdcall.new" "$INSTALL_DIR/holdcall"
 
 say "installed holdcall $VERSION to $INSTALL_DIR/holdcall"
+say "if a daemon from a previous build is running, run: holdcall daemon restart"
 
 case ":$PATH:" in
     *":$INSTALL_DIR:"*) ;;
