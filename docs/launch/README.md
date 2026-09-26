@@ -7,10 +7,11 @@ the tagged release it is posted for; when the docs change, this changes.
 
 ## Before posting anything
 
-- [ ] Make the repository public. `install.sh`, the release archives and
-      every link below are 404 to anyone else while it is private.
-- [ ] Tag the release the post names (today `v0.1.0`) and check
-      `holdcall version` from a fresh install of it.
+- [x] Make the repository public (done 2026-09-26; every link below was
+      fetched without a session afterwards).
+- [x] Tag the release the post names (`v0.1.1`, built by the workflow on
+      2026-09-26; `install.sh` from the raw URL installed it and it reported
+      its version).
 - [ ] Re-read `docs/milestones.md`: the platform claims (macOS executed,
       Linux and Windows compiled and never run) must match the text.
 - [ ] Open https://holdcall.vercel.app in a private window: title, image,
