@@ -27,6 +27,7 @@ import (
 	"github.com/BySergiMM/holdcall/engine/internal/console"
 	"github.com/BySergiMM/holdcall/engine/internal/daemon"
 	"github.com/BySergiMM/holdcall/engine/internal/journal"
+	"github.com/BySergiMM/holdcall/engine/internal/peer"
 	"github.com/BySergiMM/holdcall/engine/internal/readmodel"
 	"github.com/BySergiMM/holdcall/engine/internal/shim"
 )
@@ -276,8 +277,8 @@ func runDaemonRestart(args []string) error {
 		return err
 	case !confirmed:
 		return fmt.Errorf(
-			"something other than Holdcall is listening on %s; refusing to signal it -- stop it yourself, then run this again",
-			cfg.Daemon.Socket)
+			"something other than Holdcall is listening on %s (%s); refusing to signal it -- stop it yourself, then run this again",
+			cfg.Daemon.Socket, peer.ExplainPID(pid))
 	default:
 		fmt.Printf("holdcall: stopping the daemon (pid %d)\n", pid)
 		if err := stopDaemonPID(pid); err != nil {

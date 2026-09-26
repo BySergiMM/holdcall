@@ -1,6 +1,7 @@
 package peer
 
 import (
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -67,6 +68,31 @@ func IsSelfPID(conn net.Conn) (supported, same bool, pid int) {
 // still names the running image, the identity is the running image and an
 // upgrade after that is seen for what it is.
 func PrimeSelf() { primeSelfImpl() }
+
+// ExplainPID says what is known about pid's executable, for the sentence a
+// refusal prints: which file it runs and which file this process is, or
+// that the path could not be read. It is wording, never a decision: a wrong
+// or spoofed answer changes what an operator reads next, not what was
+// refused. It exists because a refusal that only said "not Holdcall" left
+// an operator, and a CI log, with nothing to tell an impostor from a lookup
+// that failed.
+func ExplainPID(pid int) string {
+	if pid <= 0 {
+		return "its pid could not be read"
+	}
+	path, ok := ExecPathOf(pid)
+	self, err := os.Executable()
+	switch {
+	case !ok && err != nil:
+		return fmt.Sprintf("pid %d; its executable path could not be read", pid)
+	case !ok:
+		return fmt.Sprintf("pid %d; its executable path could not be read; this binary is %s", pid, self)
+	case err != nil:
+		return fmt.Sprintf("pid %d runs %s", pid, path)
+	default:
+		return fmt.Sprintf("pid %d runs %s; this binary is %s", pid, path, self)
+	}
+}
 
 // Diagnosis explains why a peer that already failed IsSelf's check --
 // supported=true, same=false -- differs from us. It plays no part in that

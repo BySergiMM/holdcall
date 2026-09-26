@@ -688,7 +688,7 @@ func dialDaemon(cfg config.Config) *reporter {
 		if genuine, pid := daemonIsGenuine(conn); !genuine {
 			fmt.Fprintf(os.Stderr,
 				"holdcall: %s\nnim: refusing to take decisions from it; every tool call in this session will be denied\n",
-				peerRefusalReason(cfg, peer.DiagnosePID(pid)))
+				peerRefusalReason(cfg, pid, peer.DiagnosePID(pid)))
 			conn.Close()
 			conn = nil
 		}
@@ -762,12 +762,12 @@ var ErrDaemonOlderBuild = errors.New("the daemon on the socket is an older build
 // otherwise. diag is computed by the caller with a single peer.Diagnose (or
 // peer.DiagnosePID) call, never recomputed here -- see peer.Diagnose's doc
 // comment on why calling it twice on the same connection is unsafe.
-func peerRefusalReason(cfg config.Config, diag peer.Diagnosis) string {
+func peerRefusalReason(cfg config.Config, pid int, diag peer.Diagnosis) string {
 	if diag == peer.SameLaunchPathOlderBuild {
 		return fmt.Sprintf("the daemon on %s is an older build of Holdcall at the same path; run `holdcall daemon restart`",
 			cfg.Daemon.Socket)
 	}
-	return fmt.Sprintf("the process listening on %s is not Holdcall", cfg.Daemon.Socket)
+	return fmt.Sprintf("the process listening on %s is not Holdcall (%s)", cfg.Daemon.Socket, peer.ExplainPID(pid))
 }
 
 // peerRefusalError is peerRefusalReason for a caller that returns an error
@@ -775,11 +775,11 @@ func peerRefusalReason(cfg config.Config, diag peer.Diagnosis) string {
 // ErrDaemonOlderBuild so it can be matched with errors.Is; every other case
 // keeps the "is not Holdcall; <suffix>" wording callers used before Diagnose
 // existed, with suffix naming what that particular caller was about to do.
-func peerRefusalError(cfg config.Config, diag peer.Diagnosis, suffix string) error {
+func peerRefusalError(cfg config.Config, pid int, diag peer.Diagnosis, suffix string) error {
 	if diag == peer.SameLaunchPathOlderBuild {
-		return fmt.Errorf("%w: %s", ErrDaemonOlderBuild, peerRefusalReason(cfg, diag))
+		return fmt.Errorf("%w: %s", ErrDaemonOlderBuild, peerRefusalReason(cfg, pid, diag))
 	}
-	return fmt.Errorf("the process listening on %s is not Holdcall; %s", cfg.Daemon.Socket, suffix)
+	return fmt.Errorf("the process listening on %s is not Holdcall (%s); %s", cfg.Daemon.Socket, peer.ExplainPID(pid), suffix)
 }
 
 // PeerPID connects to the daemon socket and reports the pid of whatever is
@@ -1141,7 +1141,7 @@ func DialDaemon(cfg config.Config) (net.Conn, error) {
 		return nil, err
 	}
 	if genuine, pid := daemonIsGenuine(conn); !genuine {
-		err := peerRefusalError(cfg, peer.DiagnosePID(pid), "refusing to talk to it")
+		err := peerRefusalError(cfg, pid, peer.DiagnosePID(pid), "refusing to talk to it")
 		conn.Close()
 		return nil, err
 	}
@@ -1171,7 +1171,7 @@ func DialRunningDaemon(cfg config.Config, timeout time.Duration) (net.Conn, erro
 		return nil, fmt.Errorf("%w: %v", ErrDaemonNotReachable, err)
 	}
 	if genuine, pid := daemonIsGenuine(conn); !genuine {
-		err := peerRefusalError(cfg, peer.DiagnosePID(pid), "refusing to talk to it")
+		err := peerRefusalError(cfg, pid, peer.DiagnosePID(pid), "refusing to talk to it")
 		conn.Close()
 		return nil, err
 	}
@@ -1249,7 +1249,7 @@ func fetchConnector(cfg config.Config, connector string) (injection, error) {
 	// credential, so it has to be Holdcall. Refusing to spawn is the only safe
 	// answer here: an impostor's answer is worse than no answer.
 	if genuine, pid := daemonIsGenuine(conn); !genuine {
-		return injection{}, peerRefusalError(cfg, peer.DiagnosePID(pid), "refusing to ask it for a credential or a command")
+		return injection{}, peerRefusalError(cfg, pid, peer.DiagnosePID(pid), "refusing to ask it for a credential or a command")
 	}
 
 	conn.SetDeadline(time.Now().Add(2 * time.Second))
