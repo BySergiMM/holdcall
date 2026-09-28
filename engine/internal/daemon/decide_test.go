@@ -440,7 +440,12 @@ func TestASessionCannotBeStartedTwice(t *testing.T) {
 	defer intruder.Close()
 	send(t, intruder, Event{Kind: KindSessionStart, SessionID: "s1", MachineID: "m", Connector: "evil", OccurredAt: now()})
 	ok := true
-	send(t, intruder, Event{Kind: KindCallOutcome, SessionID: "s1", Seq: 1, OK: &ok, OccurredAt: now()})
+	// The daemon closes the intruding connection on that second start, and
+	// on a loaded machine it may already have done so: this write can land
+	// or fail with a broken pipe, and either way the outcome below must not
+	// be recorded, which is the property. Not send(): a failed write here is
+	// not the test failing.
+	_ = json.NewEncoder(intruder).Encode(Event{Kind: KindCallOutcome, SessionID: "s1", Seq: 1, OK: &ok, OccurredAt: now()})
 	// The connection is closed on the second start; a read sees EOF rather
 	// than an answer.
 	intruder.SetReadDeadline(time.Now().Add(3 * time.Second))

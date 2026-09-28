@@ -40,3 +40,4 @@ TestStatusDoesNotCallAnImpostorTheDaemon	peer identity is unsupported on windows
 TestAnInPlaceUpgradeIsDiagnosedAndDaemonRestartFixesIt	peer identity is unsupported on windows, so an older build cannot be told apart from anything; and holdcall daemon restart is not supported there
 TestADefaultDenyClosesEverythingAndAnAgentScopedAllowReopensOneToolForOneAgent	agent enrolment resolves identity via peer.ImageOfFile, which always errors on windows (image_windows.go); the agent-scoped allow this test proves cannot be set there
 TestEnrolmentEntersTheChain	same enrolment gap: holdcall agent add fails on windows before anything can enter the chain
+TestASecondNameForOneExecutableIsRefusedNamingTheFirst	same enrolment gap: the first enrolment already fails on windows, so there is no first name for a second to be refused against
