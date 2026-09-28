@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -346,7 +347,10 @@ func TestCLIAndConsoleAgreeOnPolicyCounts(t *testing.T) {
 			apiStale++
 		}
 	}
-	if apiStale != 1 {
+	// On Windows an enrolment's identity cannot be checked at all (Current
+	// is nil by design, see peer/image_windows.go), so nothing is stale there
+	// and the CLI rightly says nothing; both surfaces still have to agree.
+	if apiStale != 1 && runtime.GOOS != "windows" {
 		t.Errorf("stale = %d, want 1 (the enrolment points at a file that does not exist)", apiStale)
 	}
 	cliMentionsStale := strings.Contains(text, "stale")

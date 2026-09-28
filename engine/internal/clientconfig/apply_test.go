@@ -3,6 +3,7 @@ package clientconfig
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -75,7 +76,10 @@ func TestInitWriteCreatesABackupAndWritesAtomically(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if perm := info.Mode().Perm(); perm != 0o600 {
+	// Windows keeps no Unix mode: os.Chmod there only toggles read-only, and
+	// Stat reports 0666 for anything writable. The backup's confidentiality
+	// on that platform rests on the directory, as docs/security.md says.
+	if perm := info.Mode().Perm(); perm != 0o600 && runtime.GOOS != "windows" {
 		t.Errorf("backup permissions = %o, want 0600", perm)
 	}
 

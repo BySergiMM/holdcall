@@ -144,7 +144,15 @@ type Decision struct {
 // Run serves until the process is stopped. It returns nil when another daemon
 // already holds the socket: two shims racing to start one is normal, and the
 // loser has nothing to complain about.
-func Run(cfg config.Config) error {
+func Run(cfg config.Config) error { return RunWithStop(cfg, nil) }
+
+// RunWithStop is Run with a second way to stop: closing stop ends the accept
+// loop, closes the journal and removes the socket, exactly as SIGTERM does.
+// Tests need it because a daemon they start in-process would otherwise hold
+// the journal open until the test binary exits, and Windows refuses to
+// remove a directory that still has an open file in it. A nil stop is
+// never closed and changes nothing.
+func RunWithStop(cfg config.Config, stop <-chan struct{}) error {
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
@@ -180,8 +188,11 @@ func Run(cfg config.Config) error {
 	signal.Notify(stopping, syscall.SIGTERM)
 	shuttingDown := make(chan struct{})
 	go func() {
-		<-stopping
-		log.Printf("received SIGTERM: closing the journal and removing %s", cfg.Daemon.Socket)
+		select {
+		case <-stopping:
+			log.Printf("received SIGTERM: closing the journal and removing %s", cfg.Daemon.Socket)
+		case <-stop:
+		}
 		close(shuttingDown)
 		ln.Close()
 	}()

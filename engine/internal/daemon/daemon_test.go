@@ -41,11 +41,25 @@ func start(t testing.TB) (cfg config.Config, dbPath string) {
 		t.Fatalf("test socket is unusable: %v", err)
 	}
 
+	stop := make(chan struct{})
+	done := make(chan struct{})
 	go func() {
-		if err := Run(cfg); err != nil {
+		defer close(done)
+		if err := RunWithStop(cfg, stop); err != nil {
 			t.Logf("daemon stopped: %v", err)
 		}
 	}()
+	// Stop the daemon before the temporary directory goes: it holds the
+	// journal open, and Windows will not remove a directory with an open
+	// file in it. Registered after TempDir's own cleanup, so it runs first.
+	t.Cleanup(func() {
+		close(stop)
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Logf("the daemon did not stop within 5s")
+		}
+	})
 
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
@@ -92,11 +106,25 @@ func startWithApprovalTimeout(t testing.TB, timeout time.Duration) (cfg config.C
 		t.Fatalf("test socket is unusable: %v", err)
 	}
 
+	stop := make(chan struct{})
+	done := make(chan struct{})
 	go func() {
-		if err := Run(cfg); err != nil {
+		defer close(done)
+		if err := RunWithStop(cfg, stop); err != nil {
 			t.Logf("daemon stopped: %v", err)
 		}
 	}()
+	// Stop the daemon before the temporary directory goes: it holds the
+	// journal open, and Windows will not remove a directory with an open
+	// file in it. Registered after TempDir's own cleanup, so it runs first.
+	t.Cleanup(func() {
+		close(stop)
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Logf("the daemon did not stop within 5s")
+		}
+	})
 
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {

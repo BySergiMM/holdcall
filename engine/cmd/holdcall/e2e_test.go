@@ -84,9 +84,14 @@ func build(t *testing.T) *stack {
 	}
 
 	dir := t.TempDir()
+	// Windows will only execute a file whose name says it is one.
+	exe := ""
+	if runtime.GOOS == "windows" {
+		exe = ".exe"
+	}
 	s := &stack{
-		holdcall:  filepath.Join(dir, "holdcall"),
-		connector: filepath.Join(dir, "connector"),
+		holdcall:  filepath.Join(dir, "holdcall"+exe),
+		connector: filepath.Join(dir, "connector"+exe),
 		home:      filepath.Join(dir, "home"),
 		log:       filepath.Join(dir, "received.log"),
 	}
