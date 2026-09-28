@@ -29,10 +29,10 @@
     "$comment": "Snapshot, not live. Staleness is computed against the commit being built.",
     "provenance": "ci",
     "workflow": "CI",
-    "conclusion": "failure",
-    "commit": "9347fa4",
-    "runId": "36201309087",
-    "takenAt": "2026-09-25T23:37:32Z",
+    "conclusion": "success",
+    "commit": "4746a07",
+    "runId": "36474994821",
+    "takenAt": "2026-09-28T19:53:56Z",
     "jobs": [
       {
         "name": "test (ubuntu-latest)",
@@ -44,7 +44,7 @@
       },
       {
         "name": "test (windows-latest)",
-        "conclusion": "failure"
+        "conclusion": "success"
       },
       {
         "name": "dashboard",
