@@ -173,7 +173,13 @@ jobs:
 
       - name: adversarial tests must have run, not skipped (windows allow-list)
         if: runner.os == 'Windows'
-        run: ../.github/scripts/assert-evidence-ran.sh /tmp/gotest.log ../.github/scripts/windows-skip-allowlist.txt
+        run: |
+          # What the test step's tee left behind, before the script reads it:
+          # the first run on a real windows runner reported one cited test
+          # run and 166 absent, which is the shape of a log the patterns
+          # could not read, not of a suite that did not run.
+          ls -la /tmp/gotest.log; wc -l /tmp/gotest.log; head -c 240 /tmp/gotest.log | od -c | head -6
+          ../.github/scripts/assert-evidence-ran.sh /tmp/gotest.log ../.github/scripts/windows-skip-allowlist.txt
 
   # The dashboard makes claims about this repository, so its build is a check
   # on those claims rather than a packaging step: scripts/generate.mjs exits

@@ -58,6 +58,17 @@ allowlist="${2:-}"
 state="$root/dashboard/data/state.json"
 
 [ -f "$log" ] || { echo "no test log at $log" >&2; exit 2; }
+# The log is matched line by line with anchored patterns; a carriage return
+# at the end of a line (a Windows shell, or a tool that writes CRLF) would
+# make every "( |$)" fail without a word about why. Compare a copy with
+# them stripped, and say how much log there is, so an empty or truncated
+# file is visible in the step output rather than reported as "166 tests
+# build-tagged out".
+clean="$(mktemp)"
+trap 'rm -f "$clean"' EXIT
+tr -d '\r' < "$log" > "$clean"
+log="$clean"
+echo "test log: $(wc -l < "$log") lines, $(grep -c -- '--- PASS: ' "$log") PASS, $(grep -c -- '--- SKIP: ' "$log") SKIP, $(grep -c -- '--- FAIL: ' "$log") FAIL"
 [ -f "$state" ] || { echo "no dashboard state at $state" >&2; exit 2; }
 
 allowed_names=()
