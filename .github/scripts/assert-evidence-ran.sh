@@ -115,7 +115,10 @@ cited="$(jq -r '
   [ (.guarantees[] | select(.status == "verified") | .tests[]),
     (.attacks[]    | select(.status == "pass")     | .tests[]) ]
   | unique | .[]
-' "$state")"
+' "$state" | tr -d '\r')"
+# jq on windows ends every line it prints with a carriage return; without
+# the tr above each name carried one and matched nothing, which the first
+# windows run reported as 166 cited tests "build-tagged out".
 
 skipped=()
 excused_names=()

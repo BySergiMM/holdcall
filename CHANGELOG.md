@@ -12,7 +12,16 @@ test names behind each claim live.
 
 ## [Unreleased]
 
-Nothing since 0.1.1.
+### Changed
+
+- **Windows runs the suite and passes (F-029).** Every failure on the first
+  Windows runs had one of a handful of causes, and each was fixed as a
+  cause: in-process daemons now stop before their temporary directory is
+  removed, the end-to-end tests build `.exe` files, the faked home sets
+  `USERPROFILE`, the no-daemon test blocks the socket under a regular file,
+  and the tests that need an executable identity skip there by design and
+  are named in the allow-list. The evidence script strips the carriage
+  returns `jq` prints on Windows. The Windows job decides the run again.
 
 ## [0.1.1] - 2026-09-26
 
