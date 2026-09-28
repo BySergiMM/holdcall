@@ -38,3 +38,5 @@ TestTheDaemonsCommandIsSpawnedNotTheCallersEndToEnd	fixture hardcodes /bin/echo 
 TestWithNoConnectorTheCallersCommandRuns	fixture hardcodes /bin/echo, which does not exist at that path on windows; not a peer-identity gap, a fixture one
 TestStatusDoesNotCallAnImpostorTheDaemon	peer identity is unsupported on windows, so status cannot tell an impostor apart there; the same gap the Known gaps table records
 TestAnInPlaceUpgradeIsDiagnosedAndDaemonRestartFixesIt	peer identity is unsupported on windows, so an older build cannot be told apart from anything; and holdcall daemon restart is not supported there
+TestADefaultDenyClosesEverythingAndAnAgentScopedAllowReopensOneToolForOneAgent	agent enrolment resolves identity via peer.ImageOfFile, which always errors on windows (image_windows.go); the agent-scoped allow this test proves cannot be set there
+TestEnrolmentEntersTheChain	same enrolment gap: holdcall agent add fails on windows before anything can enter the chain

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -469,9 +470,23 @@ func TestRealRelayWithNoDaemonReachesNothing(t *testing.T) {
 	s := build(t)
 	// No daemon started, and none may start: the relay spawns one when it can,
 	// so the socket is pointed somewhere it cannot bind.
+	sock := "/nonexistent-for-holdcall/holdcall.sock"
+	if runtime.GOOS == "windows" {
+		// There, "/nonexistent-for-holdcall" is a relative path on the
+		// current drive and the daemon would simply create it, then bind,
+		// then decide the call this test says nobody can. A regular file
+		// cannot become a directory on any platform, so the socket goes
+		// under one.
+		blocker := filepath.Join(os.TempDir(), fmt.Sprintf("holdcall-no-daemon-%d", os.Getpid()))
+		if err := os.WriteFile(blocker, []byte("a file, so nothing can be created beneath it\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.Remove(blocker) })
+		sock = filepath.ToSlash(filepath.Join(blocker, "holdcall.sock"))
+	}
 	s.env = append(s.env, "TMPDIR=/nonexistent-for-holdcall")
 	if err := os.WriteFile(filepath.Join(s.home, "config.toml"),
-		[]byte("[daemon]\nsocket = \"/nonexistent-for-holdcall/holdcall.sock\"\n"), 0o600); err != nil {
+		[]byte("[daemon]\nsocket = \""+sock+"\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -703,6 +718,10 @@ func TestTwoRealAgentsAgainstOneConnectorReceiveDifferentVerdicts(t *testing.T) 
 // its call meets only the default: an unknown agent is denied, not merely
 // unprivileged the way M4's deny-only model left it.
 func TestADefaultDenyClosesEverythingAndAnAgentScopedAllowReopensOneToolForOneAgent(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("agent enrolment resolves identity via peer.ImageOfFile, which always errors on windows by design " +
+			"(see internal/peer/image_windows.go); an agent-scoped rule cannot be exercised there")
+	}
 	s := build(t)
 	dir := filepath.Dir(s.holdcall)
 	src := filepath.Join(dir, "launcher.go")

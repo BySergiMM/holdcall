@@ -19,6 +19,7 @@ func runWithHome(t *testing.T, s *stack, home, cwd string, args ...string) (stri
 	cmd := exec.Command(s.holdcall, args...)
 	cmd.Env = append(append([]string{}, s.env...),
 		"HOME="+home,
+		"USERPROFILE="+home, // what os.UserHomeDir reads on windows
 		"XDG_CONFIG_HOME="+filepath.Join(home, ".config"),
 		"APPDATA="+filepath.Join(home, "AppData", "Roaming"),
 	)

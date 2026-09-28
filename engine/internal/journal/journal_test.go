@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -1010,7 +1011,25 @@ func contains(haystack, needle string) bool {
 // second daemon racing to start does the same before one of them loses the
 // socket -- so this is exactly the window the startup lock exists around.
 func TestConcurrentOpensDoNotCollideOnViews(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "holdcall.db")
+	// Not t.TempDir: on windows the directory could not be removed after
+	// this test, "being used by another process", although every handle
+	// this test opens is closed before it returns (F-029). The property
+	// under test still runs there; only the removal is best-effort, and
+	// says so, rather than failing a test that passed.
+	dir, err := os.MkdirTemp("", "holdcall-concurrent-opens-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(dir); err != nil {
+			if runtime.GOOS == "windows" {
+				t.Logf("windows kept a journal file open past Close: %v (F-029)", err)
+				return
+			}
+			t.Errorf("removing %s: %v", dir, err)
+		}
+	})
+	path := filepath.Join(dir, "holdcall.db")
 
 	// Seed the file so every opener below races on the same existing database
 	// rather than on creating it.

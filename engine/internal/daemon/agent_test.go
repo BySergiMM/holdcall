@@ -329,6 +329,10 @@ func TestAConnectionCannotMixAgentAndOtherPurposes(t *testing.T) {
 // and an audit of the rules without an audit of what they were scoped to is
 // not an audit. handleAgentList stays a read: listing must not itself write.
 func TestEnrolmentEntersTheChain(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("agent enrolment resolves identity via peer.ImageOfFile, which always errors on windows by design " +
+			"(see internal/peer/image_windows.go); nothing enters the chain there")
+	}
 	j := freshJournal(t)
 	before, _, err := j.Head()
 	if err != nil {
