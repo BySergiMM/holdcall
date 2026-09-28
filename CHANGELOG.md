@@ -6,11 +6,28 @@ on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 `0.1.0` was the first tagged version and describes everything built so far
 on `m1-bootstrap`; there is no prior release for it to diff against, so read
 it as a status report rather than a list of deltas. `0.1.1` is the first
-release the workflow itself built. `docs/milestones.md` is the
+release the workflow itself built; `0.1.2` the first whose tree passed the
+suite on Windows as well as Linux and macOS. `docs/milestones.md` is the
 source of truth this section summarizes, and is where the detail and the
 test names behind each claim live.
 
 ## [Unreleased]
+
+Nothing since 0.1.2.
+
+## [0.1.2] - 2026-09-28
+
+Built by the release workflow from a commit that passed the whole suite on
+ubuntu-latest, macos-latest and windows-latest, the first to do so. The
+binaries differ from 0.1.1 only in the daemon's stoppable run loop, which
+tests use; what changed is what is known about them.
+
+### Added
+
+- **A refusal names what the peer runs.** Every "not Holdcall" refusal now
+  carries the peer's pid, the file it runs and the file this binary is, or
+  that the path could not be read. Wording only, never a decision. This
+  shipped unlisted in 0.1.1's binaries.
 
 ### Changed
 

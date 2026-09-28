@@ -9,8 +9,8 @@ the tagged release it is posted for; when the docs change, this changes.
 
 - [x] Make the repository public (done 2026-09-26; every link below was
       fetched without a session afterwards).
-- [x] Tag the release the post names (`v0.1.1`, built by the workflow on
-      2026-09-26; `install.sh` from the raw URL installed it and it reported
+- [x] Tag the release the post names (`v0.1.2`, built by the workflow on
+      2026-09-28 from the first tree green on all three platforms; `install.sh` from the raw URL installed it and it reported
       its version).
 - [ ] Re-read `docs/milestones.md`: the platform claims (macOS executed,
       Linux and Windows compiled and never run) must match the text.
