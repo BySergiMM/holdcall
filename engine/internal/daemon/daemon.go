@@ -8,7 +8,8 @@
 // tools/call and waits, because a call that has been sent cannot be recalled
 // -- longer, if the rule that decides it is ask, in which case the call is
 // held in memory (see approval.go) rather than decided at once, and the
-// wait is the same one extended to approval_timeout. Everything else --
+// wait is the same one extended to approval_timeout, plus the grace the
+// daemon's own timeout answer needs to arrive in. Everything else --
 // sessions, outcomes, anomalies -- is still one way and still never stalls
 // the relay.
 //

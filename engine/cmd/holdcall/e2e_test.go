@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/BySergiMM/holdcall/engine/internal/mcp"
 	"github.com/BySergiMM/holdcall/engine/internal/peer"
 )
 
@@ -891,6 +892,87 @@ func TestRealApprovalHoldsACallForAHumanWhoDecidesItThroughTheCLI(t *testing.T) 
 	}
 	if out, err := s.run(t, "verify"); err != nil || !strings.Contains(out, "self-consistent") {
 		t.Errorf("holdcall verify: %v\n%s", err, out)
+	}
+}
+
+// The flagship bug, end to end: a call an ask rule holds and nobody decides.
+//
+// Through v0.1.2 the relay gave up at exactly approval_timeout -- the moment
+// the daemon's own timer fires, a journal write before it answers -- so it
+// either heard "rejected" and told the model a human had said no, or hung up
+// on the daemon and lost the rest of the session. Both are checked here
+// against the real binary, the way an operator meets them: the held call is
+// refused as a timeout, the very next call in the same session is decided
+// normally and reaches the connector, and nothing on the relay's stderr says
+// the session lost anything.
+func TestRealApprovalTimeoutEndsTheHoldAndTheSessionGoesOn(t *testing.T) {
+	s := build(t)
+	// The default wait is two minutes; a test turns the one knob there is for it.
+	if err := os.WriteFile(filepath.Join(s.home, "config.toml"),
+		[]byte("[daemon]\napproval_timeout = \"400ms\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, daemonLog := s.daemonCapturing(t)
+	s.askRule(t, "send_email")
+	r := s.serve(t)
+
+	held := `{"jsonrpc":"2.0","id":1,"method":"tools/call",` +
+		`"params":{"name":"send_email","arguments":{"to":"ceo@example.com"}}}`
+	r.send(t, held)
+
+	id, isError, text := decodeLine(t, r.next(t))
+	if id != "1" || !isError {
+		t.Fatalf("the held call came back as id=%s isError=%v (%q)", id, isError, text)
+	}
+	if text == mcp.DeniedByHuman {
+		t.Fatal("a call nobody looked at was reported to the model as rejected by a human")
+	}
+	if text != mcp.DeniedApprovalTimedOut {
+		t.Errorf("the client was told %q, want the approval-timeout text", text)
+	}
+
+	// The same session, the next call: decided by the daemon like any other,
+	// and served. On v0.1.2 this is where "could not reach a decision" came back
+	// for every call from here on.
+	next := `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"echo","arguments":{"text":"still here"}}}`
+	r.send(t, next)
+	id, isError, text = decodeLine(t, r.next(t))
+	if id != "2" || isError || text != "served" {
+		t.Errorf("the call after the timeout came back as id=%s isError=%v (%q), want it served", id, isError, text)
+	}
+	got := s.received(t)
+	if !strings.Contains(got, next) {
+		t.Errorf("the call after the timeout did not reach the connector verbatim:\n%s", got)
+	}
+	if strings.Contains(got, "ceo@example.com") {
+		t.Errorf("the call nobody approved reached the connector:\n%s", got)
+	}
+	if e := r.errors(); strings.Contains(e, "not recording") || strings.Contains(e, "unrecorded") {
+		t.Errorf("the relay reported losing the daemon after a timeout it should have heard:\n%s", e)
+	}
+
+	r.kill()
+
+	// The record is what it always was: the timeout is a rejection, and the
+	// call after it an allow, in a chain that verifies. The daemon's own log is
+	// where an operator can see that nobody looked, since the journal cannot
+	// tell this rejection from a human's.
+	logOut, err := s.run(t, "log")
+	if err != nil {
+		t.Fatalf("holdcall log: %v\n%s", err, logOut)
+	}
+	if !strings.Contains(logOut, "rejected") || !strings.Contains(logOut, "allow") {
+		t.Errorf("holdcall log does not show the timed-out call as rejected and the next as allowed:\n%s", logOut)
+	}
+	if out, err := s.run(t, "verify"); err != nil || !strings.Contains(out, "self-consistent") {
+		t.Errorf("holdcall verify: %v\n%s", err, out)
+	}
+	const logLine = "nobody decided within the approval timeout"
+	for deadline := time.Now().Add(3 * time.Second); !strings.Contains(daemonLog.String(), logLine) && time.Now().Before(deadline); {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !strings.Contains(daemonLog.String(), logLine) {
+		t.Errorf("the daemon's log does not say a call timed out:\n%s", daemonLog.String())
 	}
 }
 
