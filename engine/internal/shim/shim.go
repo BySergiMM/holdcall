@@ -610,9 +610,12 @@ const (
 	// docs/decisions/0005-human-approval.md.
 	verdictApproved
 	verdictRejectedByHuman
-	// verdictApprovalTimedOut is its own outcome, not verdictNoDecision:
-	// nobody deciding in time is not the daemon failing to answer, and the
+	// verdictApprovalTimedOut is its own outcome, neither verdictNoDecision
+	// nor verdictRejectedByHuman: nobody deciding in time is not the daemon
+	// failing to answer, and it is not a person saying no either, and the
 	// client is told so in its own words -- see mcp.DeniedApprovalTimedOut.
+	// It is what the daemon's own daemon.DecisionTimedOut answer maps to,
+	// and also what the relay concludes when even that answer never comes.
 	verdictApprovalTimedOut
 )
 
@@ -923,6 +926,10 @@ func verdictFor(decision string) (verdict, bool) {
 		return verdictApproved, true
 	case journal.DecisionRejected:
 		return verdictRejectedByHuman, true
+	case daemon.DecisionTimedOut:
+		// The daemon journals this call as rejected, but what the client is
+		// told is not that a human rejected it: nobody looked in time.
+		return verdictApprovalTimedOut, true
 	case daemon.DecisionUndecided:
 		return verdictNoDecision, true
 	}

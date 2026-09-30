@@ -115,15 +115,33 @@ func (reg *pendingRegistry) hold(p *pendingCall) {
 
 // arm starts the daemon-side clock on p: if nobody decides it within
 // timeout, it is rejected and journaled exactly as an explicit holdcall reject
-// would be, with its own reason -- so the journal never ends up holding a
-// call that was neither approved nor rejected, whether or not a relay is
-// still there to hear the answer.
+// would be -- so the journal never ends up holding a call that was neither
+// approved nor rejected, whether or not a relay is still there to hear the
+// answer. The relay, though, is told why: see timeOut.
 func (reg *pendingRegistry) arm(p *pendingCall, timeout time.Duration, j *journal.Journal) {
 	p.mu.Lock()
-	p.timer = time.AfterFunc(timeout, func() {
-		reg.resolve(p, journal.DecisionRejected, "nobody decided within the approval timeout", j)
-	})
+	p.timer = time.AfterFunc(timeout, func() { reg.timeOut(p, j) })
 	p.mu.Unlock()
+}
+
+// timeOut ends a call nobody decided in time. The journal gets what an
+// explicit holdcall reject would write -- rejected, the one value the record
+// has for a call that did not clear its hold -- but the relay is answered
+// DecisionTimedOut rather than rejected, so that the client is told nobody
+// decided instead of that a human said no. A human deciding first, or the
+// session ending first, wins the race as it does for any other path through
+// settle, and this then changes nothing.
+func (reg *pendingRegistry) timeOut(p *pendingCall, j *journal.Journal) error {
+	err := reg.settle(p, journal.DecisionRejected, DecisionTimedOut, "nobody decided within the approval timeout", j)
+	if err == nil {
+		// The journal cannot tell this rejection from a human's -- the format
+		// has one value for both -- so this line is where an operator reading
+		// the daemon's log can tell that nobody looked. Session and seq only,
+		// never the call's arguments, like every other line written about a
+		// held call.
+		log.Printf("%s seq %d: nobody decided within the approval timeout; rejected and recorded", p.SessionID, p.Seq)
+	}
+	return err
 }
 
 // setArguments records the real bytes a call.arguments event carried for
@@ -184,17 +202,29 @@ func (reg *pendingRegistry) remove(id string) {
 	reg.mu.Unlock()
 }
 
-// resolve is the one path that ends a held call, whoever decided it: a
+// resolve ends a held call with one answer for both the journal and the
+// relay: a human's approve or reject, or the call's session ending. The
+// approval timer is the one caller that answers the relay differently from
+// what it records -- see timeOut -- and goes through settle directly.
+func (reg *pendingRegistry) resolve(p *pendingCall, decision, reason string, j *journal.Journal) error {
+	return reg.settle(p, decision, decision, reason, j)
+}
+
+// settle is the one path that ends a held call, whoever decided it: a
 // human through approval.decide, the approval timer, or the call's session
 // ending. It writes the call.request entry -- approved or rejected -- before
 // telling anyone, the same order allow and deny already answer in, and only
 // then answers the connection that has been waiting on it since it read
 // DecisionPending.
 //
+// What the relay is told (told) and what the journal records (decision) are
+// the same for every path but the timer's, which records rejected and tells
+// the relay DecisionTimedOut.
+//
 // Guarded to run once per call: a human deciding and the timer firing can
 // race, and only the one that gets here first is real. The loser gets
 // errAlreadyResolved and changes nothing.
-func (reg *pendingRegistry) resolve(p *pendingCall, decision, reason string, j *journal.Journal) error {
+func (reg *pendingRegistry) settle(p *pendingCall, decision, told, reason string, j *journal.Journal) error {
 	p.mu.Lock()
 	if p.resolved {
 		p.mu.Unlock()
@@ -212,7 +242,7 @@ func (reg *pendingRegistry) resolve(p *pendingCall, decision, reason string, j *
 		Tool: p.Tool, Digest: p.Digest, Decision: decision,
 		OccurredAt: time.Now().UTC().Format(time.RFC3339Nano),
 	}
-	sent, sentReason := decision, reason
+	sent, sentReason := told, reason
 	if err := apply(ev, j, p.Agent); err != nil {
 		// The same fail-closed shape answer already uses for allow and deny:
 		// a decision this milestone could not record is not a decision, and

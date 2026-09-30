@@ -118,10 +118,24 @@ const DecisionUndecided = "undecided"
 // journal.DecisionRejected once a human (or the timeout) settles it.
 const DecisionPending = "pending"
 
+// DecisionTimedOut is the final answer to a held call that nobody decided
+// within approval_timeout: the daemon's own timer ended the hold. Wire-only,
+// like DecisionPending and DecisionUndecided.
+//
+// The journal is told something else for the same call -- journal.
+// DecisionRejected, exactly what an explicit holdcall reject writes -- and
+// that is deliberate: the recorded vocabulary is part of a normative,
+// versioned format (docs/journal-format.md), and every reader of it already
+// treats rejected as "this call did not clear its hold". What the relay needs
+// is the cause, because it has to tell the client: a model told that a human
+// rejected a call nobody looked at is being told something that did not
+// happen. See docs/decisions/0005-human-approval.md.
+const DecisionTimedOut = "timed_out"
+
 // Decision is the only message the daemon sends back on a call.request's
 // connection -- once immediately for allow, deny or undecided, or twice for
 // ask: first DecisionPending with Hold set, then the final answer once a
-// human decides or the wait runs out.
+// human decides (approved or rejected) or the wait runs out (DecisionTimedOut).
 //
 // It echoes the session and sequence it answers so the shim can check that the
 // reply belongs to the question. Without that, one lost or late message puts the
