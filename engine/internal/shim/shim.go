@@ -168,10 +168,18 @@ func Run(opts Options) error {
 	// The downstream command is not checked here. A connector can supply it,
 	// and which one wins is only known once the daemon has answered.
 
-	// A configuration that cannot work is worth one line on stderr, where the
-	// client will show it, rather than a relay that quietly records nothing.
+	// A configuration that cannot work is worth saying so on stderr, where the
+	// client will show it, rather than a relay that quietly denies everything.
+	//
+	// What happens next is not "relay anyway": the daemon runs the same
+	// Validate before it listens, so the one this relay tries to start exits
+	// on the same error and none is ever reachable. The relay itself does
+	// start, and everything that is not a tools/call passes through, but
+	// every tools/call is denied for want of a daemon to decide it.
 	if err := opts.Config.Validate(); err != nil {
-		fmt.Fprintf(os.Stderr, "holdcall: %v\nnim: relaying anyway; calls will not be recorded\n", err)
+		fmt.Fprintf(os.Stderr,
+			"holdcall: %v\nholdcall: the daemon will not start with this configuration, so every tool call in this session will be denied; other messages are still relayed\n",
+			err)
 	}
 	if err := opts.Config.EnsureDirs(); err != nil {
 		fmt.Fprintf(os.Stderr, "holdcall: %v\n", err)
@@ -544,7 +552,7 @@ func refusalName(a mcp.Anomaly) string {
 func (s *Shim) refuse(what string) {
 	s.refused.Do(func() {
 		fmt.Fprintf(os.Stderr,
-			"holdcall: not relaying %s\nnim: Holdcall cannot inspect it, and forwarding it would put a call in front of a server unchecked\n",
+			"holdcall: not relaying %s\nholdcall: Holdcall cannot inspect it, and forwarding it would put a call in front of a server unchecked\n",
 			what)
 	})
 }
@@ -721,7 +729,7 @@ func dialDaemon(cfg config.Config) *reporter {
 	if conn != nil {
 		if genuine, pid := daemonIsGenuine(conn); !genuine {
 			fmt.Fprintf(os.Stderr,
-				"holdcall: %s\nnim: refusing to take decisions from it; every tool call in this session will be denied\n",
+				"holdcall: %s\nholdcall: refusing to take decisions from it; every tool call in this session will be denied\n",
 				peerRefusalReason(cfg, pid, peer.DiagnosePID(pid)))
 			conn.Close()
 			conn = nil
@@ -736,7 +744,7 @@ func dialDaemon(cfg config.Config) *reporter {
 		// be refused -- and a user who is not told that will read the refusals
 		// as the tools being broken.
 		fmt.Fprintf(os.Stderr,
-			"holdcall: no daemon is listening on %s\nnim: a call Holdcall cannot record is a call Holdcall will not forward, so every tool call in this session will be denied\n",
+			"holdcall: no daemon is listening on %s\nholdcall: a call Holdcall cannot record is a call Holdcall will not forward, so every tool call in this session will be denied\n",
 			cfg.Daemon.Socket)
 	}
 	go r.loop()
@@ -1119,7 +1127,7 @@ func (r *reporter) miss(reason string) {
 
 	if first {
 		fmt.Fprintf(os.Stderr,
-			"holdcall: not recording every call -- %s\nnim: the relay is unaffected; the journal for this session will be incomplete\n",
+			"holdcall: not recording every call -- %s\nholdcall: the relay is unaffected; the journal for this session will be incomplete\n",
 			reason)
 	}
 }

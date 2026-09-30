@@ -509,6 +509,65 @@ func TestRealRelayWithNoDaemonReachesNothing(t *testing.T) {
 	}
 }
 
+// A configuration the daemon refuses to start with -- here a socket path past
+// the AF_UNIX limit -- used to be announced as "relaying anyway; calls will not
+// be recorded". Neither half of that was true: a call is not relayed
+// unrecorded, it is denied, because the daemon that would decide it runs the
+// same check and exits, so none is ever reachable. The claim is about what the
+// relay does, so it is checked against the real one: everything that is not a
+// tools/call still passes through, every tools/call is refused, and what the
+// relay says on stderr is that.
+func TestRealRelayWithAConfigTheDaemonRefusesSaysEveryCallWillBeDenied(t *testing.T) {
+	s := build(t)
+	long := filepath.ToSlash(filepath.Join(s.home, strings.Repeat("d", 100), "holdcall.sock"))
+	if err := os.WriteFile(filepath.Join(s.home, "config.toml"),
+		[]byte("[daemon]\nsocket = \""+long+"\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := s.serve(t)
+
+	initialize := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}`
+	r.send(t, initialize)
+	if id, isError, text := decodeLine(t, r.next(t)); id != "1" || isError {
+		t.Errorf("initialize came back as id=%s isError=%v (%q): the relay does not pass other messages through", id, isError, text)
+	}
+	if !strings.Contains(s.received(t), initialize) {
+		t.Error("initialize did not reach the connector verbatim")
+	}
+
+	r.send(t, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"echo","arguments":{}}}`)
+	id, isError, text := decodeLine(t, r.next(t))
+	if id != "2" || !isError || text != mcp.DeniedNoDecision {
+		t.Errorf("the call came back as id=%s isError=%v (%q), want the could-not-decide refusal", id, isError, text)
+	}
+	if got := s.received(t); strings.Contains(got, "tools/call") {
+		t.Errorf("a call reached the connector with no daemon to decide it:\n%s", got)
+	}
+
+	// A frame it cannot read is dropped rather than forwarded, and says so: the
+	// other stderr line this relay prints about what it will not relay.
+	r.send(t, `{not json`)
+	if !r.silent(300 * time.Millisecond) {
+		t.Error("the relay answered a frame it could not read")
+	}
+
+	stderr := r.errors()
+	for _, want := range []string{
+		"socket path is", // the configuration's own complaint, as the daemon would make it
+		"the daemon will not start with this configuration, so every tool call in this session will be denied",
+		"not relaying a frame that is not valid JSON",
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("the relay's stderr does not say %q:\n%s", want, stderr)
+		}
+	}
+	for _, stale := range []string{"relaying anyway", "nim:"} {
+		if strings.Contains(stderr, stale) {
+			t.Errorf("the relay's stderr still says %q:\n%s", stale, stderr)
+		}
+	}
+}
+
 // Anything that is not a tools/call still goes straight through, daemon or no
 // daemon. Fail-closed applies to calls, not to the protocol.
 func TestRealRelayStillPassesEverythingElse(t *testing.T) {
