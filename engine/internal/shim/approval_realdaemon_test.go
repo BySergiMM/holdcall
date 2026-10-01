@@ -1,7 +1,6 @@
 package shim
 
 import (
-	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -39,9 +38,15 @@ func startRealDaemon(t *testing.T, approvalTimeout time.Duration) config.Config 
 		t.Fatalf("creating the test home's machine-id: %v", err)
 	}
 	// Outside home on purpose: an AF_UNIX path is capped near 104 bytes and a
-	// temporary directory is already most of that.
-	sock := filepath.Join(os.TempDir(), fmt.Sprintf("holdcall-shim-real-%d.sock", time.Now().UnixNano()%1e9))
-	t.Cleanup(func() { os.Remove(sock) })
+	// temporary directory is already most of that. In a directory of its own,
+	// not directly in the temp directory: the daemon refuses a socket directory
+	// another user owns, and on a Linux CI runner that is /tmp.
+	sockDir, err := os.MkdirTemp("", "hcs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(sockDir) })
+	sock := filepath.Join(sockDir, "d.sock")
 
 	cfg := config.Config{Daemon: config.Daemon{
 		Socket: sock, DataDir: filepath.Join(home, "data"),

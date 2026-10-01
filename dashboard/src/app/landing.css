@@ -114,7 +114,7 @@
 
 /* ------------------------------------------------------------- honest */
 .lp-honest { max-width: var(--lp-max); margin: 0 auto; padding: 3rem var(--lp-gutter); border-top: 1px solid var(--border); }
-.lp-honest dl { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2rem; margin: 1rem 0 0; }
+.lp-honest dl { display: grid; grid-template-columns: repeat(2, 1fr); gap: 2rem; margin: 1rem 0 0; }
 .lp-honest dt { font-family: var(--lp-display); font-size: 1.25rem; margin-bottom: 0.4rem; }
 .lp-honest dd { margin: 0; color: var(--text-2); }
 
@@ -130,20 +130,9 @@
 .lp-access { background: var(--surface-2); border-top: 1px solid var(--border); }
 .lp-access .lp-inner { max-width: var(--lp-max); margin: 0 auto; padding: 3.5rem var(--lp-gutter) 0; }
 .lp-access p { color: var(--text-2); max-width: 62ch; margin-bottom: 1.5rem; }
-.lp-form { display: grid; grid-template-columns: minmax(0, 24rem) auto; gap: 0.6rem; align-items: start; padding-bottom: 3.5rem; }
-.lp-form input {
-  font: inherit; padding: 0.7rem 0.9rem; border: 1px solid var(--border-strong); border-radius: var(--radius);
-  background: var(--surface); color: var(--text); width: 100%; box-sizing: border-box;
-}
-.lp-form input[aria-invalid="true"] { border-color: var(--bad); }
-.lp-form button {
-  font: inherit; padding: 0.7rem 1.1rem; border: 1px solid var(--text); border-radius: var(--radius);
-  background: var(--text); color: var(--bg); cursor: pointer; white-space: nowrap;
-}
-.lp-form button:disabled { opacity: 0.6; cursor: default; }
-.lp-form-help { grid-column: 1 / -1; font-size: 0.85rem; color: var(--text-3); min-height: 1.4em; }
-.lp-form-note { padding-bottom: 3.5rem; color: var(--text); max-width: 62ch; }
-.lp-visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.lp-install { max-width: 62rem; margin-bottom: 1rem; overflow-wrap: anywhere; }
+.lp-access .lp-install-links { padding-bottom: 3.5rem; margin-bottom: 0; }
+.lp-install-links a { color: var(--text); }
 
 /* --------------------------------------------------------------- footer */
 .lp-foot { max-width: var(--lp-max); margin: 0 auto; padding: 1.5rem var(--lp-gutter) 2.5rem; display: flex; justify-content: space-between; gap: 1rem; flex-wrap: wrap; font-size: 0.85rem; color: var(--text-3); border-top: 1px solid var(--border); }
@@ -165,5 +154,4 @@
   .lp-flow { grid-template-columns: 1fr; gap: 1.5rem; }
   .lp-flow li + li::before { content: "\2193"; left: 50%; top: -1.35rem; transform: translateX(-50%); }
   .lp-proof ul { grid-template-columns: repeat(2, 1fr); }
-  .lp-form { grid-template-columns: 1fr; }
 }

@@ -65,19 +65,21 @@ func (s *fakeStore) has(target string) bool {
 	return ok
 }
 
-// unverifiedState was a connState on the branch these tests came from, where
-// peer verification lived inside the request dispatch. On this one the peer
-// check runs once at accept, above both message families, so what a request
-// carries is only the purpose binding -- see requestState. The tests below
-// exercise the handlers themselves; the authorization layer around them has
-// its own socket-backed tests in peer_authz_test.go.
-func unverifiedState() *requestState { return &requestState{} }
+// verifiedState is a connection whose peer the kernel confirmed was Holdcall
+// run by this user -- what every connection on linux and macOS that got past
+// the accept-time check is. The zero requestState is the other kind, one
+// nobody verified, and is refused a credential: see peerVerified, and
+// peer_unverified_test.go for the tests of that refusal. The tests below
+// exercise the handlers themselves with a verified connection; the
+// authorization layer around them has its own socket-backed tests in
+// peer_authz_test.go.
+func verifiedState() *requestState { return &requestState{peerVerified: true} }
 
 // This is the fail-open guarantee: a target with no connector configured
 // must behave exactly like it does without M3 at all.
 func TestHandleCredentialGetOnUnconfiguredTargetIsFailOpen(t *testing.T) {
 	j := freshJournal(t)
-	resp := handleCredentialGet(Request{ID: "1", Kind: KindCredentialGet, Target: "github"}, unverifiedState(), j, newFakeStore(), newTargetLocks())
+	resp := handleCredentialGet(Request{ID: "1", Kind: KindCredentialGet, Target: "github"}, verifiedState(), j, newFakeStore(), newTargetLocks())
 	if resp.Found {
 		t.Fatal("an unconfigured target must report Found=false")
 	}
@@ -96,7 +98,7 @@ func TestHandleCredentialGetReturnsTheConfiguredEnv(t *testing.T) {
 		t.Fatalf("store.Set: %v", err)
 	}
 
-	resp := handleCredentialGet(Request{ID: "1", Kind: KindCredentialGet, Target: "github"}, unverifiedState(), j, store, newTargetLocks())
+	resp := handleCredentialGet(Request{ID: "1", Kind: KindCredentialGet, Target: "github"}, verifiedState(), j, store, newTargetLocks())
 	if !resp.Found || resp.Error != "" {
 		t.Fatalf("unexpected response: %+v", resp)
 	}
@@ -117,7 +119,7 @@ func TestHandleCredentialGetOnBrokenSecretIsFailClosed(t *testing.T) {
 	// Deliberately no store.Set: the connector is configured in the journal
 	// but its secret is missing from the store, e.g. deleted outside Holdcall.
 
-	resp := handleCredentialGet(Request{ID: "1", Kind: KindCredentialGet, Target: "github"}, unverifiedState(), j, store, newTargetLocks())
+	resp := handleCredentialGet(Request{ID: "1", Kind: KindCredentialGet, Target: "github"}, verifiedState(), j, store, newTargetLocks())
 	if !resp.Found {
 		t.Fatal("a configured connector must report Found=true even when the secret is missing")
 	}
@@ -163,7 +165,7 @@ func TestHandleCredentialGetNeverTearsEnvKeyAndSecretUnderConcurrentSet(t *testi
 	defer func() { close(stop); wg.Wait() }()
 
 	for i := 0; i < 2000; i++ {
-		resp := handleCredentialGet(Request{ID: "g", Kind: KindCredentialGet, Target: "t"}, unverifiedState(), j, store, locks)
+		resp := handleCredentialGet(Request{ID: "g", Kind: KindCredentialGet, Target: "t"}, verifiedState(), j, store, locks)
 		if !resp.Found || resp.Error != "" {
 			continue
 		}
@@ -180,7 +182,7 @@ func TestHandleCredentialGetWithNoStoreIsFailClosed(t *testing.T) {
 	if err := j.SetConnector("github", "GITHUB_TOKEN", []string{"server"}, time.Now()); err != nil {
 		t.Fatalf("SetConnector: %v", err)
 	}
-	resp := handleCredentialGet(Request{ID: "1", Kind: KindCredentialGet, Target: "github"}, unverifiedState(), j, nil, newTargetLocks())
+	resp := handleCredentialGet(Request{ID: "1", Kind: KindCredentialGet, Target: "github"}, verifiedState(), j, nil, newTargetLocks())
 	if !resp.Found || resp.Error == "" {
 		t.Fatalf("a configured connector with no credential store available must fail closed: %+v", resp)
 	}
@@ -201,7 +203,7 @@ func TestHandleCredentialGetRejectsPivotingToADifferentTargetOnTheSameConnection
 	store.Set("github", "ghp_x")
 	store.Set("slack", "xoxb_y")
 
-	state := unverifiedState()
+	state := verifiedState()
 	locks := newTargetLocks()
 	first := handleCredentialGet(Request{ID: "1", Kind: KindCredentialGet, Target: "github"}, state, j, store, locks)
 	if !first.Found || first.Error != "" {
@@ -227,7 +229,7 @@ func TestHandleCredentialGetRejectsAnInvalidTarget(t *testing.T) {
 	j := freshJournal(t)
 	store := newFakeStore()
 	for _, target := range []string{"", "  ", ".", "..", "a/b", "a\\b", "a/../b", strings.Repeat("x", MaxTargetLen+1)} {
-		state := unverifiedState()
+		state := verifiedState()
 		resp := handleCredentialGet(Request{ID: "1", Kind: KindCredentialGet, Target: target}, state, j, store, newTargetLocks())
 		if resp.Error == "" {
 			t.Errorf("target %q should have been rejected by validation, got %+v", target, resp)
@@ -419,6 +421,14 @@ func TestHandleConnectorRemoveLeavesMetadataIfSecretRemovalFails(t *testing.T) {
 // This uses net.Pipe, so peer verification reports "unsupported" (like
 // Windows); the authorization-layer-specific tests below use a real unix
 // socket, which is what peer verification actually inspects.
+//
+// Unsupported means nobody verified the peer, and a credential is not released
+// to a peer nobody verified (peer_unverified_test.go). So the answer to the
+// credential.get below is the refusal and not the secret. It used to be the
+// secret, and this test used to say so; what it is here to show is that a
+// request is answered and that an event after it is still taken, which the
+// refusal shows as well as the secret did. The release to a peer that was
+// verified, over a real socket, is TestACredentialIsReleasedToAPeerTheKernelConfirmed.
 func TestHandleDispatchesRequestsAndEventsOnTheSameConnection(t *testing.T) {
 	j := freshJournal(t)
 	store := newFakeStore()
@@ -439,8 +449,8 @@ func TestHandleDispatchesRequestsAndEventsOnTheSameConnection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SendRequest: %v", err)
 	}
-	if !resp.Found || resp.Env["GITHUB_TOKEN"] != "ghp_x" {
-		t.Fatalf("unexpected response: %+v", resp)
+	if !resp.Found || resp.Error == "" || len(resp.Env) != 0 || len(resp.Command) != 0 {
+		t.Fatalf("a connection nobody verified should be refused the credential, with an answer that says so: %+v", resp)
 	}
 
 	enc := json.NewEncoder(client)
@@ -477,9 +487,12 @@ func TestHandleRejectsMixingCredentialAndConnectorRequestsOnOneConnection(t *tes
 		close(done)
 	}()
 
+	// net.Pipe is a peer nobody verified, so the answer is the refusal (Found,
+	// with an error) and not the secret. What this test needs from the first
+	// request is only that it makes the connection a credential connection.
 	first, err := SendRequest(client, Request{ID: "1", Kind: KindCredentialGet, Target: "github"})
 	if err != nil || !first.Found {
-		t.Fatalf("first (credential.get) request should succeed: %+v, %v", first, err)
+		t.Fatalf("first (credential.get) request should be answered as a configured connector: %+v, %v", first, err)
 	}
 
 	second, err := SendRequest(client, Request{ID: "2", Kind: KindConnectorList})

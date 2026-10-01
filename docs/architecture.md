@@ -65,16 +65,27 @@ sends a byte, and refuses to take decisions from anything else.
 ## Layer 2: the daemon (`internal/daemon`)
 
 One per user, started on demand by the first relay and detached from any
-terminal. It listens on a unix socket whose path is derived from the Holdcall
-home (`~/Library/Application Support/holdcall` on macOS, `$XDG_RUNTIME_DIR` or
-the temp dir elsewhere). Two things happen at accept, before a byte is read:
+terminal. It listens on a unix socket named by a short hash of the Holdcall home
+(the home is the user's choice and may be too deep for a socket path, so the
+socket cannot live in it), in a directory only this user can use:
+`$XDG_RUNTIME_DIR`, else the temp directory if it is already private (macOS's
+`$TMPDIR`), else a `holdcall-<uid>` directory inside it (Linux's `/tmp`). The
+home, data and socket directories are created `0700` when they are missing and
+checked at startup: the daemon refuses to start in one another user owns, and
+warns about, without changing, one the user owns that others can reach and that
+Holdcall did not create (`config.EnsurePrivateDir`; not on Windows, where
+nothing is checked). Two things
+happen at accept, before a byte is read:
 
-- **Peer identity** (`internal/peer`): the kernel is asked which executable
-  the connecting process is running (dev/ino of its main image on macOS via
-  `proc_info`, `/proc/<pid>/exe` on Linux; unsupported on Windows). Anything
-  that is not this same binary is refused. An older build of Holdcall at the same
+- **Peer identity** (`internal/peer`): the kernel is asked which user the
+  connecting process runs as (its effective uid, compared with the daemon's) and
+  which executable it is running (dev/ino of its main image on macOS via
+  `proc_info`, `/proc/<pid>/exe` on Linux). Anything that runs as another user,
+  or is not this same binary, is refused. An older build of Holdcall at the same
   path is refused too, but named as such, and `holdcall daemon restart` is the
-  remedy.
+  remedy. On Windows nothing is asked: the connection is let through and carries
+  on as one nobody verified, and such a connection is never given a credential
+  (`docs/security.md`, *Windows is experimental*).
 - **Agent identity**: the relay's parent process is resolved the same way
   and matched against the enrolments in `nim_agents` (`holdcall agent add <name>
   <path>`). The result is bound to the session at `session.start` and never
@@ -115,9 +126,13 @@ policy has the same verifiable history as calls.
 
 ## Layer 4: the journal (`internal/journal`)
 
-`nim_journal` is append-only (triggers refuse update and delete) and
-hash-chained: each entry's hash covers a canonical encoding of its fields
-plus the previous hash, from a genesis derived from the machine id.
+`nim_journal` is append-only by construction of the code, not by anything in
+the database: no statement the engine runs updates or deletes an entry (a call is
+two entries, never one row that changes), and there are no SQL triggers, so
+nothing in SQLite refuses an update or delete made by another process that can
+write the file. What catches that is the hash chain, which is unkeyed
+(`docs/journal-format.md`): each entry's hash covers a canonical encoding of its
+fields plus the previous hash, from a genesis derived from the machine id.
 `docs/journal-format.md` is normative and versioned (schema 1 to 4); a second
 implementation can reproduce the bytes from it alone, and the tests do.
 Kinds: `session.start`, `call.request`, `call.outcome`, `session.end`,
@@ -141,8 +156,13 @@ Secret Service through `secret-tool` on Linux, DPAPI on Windows. The daemon
 records which env var name and which argv may receive it. A relay asks for
 the credential at spawn time over its own short-lived connection; the daemon
 decides what gets spawned, not the caller, and injects the value into the
-connector's environment only. The value is never in argv, never in SQLite,
-never in the console.
+connector's environment only. The daemon releases it only to a peer the kernel
+confirmed, and the relay takes a connector only from a daemon it confirmed. The
+value is never in argv, never in SQLite, never in the console. What this layer
+does not do is keep the secret from another process of the same user: Holdcall
+asks the stores for no scope narrower than the user, so such a process can read it
+from the store without the daemon, and the connector it is injected into has it in
+its environment (`docs/security.md`, *Known gaps*).
 
 ## Layer 6: the operator's surfaces (`cmd/holdcall`, `internal/console`)
 
@@ -159,7 +179,11 @@ never in the console.
   (what the daemon holds for approval, read over the verified socket; it
   says so when the daemon cannot be asked). Views are URL fragments, and
   `#journal/<chain_seq>` or `#sessions/<id>` open one entry or session.
-  There is no write route: approving stays on the CLI.
+  There is no write route: approving stays on the CLI. Every path but the page
+  needs a token made when the console starts (256 random bits, an
+  `Authorization: Bearer` header, compared with `crypto/subtle`); the command
+  prints it in the fragment of the address it prints, which a browser never
+  sends, and the page attaches it to every request it makes.
 
 ## Layer 7: the repository's own claims (`dashboard/`, `.github/`)
 
@@ -203,6 +227,10 @@ ms with a budget configured, against a 2 s timeout.
 Not built: conditions on a call's arguments or on time, notifications for
 held calls, a hosted mirror (M8, planned as "what this machine reported"), a
 second OS principal for the daemon (which is what F-006 and a keyed journal
-both need). Never executed: anything on Windows, and Linux only in CI, which
-is what `docs/security.md`'s gaps table and the dashboard's platform columns
-say.
+both need). On Linux and Windows the evidence is CI: the suite passes on
+`ubuntu-latest` since 2026-09-26 and on `windows-latest` since 2026-09-28, and
+nothing in these documents records a person running either by hand; on Windows
+the tests that show an attacker refused are skipped by name. Windows is
+experimental: it verifies no peer, so it releases no credential.
+`docs/security.md`'s gaps table and the dashboard's platform columns say the
+same.

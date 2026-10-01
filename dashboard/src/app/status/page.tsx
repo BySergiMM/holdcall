@@ -129,7 +129,7 @@ export default function Page() {
           lede="Point a real MCP client at Holdcall in about five minutes."
         >
           <Field k="Install">
-            <code>curl -fsSL https://raw.githubusercontent.com/BySergiMM/holdcall/m1-bootstrap/install.sh | sh</code>
+            <code>curl -fsSL https://raw.githubusercontent.com/BySergiMM/holdcall/main/install.sh | sh</code>
           </Field>
           <Field k="Five minutes to a first decision">
             <ol style={{ margin: 0, paddingLeft: "1.1rem" }}>
@@ -257,9 +257,10 @@ export default function Page() {
               addressed. Rows sort worst-first. A row with no test is a written assessment, and says so.
               <br />
               <br />
-              These statuses describe <strong>macOS and Linux</strong>. Holdcall has never been executed on Windows, and has
-              no peer verification there at all (F-002) — so every row in the <span className="prov">identity</span>{" "}
-              category should be read as undefended on that platform.
+              These statuses describe <strong>macOS and Linux</strong>. The suite runs on Windows in CI, with the tests that
+              show an attacker refused skipped by name, and Holdcall has no peer verification there at all (F-002) — so
+              every row in the <span className="prov">identity</span> category should be read as undefended on that
+              platform, and no credential is released there.
             </>
           }
         >
@@ -470,9 +471,10 @@ export default function Page() {
             </table>
           </div>
           <p style={{ marginTop: "0.7rem", fontSize: 13, color: "var(--text-3)" }}>
-            Cross-compile jobs build only — they do not run tests or <code>go vet</code>, which is finding F-009. And CI
-            does not run with <code>-v</code>, so a skipped adversarial test is indistinguishable from a passing one in
-            the log (F-010).
+            Cross-compile jobs build and run <code>go vet</code> but run no tests; the test jobs do, on all three
+            platforms (F-009, fixed). CI runs with <code>-v</code>, and an evidence script fails the run if a test cited
+            on this page was skipped instead of run, apart from the Windows tests named in an allow-list (F-010,
+            fixed).
           </p>
         </Section>
 
@@ -513,10 +515,11 @@ export default function Page() {
               </p>
             </div>
             <div className="card">
-              <h3 style={{ fontSize: "0.92rem", marginBottom: "0.5rem" }}>Windows is unrun</h3>
+              <h3 style={{ fontSize: "0.92rem", marginBottom: "0.5rem" }}>Windows is experimental</h3>
               <p style={{ color: "var(--text-2)", fontSize: 14 }}>
-                Holdcall cross-compiles for Windows and has never been executed on it. Where a platform column says
-                &quot;unsupported&quot;, that is a deliberate stub returning an error, not a gap someone forgot.
+                The suite runs on a Windows runner in CI, and that is all the evidence there is for Windows: no person
+                at a Windows desktop. It verifies no peer, so no credential is released there. Where a platform column
+                says &quot;unsupported&quot;, that is a deliberate stub returning an error, not a gap someone forgot.
               </p>
             </div>
             <div className="card">

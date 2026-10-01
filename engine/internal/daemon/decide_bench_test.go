@@ -33,9 +33,10 @@ import (
 // write call.request to the socket, the daemon evaluates the deny list,
 // appends the chained entry to SQLite and commits it, then writes the
 // decision back and the client reads it. The journal write is included on
-// purpose -- the entry is durable before the answer is sent, which is what
+// purpose -- the entry is committed before the answer is sent, which is what
 // makes a forwarded call a recorded call, and excluding it would measure
-// something Holdcall never does.
+// something Holdcall never does. "Committed" is not "proven to survive a power
+// cut"; docs/benchmarks.md says what it is.
 
 // quiet silences the daemon's own logging for the duration of a benchmark.
 //
@@ -234,7 +235,7 @@ func BenchmarkCredentialLookup(b *testing.B) {
 	samples := make([]time.Duration, 0, b.N)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		state := &requestState{}
+		state := verifiedState()
 		start := time.Now()
 		resp := handleCredentialGet(
 			Request{ID: "1", Kind: KindCredentialGet, Target: "github"}, state, j, store, locks)

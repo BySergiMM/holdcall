@@ -158,7 +158,7 @@ response carrying `result.isError`.
 
 **Fail-closed, and not for performance reasons.** No daemon, a slow daemon, a
 closed socket, a reply that does not match the question — every one of them is a
-denial. The synchronous hop, with the durable write included, costs p99 0.27 ms
+denial. The synchronous hop, with the journal commit included, costs p99 0.27 ms
 for one relay and p99 1.6 ms with sixteen contending. See `docs/benchmarks.md`
 for the method, the machine and the commands that reproduce it. So
 there was never a performance argument for the alternative; the argument would

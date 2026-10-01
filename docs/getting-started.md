@@ -209,7 +209,7 @@ holdcall approve <id>                     # or: holdcall reject <id> --reason "w
 
 ```bash
 holdcall log                              # calls, newest first
-holdcall console                          # journal, sessions and policy, at http://127.0.0.1:7717 (loopback, read-only)
+holdcall console                          # journal, sessions and policy; open the address it prints (loopback, read-only, token in the address)
                                      # /#journal, /#sessions and /#policy open a tab directly
 holdcall verify                           # walk the chain and report whether it's self-consistent
 holdcall verify --expect-head <hash>      # also check nothing before that head was rewritten

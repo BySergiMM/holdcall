@@ -20,9 +20,9 @@
     "name": "Holdcall",
     "tagline": "A local process between an MCP client and the MCP servers it uses.",
     "currentMilestone": "M4.5",
-    "currentPhase": "M1 to M7 done and F-001 closed (an in-place upgrade is diagnosed, holdcall daemon restart is the remedy); M8 planned as an opt-in mirror of what the machine reported; the whole suite passes on real Linux and macOS runners since 2026-09-26; Windows executes and passes since 2026-09-28, with the peer-identity tests skipped there by design (F-029 fixed)",
+    "currentPhase": "M1 to M7 done and F-001 closed (an in-place upgrade is diagnosed, holdcall daemon restart is the remedy); M8 planned as an opt-in mirror of what the machine reported; the whole suite passes on real Linux and macOS runners since 2026-09-26; Windows executes and passes since 2026-09-28, with the peer-identity tests skipped there by design (F-029 fixed), and Windows is experimental: it verifies no peer, so it releases no credential",
     "overallStatus": "in_progress",
-    "statusNote": "Holdcall decides per (agent, connector, tool) against allow and deny rules in SQLite -- most specific wins, deny beats allow at equal specificity, no rule means allow -- records every call, every rule change and every enrolment change in one hash chain, and configures Claude Code, Cursor and Claude Desktop to go through it with holdcall init. The suite passes on Linux and macOS in CI; on Windows it passes too, with the identity tests skipped by design and the two known gaps unchanged.",
+    "statusNote": "Holdcall decides per (agent, connector, tool) against allow and deny rules in SQLite -- most specific wins, deny beats allow at equal specificity, no rule means allow -- records every call, every rule change and every enrolment change in one hash chain, and configures Claude Code, Cursor and Claude Desktop to go through it with holdcall init. The suite passes on Linux and macOS in CI; on Windows it passes too, with the identity tests skipped by design. Windows is experimental: it cannot verify who connects to the daemon, so it releases no credential. On no platform is a credential private from another process running as the same user (F-030).",
     "provenance": "declared"
   },
   "ciSnapshot": {
@@ -145,25 +145,27 @@
       {
         "name": "Credential access",
         "state": "implemented",
-        "detail": "Secrets in the OS store, released only for the connector's registered command.",
+        "detail": "Secrets in the OS store, released only for the connector's registered command and only to a peer the platform confirmed, so never on Windows. Not private from another process of the same user, which can read the store itself.",
         "guarantees": [
           "credential-command-binding",
-          "credential-never-in-argv"
+          "credential-never-in-argv",
+          "credential-released-only-to-confirmed-peer"
         ]
       },
       {
         "name": "Peer verification",
         "state": "implemented",
-        "detail": "Both ends of the socket verify each other by kernel-resolved executable identity. Unsupported on Windows.",
+        "detail": "Both ends of the socket verify each other by kernel-resolved user and executable identity, in directories only the user can reach. Windows verifies nothing.",
         "guarantees": [
           "peer-identity-both-ways",
-          "peer-resists-path-swap"
+          "peer-resists-path-swap",
+          "directories-private-to-the-user"
         ]
       },
       {
         "name": "Journal",
         "state": "implemented",
-        "detail": "Append-only and hash-chained. Integrity, not authenticity — the chain is unkeyed.",
+        "detail": "Hash-chained, and append-only because the code never updates or deletes an entry, not because the database refuses it. Integrity, not authenticity — the chain is unkeyed.",
         "guarantees": [
           "journal-append-only",
           "journal-detects-alteration",
@@ -183,8 +185,8 @@
       "id": "peer-identity-both-ways",
       "title": "Both ends of the daemon socket verify each other",
       "status": "verified",
-      "statement": "A process that is not this binary cannot speak on the daemon socket, in either direction. The daemon checks its callers; the relay and every management command check whatever is listening before sending a byte.",
-      "notGuaranteed": "It answers \"is this Holdcall\", not \"is this a relay the operator meant to run\". Anything able to execute the binary passes it.",
+      "statement": "A process that is not this binary, or that runs as another user, cannot speak on the daemon socket, in either direction. The daemon checks its callers; the relay and every management command check whatever is listening before sending a byte.",
+      "notGuaranteed": "It answers \"is this Holdcall\", not \"is this a relay the operator meant to run\". Anything able to execute the binary as this user passes it. Windows verifies nothing: every connection is accepted, and none is given a credential.",
       "implementation": [
         "engine/internal/peer/peer.go",
         "engine/internal/daemon/daemon.go",
@@ -195,14 +197,16 @@
         "TestANonNimProcessCannotObtainADecision",
         "TestAnImpostorOnTheSocketCannotChooseWhatIsSpawned",
         "TestAnImpostorLearnsNothingFromTheAttempt",
-        "TestDialDaemonRefusesAnImpostor"
+        "TestDialDaemonRefusesAnImpostor",
+        "TestAPeerRunningAsAnotherUserIsRefusedEvenIfItRunsThisBinary",
+        "TestTheUserComparisonMatchesOnlyTheSameUser"
       ],
       "platforms": {
         "darwin": "verified",
         "linux": "verified",
         "windows": "unsupported"
       },
-      "lastVerified": "2026-09-15",
+      "lastVerified": "2026-10-01",
       "provenance": "declared"
     },
     {
@@ -258,7 +262,7 @@
       "title": "A secret never becomes a command-line argument",
       "status": "verified",
       "statement": "Secrets are read from stdin or a no-echo prompt, stored in the OS credential store, and reach a connector only through its environment.",
-      "notGuaranteed": "The connector receives the secret in its environment and can do what it likes with it. On Linux any same-user process can read /proc/<pid>/environ.",
+      "notGuaranteed": "The connector receives the secret in its environment and can do what it likes with it. On Linux any same-user process can read /proc/<pid>/environ. Nor is the secret private from a same-user process that queries the OS credential store itself, which never goes through the daemon (F-030; read from the code, not demonstrated).",
       "implementation": [
         "engine/cmd/holdcall/connector.go",
         "engine/internal/credential/credential.go"
@@ -307,7 +311,7 @@
       "title": "The journal is append-only in fact, not by convention",
       "status": "verified",
       "statement": "A call produces two immutable entries rather than one row that is updated. Nothing in the write path updates an entry. Configuration that decides what may happen -- rules and enrolments -- is changed in one transaction with the entry that records the change.",
-      "notGuaranteed": "Append-only as far as this code is concerned. Nothing stops another process opening the file and writing to it.",
+      "notGuaranteed": "Append-only as far as this code is concerned. There are no SQL triggers, so nothing in the database refuses an update or delete, and nothing stops another process opening the file and writing to it.",
       "implementation": [
         "engine/internal/journal/journal.go"
       ],
@@ -457,7 +461,7 @@
       "title": "A client cannot tell it is going through Holdcall",
       "status": "verified",
       "statement": "Everything that is not a tools/call is forwarded as the exact bytes that arrived, and a real MCP client run direct and through Holdcall observes the same tool list, schemas, unicode, a 512 KiB payload, error propagation and ping. Unit tests cover the framing; tools/relay-rig proves it with a real client, re-run on 2026-09-15 against the current binary, including the two cases that must differ through Holdcall.",
-      "notGuaranteed": "The rig has run under both the initialize and the server/discover handshake. The rig has run locally and on darwin only; the relay-rig CI job exists but has not yet run on GitHub's runners, so linux stays partial and windows unverified.",
+      "notGuaranteed": "The rig has run under both the initialize and the server/discover handshake. It runs by hand on darwin and, since the relay-rig CI job, on ubuntu-latest on every push: the job fails unless the rig's last line is RESULT: IDENTICAL, and it passed in run 36474994821 (2026-09-28). It does not run on Windows or on a macOS runner.",
       "implementation": [
         "engine/internal/mcp/mcp.go",
         "engine/internal/shim/shim.go"
@@ -469,10 +473,10 @@
       ],
       "platforms": {
         "darwin": "verified",
-        "linux": "partial",
+        "linux": "verified",
         "windows": "unverified"
       },
-      "lastVerified": "2026-09-15",
+      "lastVerified": "2026-10-01",
       "provenance": "declared"
     },
     {
@@ -782,6 +786,97 @@
         "windows": "unsupported"
       },
       "lastVerified": "2026-09-16",
+      "provenance": "declared"
+    },
+    {
+      "id": "credential-released-only-to-confirmed-peer",
+      "title": "A credential is released only to a peer the platform confirmed",
+      "status": "verified",
+      "statement": "The daemon answers credential.get for a configured connector only when the operating system confirmed who is asking: this user, running this binary. For a connection nobody could verify it answers with an error before the secret store is read, and a relay takes no connector, credential or command from a daemon it could not verify. A target with no connector is still reported as having none, so a server that needs no secret runs.",
+      "notGuaranteed": "Windows verifies no peer, so on Windows no credential is released and no connector works. This is about what the daemon hands over; it does not stop a process of the same user reading the OS credential store directly (F-030).",
+      "implementation": [
+        "engine/internal/daemon/request.go",
+        "engine/internal/daemon/daemon.go",
+        "engine/internal/shim/shim.go",
+        "engine/internal/peer/peer.go"
+      ],
+      "tests": [
+        "TestACredentialIsNotReleasedToAConnectionNobodyVerified",
+        "TestAConnectionNobodyVerifiedIsStillToldThatATargetHasNoConnector",
+        "TestTheDaemonReleasesNoCredentialOverAConnectionItCannotVerify",
+        "TestACredentialIsReleasedToAPeerTheKernelConfirmed",
+        "TestAConnectorAnsweredByADaemonNobodyVerifiedIsNotTaken",
+        "TestASecretIsNotSentToADaemonNobodyVerified",
+        "TestOnWindowsARealDaemonReleasesNoCredentialOverARealSocket",
+        "TestOnWindowsARelayDoesNotSpawnWhatAnUnverifiedDaemonNamed"
+      ],
+      "platforms": {
+        "darwin": "verified",
+        "linux": "verified",
+        "windows": "verified"
+      },
+      "lastVerified": "2026-10-01",
+      "provenance": "declared"
+    },
+    {
+      "id": "directories-private-to-the-user",
+      "title": "The socket, the journal and Holdcall's home are in directories only the user can reach",
+      "status": "verified",
+      "statement": "Holdcall's home, its data directory and the directory the socket is in are created 0700 when they do not exist, and one that already exists must belong to the user running Holdcall. A directory another user owns is refused and the daemon does not start. The default socket is never placed directly in a shared directory such as /tmp, and the holdcall-<uid> directory it goes in instead is tightened to 0700 and refused if it is a symbolic link.",
+      "notGuaranteed": "A directory that already existed, that the user owns and that the operator pointed Holdcall at (a [daemon] socket set to a file in the home directory makes the home directory the socket's directory) is left as it is, not narrowed, and warned about: the socket is still 0600 and every peer is checked, but the journal in such a data directory is only as private as the directory. Not on Windows, where no ACL is read or set. And it is the first line of defence against other users, not a boundary against a process of the same user, which owns the same directories.",
+      "implementation": [
+        "engine/internal/config/privatedir.go",
+        "engine/internal/config/privatedir_unix.go",
+        "engine/internal/config/config.go",
+        "engine/internal/daemon/daemon.go"
+      ],
+      "tests": [
+        "TestEnsurePrivateDirRefusesADirectoryAnotherUserOwns",
+        "TestEnsurePrivateDirNeverChangesADirectoryItDidNotCreate",
+        "TestEnsurePrivateDirDoesNotTakeAHomeDirectoryAway",
+        "TestEnsurePrivateDirMakesWhatItCreatesPrivateAndLeavesTheParentAlone",
+        "TestEnsurePrivateDirTightensTheDefaultRuntimeDirectory",
+        "TestEnsurePrivateDirRefusesALinkAtTheDefaultRuntimeDirectory",
+        "TestTheDefaultSocketIsNeverPutDirectlyInADirectoryOthersCanUse",
+        "TestListenRefusesASocketDirectoryAnotherUserOwns",
+        "TestListenLeavesAPreExistingSocketDirectoryAsItIs",
+        "TestListenCreatesAMissingSocketDirectoryPrivate",
+        "TestTheDaemonDoesNotStartWithItsSocketInADirectoryAnotherUserOwns"
+      ],
+      "platforms": {
+        "darwin": "verified",
+        "linux": "verified",
+        "windows": "unsupported"
+      },
+      "lastVerified": "2026-10-01",
+      "provenance": "declared"
+    },
+    {
+      "id": "console-needs-its-token",
+      "title": "The console is read only by whoever was handed its address",
+      "status": "verified",
+      "statement": "Every request to holdcall console except the one for its page needs a token of 256 random bits, made when the console starts, and sent in an Authorization header. The command prints it in the fragment of the address it prints, so it is in no request, Referer or log until the page attaches it. A process that was not handed the address, and cannot guess 256 bits, reads none of the record and none of the held calls' arguments.",
+      "notGuaranteed": "Whoever has the token reads everything the console serves: it is on the terminal the command printed it to and in the console's memory, so a process of the same user that can read either is not stopped, and nothing records who read. The page itself loads without it, and holds nothing from any journal. The comparison uses crypto/subtle.ConstantTimeCompare, which no test can show. The script in the page that keeps the token and attaches it has not been run in a browser.",
+      "implementation": [
+        "engine/internal/console/console.go",
+        "engine/internal/console/index.html",
+        "engine/cmd/holdcall/main.go"
+      ],
+      "tests": [
+        "TestNothingButThePageIsReadWithoutTheToken",
+        "TestTheTokenIsAcceptedInTheAuthorizationHeaderOnly",
+        "TestTheTokenOpensEveryRouteTheConsoleServes",
+        "TestThePageLoadsWithoutTheTokenAndHoldsNothingFromTheJournal",
+        "TestEveryConsoleHasATokenOfItsOwnThatCannotBeGuessed",
+        "TestEveryRequestThePageMakesGoesThroughTheOneFunctionThatCarriesTheToken",
+        "TestTheConsoleTheCommandStartsAnswersOnlyToWhoWasHandedItsAddress"
+      ],
+      "platforms": {
+        "darwin": "verified",
+        "linux": "verified",
+        "windows": "verified"
+      },
+      "lastVerified": "2026-10-01",
       "provenance": "declared"
     }
   ],
@@ -1132,7 +1227,7 @@
       "category": "journal",
       "status": "not_tested",
       "wasLive": false,
-      "evidence": "synchronous=FULL is asserted but never tested against real hardware loss.",
+      "evidence": "Holdcall does not set synchronous or fullfsync, so the SQLite build's default applies (F-034), and no test cuts power.",
       "tests": []
     },
     {
@@ -1189,7 +1284,7 @@
       "category": "identity",
       "status": "fail",
       "wasLive": true,
-      "evidence": "This is the threat model's adversary and it is only partly contained. It can run the holdcall binary, enrol agents, overwrite connectors, and open its own sessions. What it cannot do is read another connector's credential or forge entries without running Holdcall.",
+      "evidence": "This is the threat model's adversary and it is only partly contained. It can run the holdcall binary, enrol agents, overwrite connectors and open its own sessions. It can read any connector's credential straight from the operating system's credential store, without the daemon, because Holdcall does not restrict the store to itself (F-030; read from the code, not demonstrated), and it can read the environment of the server a secret is injected into. It can write holdcall.db directly and recompute the chain (journal-rewrite). What the daemon refuses it is a decision, an approval or a credential obtained through the socket, because it is not the Holdcall binary.",
       "tests": []
     },
     {
@@ -1424,6 +1519,71 @@
         "TestASecondArgumentsReportDoesNotReplaceTheFirst",
         "TestApproveSaysWhenTheArgumentsHaveNotArrived"
       ]
+    },
+    {
+      "id": "other-user-same-binary",
+      "name": "Connect to the daemon as another user running the same binary",
+      "category": "identity",
+      "status": "pass",
+      "wasLive": false,
+      "evidence": "Peer identity used to compare the peer's executable and nothing else, so any user able to run the Holdcall binary passed it; what kept other users off the socket was its directory and mode. The user is now compared first, from the kernel's record of the connection (SO_PEERCRED on Linux, LOCAL_PEERCRED on macOS), and a different one ends the check. Found by reading the code, not by an attack on a running install. The test makes the daemon side believe the peer runs as another user; the same comparison with a real second uid needs root and was run once, by hand, on Linux. Not run on macOS beyond the shared comparison, and not applicable on Windows, which verifies no peer.",
+      "tests": [
+        "TestAPeerRunningAsAnotherUserIsRefusedEvenIfItRunsThisBinary",
+        "TestTheUserComparisonMatchesOnlyTheSameUser"
+      ]
+    },
+    {
+      "id": "socket-directory-precreated",
+      "name": "Pre-create the socket's directory as another user, or leave the socket in a shared directory",
+      "category": "identity",
+      "status": "pass",
+      "wasLive": false,
+      "evidence": "The daemon bound its socket in whatever directory the path named, creating it if missing and leaving an existing one as it found it, and the default path could land directly in /tmp, where any local user can create a path first. Directories are now checked: one another user owns is refused, one that is missing is created 0700, Holdcall's own default runtime directory is tightened to 0700 and refused if it is a link, and the default is never directly in a shared directory. A pre-existing directory the operator chose and that others can reach is left as it is and warned about, so the attack is closed for every directory Holdcall makes or owns by name and, for the operator's own, answered by the 0600 socket and the peer check. Another user's directory is simulated by making the test believe it runs as a different uid; no test here creates a real second account. Linux and macOS only: nothing is checked on Windows.",
+      "tests": [
+        "TestListenRefusesASocketDirectoryAnotherUserOwns",
+        "TestListenLeavesAPreExistingSocketDirectoryAsItIs",
+        "TestEnsurePrivateDirRefusesADirectoryAnotherUserOwns",
+        "TestEnsurePrivateDirRefusesALinkAtTheDefaultRuntimeDirectory",
+        "TestTheDefaultSocketIsNeverPutDirectlyInADirectoryOthersCanUse",
+        "TestTheDaemonDoesNotStartWithItsSocketInADirectoryAnotherUserOwns"
+      ]
+    },
+    {
+      "id": "credential-to-unverified-peer",
+      "name": "Ask for a credential over a connection the platform could not verify",
+      "category": "credential",
+      "status": "pass",
+      "wasLive": false,
+      "evidence": "A connection the platform could not verify, which is every connection on Windows, used to be served like a verified one, so anything able to open the socket could be handed a connector's credential with the command it was registered for. credential.get now refuses before the secret store is read, and the test asserts the secret is neither in what is sent nor fetched; the relay in turn takes nothing from a daemon it could not verify. The cost is that no connector works on Windows. Found by reading the code, not by an attack on a running install.",
+      "tests": [
+        "TestACredentialIsNotReleasedToAConnectionNobodyVerified",
+        "TestTheDaemonReleasesNoCredentialOverAConnectionItCannotVerify",
+        "TestOnWindowsARealDaemonReleasesNoCredentialOverARealSocket",
+        "TestOnWindowsARelayDoesNotSpawnWhatAnUnverifiedDaemonNamed",
+        "TestAConnectorAnsweredByADaemonNobodyVerifiedIsNotTaken"
+      ]
+    },
+    {
+      "id": "credential-store-read-by-same-user",
+      "name": "Read a connector's credential from the OS credential store as a process of the same user",
+      "category": "credential",
+      "status": "fail",
+      "wasLive": false,
+      "evidence": "Not run against a store. Read from engine/internal/credential: each secret is stored under a name derived from values any process of the user can compute, and Holdcall passes the store no restriction on who may read it, so a process of the same user, a compromised downstream server included, can run the same lookup Holdcall does without the daemon being asked. Peer identity does not come into it. Whether the macOS Keychain would prompt a second program was not tested.",
+      "tests": []
+    },
+    {
+      "id": "console-other-local-process",
+      "name": "Read the journal, or the arguments of a held call, from another process on this machine through the console's port",
+      "category": "console",
+      "status": "pass",
+      "wasLive": true,
+      "evidence": "holdcall console bound loopback and checked the Host header, and answered every request that named a loopback host, so any local process could read /api/pending: with the token check switched off, which is what the old Handler did, the real command answered a read with no token with 200. Every path but the page now needs the per-launch token in an Authorization header: no token, a wrong one, one in the query string, a cookie or another header is a 401, an unknown path is a 401 and not a 404, and the real command's printed address opens the record while the same address without its token does not. Whoever is handed the token reads everything; a process of the same user that can read the terminal the address was printed in is not stopped.",
+      "tests": [
+        "TestNothingButThePageIsReadWithoutTheToken",
+        "TestTheTokenIsAcceptedInTheAuthorizationHeaderOnly",
+        "TestTheConsoleTheCommandStartsAnswersOnlyToWhoWasHandedItsAddress"
+      ]
     }
   ],
   "findings": [
@@ -1618,11 +1778,11 @@
       "id": "F-002",
       "severity": "high",
       "title": "Windows has no peer verification and no real ACL",
-      "problem": "AF_UNIX on Windows exposes no peer-credential API, and os.Chmod only toggles the read-only attribute.",
-      "impact": "On Windows, nothing verifies that a caller is Holdcall, and socket confidentiality rests on default directory ACLs.",
-      "evidence": "engine/internal/peer/image_windows.go returns unsupported by design. Nothing in this project has ever been run on Windows.",
+      "problem": "AF_UNIX on Windows carries no peer credentials (Microsoft lists ancillary data as unsupported), so there is no equivalent of SO_PEERCRED, and os.Chmod only toggles the read-only attribute. The peer's process id can be read through SIO_AF_UNIX_GETPEERPID, which Holdcall does not use.",
+      "impact": "On Windows nothing verifies that a caller is Holdcall or runs as this user, and socket confidentiality rests on default directory ACLs. Since a secret is no longer released to an unverified peer (F-031) no credential is released there at all, so connectors do not work; decisions, journal entries and the stand-in for the daemon remain open to any process that can open the socket.",
+      "evidence": "engine/internal/peer/peer_windows.go returns unsupported by design. The suite has run on windows-latest in CI since 2026-09-28 (F-029), with the tests that show an attacker refused skipped by name in .github/scripts/windows-skip-allowlist.txt, and TestOnWindowsARealDaemonReleasesNoCredentialOverARealSocket runs the credential refusal over a real Windows socket. Nothing here records a person running it on a Windows desktop. An earlier version of this finding said nothing had ever run on Windows, which stopped being true on 2026-09-26, and that closing the gap needed a named-pipe transport, which overstated it: a pid route exists.",
       "status": "accepted",
-      "nextAction": "A named-pipe transport with GetNamedPipeClientProcessId and an explicit DACL — a real architecture change.",
+      "nextAction": "Derive the user and the executable from the peer's process id (SIO_AF_UNIX_GETPEERPID), which nobody here has tried, or move Windows to a named-pipe transport with GetNamedPipeClientProcessId and an explicit DACL, which reverses the one-transport decision in docs/milestones.md. Until one lands Windows stays experimental.",
       "provenance": "declared"
     },
     {
@@ -1675,9 +1835,9 @@
       "title": "The relay rig has not been re-run since M1.5",
       "problem": "The end-to-end proof that a real client cannot tell it is going through Holdcall requires fastmcp, which is not installed here.",
       "impact": "Byte-exactness currently rests on unit tests plus a run from before the merge.",
-      "evidence": "Re-run on 2026-09-15 against the current binary with fastmcp 4.0.3 in the rig's own venv: RESULT: IDENTICAL on every case that must not differ, and two cases that must differ through Holdcall asserted precisely -- a call a rule denies comes back as Holdcall's tool error, and a frame with a repeated method key is refused. A relay-rig CI job now runs it on every push; that job has not yet run on GitHub's runners, only locally.",
+      "evidence": "Re-run on 2026-09-15 against the current binary with fastmcp 4.0.3 in the rig's own venv: RESULT: IDENTICAL on every case that must not differ, and two cases that must differ through Holdcall asserted precisely -- a call a rule denies comes back as Holdcall's tool error, and a frame with a repeated method key is refused. The relay-rig CI job runs it on ubuntu-latest on every push and fails unless the rig's last line is RESULT: IDENTICAL. It has run on GitHub's runners: in run 36474994821 (commit 4746a07, 2026-09-28) its step 'Run the relay rig' succeeded, and it has succeeded on later pushes.",
       "status": "fixed",
-      "nextAction": "Watch the first relay-rig job on GitHub go green. Until then the CI part of this is reasoned, not observed.",
+      "nextAction": "None. The job runs on Linux only: the rig is by hand on darwin and has never run on Windows.",
       "provenance": "declared"
     },
     {
@@ -1685,10 +1845,10 @@
       "severity": "low",
       "title": "Socket permissions have a window at creation",
       "problem": "net.Listen creates the socket with the process umask; chmod 0600 follows immediately after.",
-      "impact": "A brief window where the socket is connectable by other local users. Peer verification still refuses them.",
-      "evidence": "engine/internal/daemon/daemon.go listen().",
-      "status": "accepted",
-      "nextAction": "Set a restrictive umask around the Listen call.",
+      "impact": "There was a brief window where the socket was connectable by other local users. Peer verification still refused them, and now the directory does first.",
+      "evidence": "Fixed for every directory Holdcall makes or owns by name: engine/internal/daemon/daemon.go listen() first creates or checks the socket's directory (config.EnsurePrivateDir) and binds inside one that only this user can enter, so there is nobody to connect between net.Listen and the chmod. A directory another user owns is refused, which also covers a shared one such as /tmp. TestListenRefusesASocketDirectoryAnotherUserOwns fails when the check is removed. Not closed where the operator chose a directory that already existed and that others can enter (a socket set to a file in the home directory, say): it is left as it is and warned about, because Holdcall did not make it, and there the window is covered by the peer check and not by the directory. TestListenLeavesAPreExistingSocketDirectoryAsItIs pins both halves: the directory is untouched and the socket is 0600. Linux and macOS only: Windows checks no directory permission (F-002).",
+      "status": "fixed",
+      "nextAction": "None for directories Holdcall makes. The umask the old next action proposed was not used: it belongs to the whole process, and a private directory does not depend on it. For a directory the operator chose and others can enter, the warning says to chmod 700 it or move the setting.",
       "provenance": "declared"
     },
     {
@@ -1755,6 +1915,72 @@
       "evidence": "Fixed by cause between 2026-09-26 and 2026-09-28, in three CI rounds. daemon.RunWithStop lets a test stop an in-process daemon before its temporary directory is removed, which took 35 failures away at once; the end-to-end helper builds holdcall.exe and connector.exe there; the init test sets USERPROFILE, which is what os.UserHomeDir reads on Windows; the no-daemon test blocks the socket under a regular file, since a path like /nonexistent is relative on Windows and the daemon created it, bound, and decided a call the test says nobody can; two tests that need an enrolled agent skip by design and are in the Windows allow-list; the concurrent-opens test keeps its property and only makes the directory removal best-effort there; the backup-mode and stale-enrolment assertions are relaxed where Windows keeps no mode and no executable identity. The evidence script then reported 166 cited tests absent on a log with 419 passes: jq on Windows ends every name with a carriage return, which its anchored patterns never matched. Run 36473671781 has 0 failures on windows-latest with 27 skips, every one of them named in the allow-list with its reason; the job decides the run again.",
       "status": "fixed",
       "nextAction": "None for the suite. The two security properties that do not hold on Windows (no peer verification, no real socket ACL) are unchanged and still listed in docs/security.md's Known gaps; the skipped tests are exactly the ones that prove them.",
+      "provenance": "declared"
+    },
+    {
+      "id": "F-030",
+      "severity": "high",
+      "title": "Credentials are readable by any process running as the same user",
+      "problem": "Each secret is stored in the operating system's credential store under a name any process of the user can compute, and Holdcall passes the store no restriction on who may read it.",
+      "impact": "A compromised downstream server, which is the adversary this project's threat model names, can read the credential of every connector and not only its own, without the daemon being asked. Peer identity does not come into it, and the README used to say credentials were kept away from servers they were not registered for.",
+      "evidence": "Read from engine/internal/credential, not demonstrated: macOS security add-generic-password with no -T or -A, Linux secret-tool store with attributes derived from the Holdcall home, Windows CryptProtectData at user scope with no entropy. No test, and nothing in this repository, has queried a store from a second process, and whether the macOS Keychain prompts a second program was not tested. The README, SECURITY.md and docs/security.md now say plainly that isolation does not hold against a same-user process.",
+      "status": "accepted",
+      "nextAction": "A second OS principal for the daemon (the same change F-006 needs), or restricting each store entry to Holdcall's own binary where the platform allows it. Either has to be verified on its own platform before anything is claimed.",
+      "provenance": "declared"
+    },
+    {
+      "id": "F-031",
+      "severity": "medium",
+      "title": "A connection nobody could verify was given credentials",
+      "problem": "The daemon served a connection the platform could not verify, which is every connection on Windows, like a verified one, so anything able to open the socket could ask for a connector's credential and receive it with the command it was registered for.",
+      "impact": "On Windows a process of the same user could obtain every configured connector's secret from the daemon.",
+      "evidence": "Fixed: requestState.peerVerified is peer.Verdict.Verified(), and credential.get refuses before the store is read when it is false. TestACredentialIsNotReleasedToAConnectionNobodyVerified asserts the secret is neither sent nor read, with a verified connection as the control; TestACredentialIsReleasedToAPeerTheKernelConfirmed runs the control over a real unix socket; TestOnWindowsARealDaemonReleasesNoCredentialOverARealSocket runs the refusal on windows-latest. Found by reading the code, not by an attack on a running install.",
+      "status": "fixed",
+      "nextAction": "None. The price is that no connector works on Windows until F-002 is closed.",
+      "provenance": "declared"
+    },
+    {
+      "id": "F-032",
+      "severity": "medium",
+      "title": "Peer identity did not compare users",
+      "problem": "The peer check compared the peer's executable with the daemon's and nothing else, so another user running the same binary passed it.",
+      "impact": "What kept other users off the socket was only the directory it was in and its mode (F-008), with peer identity unable to see the difference between two users running one file.",
+      "evidence": "Fixed: the user is compared first, from SO_PEERCRED on Linux and LOCAL_PEERCRED on macOS, and a different one ends the check with its own wording. TestAPeerRunningAsAnotherUserIsRefusedEvenIfItRunsThisBinary fails when the comparison is removed. Found by reading the code, not by an attack on a running install.",
+      "status": "fixed",
+      "nextAction": "None on Linux and macOS. Windows verifies no peer (F-002).",
+      "provenance": "declared"
+    },
+    {
+      "id": "F-033",
+      "severity": "medium",
+      "title": "Opening the journal could fail with 'database is locked'",
+      "problem": "The journal's DSN switched the database to WAL before arming busy_timeout, so a lock another connection held at that moment failed the open at once instead of waiting.",
+      "impact": "A daemon starting while another handle was mid-write, or a test opening a second handle on a journal a daemon had just created, failed intermittently.",
+      "evidence": "Fixed by putting busy_timeout first in the DSN. TestOpenWaitsForALockAnotherConnectionHoldsInsteadOfFailing holds an exclusive lock and checks Open waits for it; it failed before the change and passes after, in the local test rig's SQLite driver. Whether the shipped modernc driver failed the same way was not observed.",
+      "status": "fixed",
+      "nextAction": "None; the test keeps the order from being reversed without notice.",
+      "provenance": "declared"
+    },
+    {
+      "id": "F-034",
+      "severity": "medium",
+      "title": "The journal's synchronous setting is the SQLite build's default",
+      "problem": "Nothing in engine/ sets synchronous or fullfsync, so whether a commit survives a power cut depends on the SQLite build's defaults.",
+      "impact": "The docs and the benchmarks called the journal write durable and said synchronous=FULL. A one-off probe in a Linux sandbox, through a stand-in for the shipped driver (ncruces/go-sqlite3, which is not in this repository), reported synchronous=1 (NORMAL); that is not reproducible from here and the shipped driver's value was not measured. On macOS the flush is a plain fsync unless fullfsync is on.",
+      "evidence": "Probed with a scratch test in the local rig that was not kept, and a search of engine/ for synchronous and fullfsync finds none. docs/benchmarks.md, docs/journal-format.md, the README and the code comments no longer say durable.",
+      "status": "open",
+      "nextAction": "Set synchronous(FULL), and fullfsync on macOS, in the journal's DSN, read the values back in a test, and re-run the benchmarks on the machine they came from.",
+      "provenance": "declared"
+    },
+    {
+      "id": "F-035",
+      "severity": "medium",
+      "title": "Any process on the machine could read the console",
+      "problem": "holdcall console bound loopback and refused a Host that was not a loopback name (F-016), but a request that did name one was answered whoever sent it. Any process able to open a connection to 127.0.0.1:7717 could read the journal and, from /api/pending, the real arguments of the calls held for a human.",
+      "impact": "Another user's process on a shared machine, or a sandboxed tool allowed to reach loopback, could read tool names, sessions, policy and the arguments of a call an agent was waiting for a person to decide, with no credential of any kind.",
+      "evidence": "Read from Handler: after the method and Host checks every route ran. Fixed: every path but the page needs a token of 256 random bits, made when the console starts and sent in an Authorization header; the command prints it in the address's fragment. TestNothingButThePageIsReadWithoutTheToken, and the test that runs the real command, fail with the check switched off, which is what the old Handler did. The page's script, which attaches the token, has not been run in a browser.",
+      "status": "fixed",
+      "nextAction": "A person should open the printed address in a browser once and confirm the page loads the record; no browser has run the page's script.",
       "provenance": "declared"
     }
   ],
@@ -1990,7 +2216,7 @@
       "deliverables": [
         "a third rule effect, ask: holdcall policy ask <tool> [--agent] [--connector] and holdcall policy default ask; precedence deny > ask > allow at equal specificity, in journal.Decide",
         "the daemon answers a held call pending with a hold id and keeps it in memory only: tool, agent, connector, digest, the real arguments, the time",
-        "the relay sends the real params.arguments bytes once, in a call.arguments event, and waits on the same connection up to [daemon] approval_timeout (default 2m)",
+        "the relay sends the real params.arguments bytes once, in a call.arguments event, and waits on the same connection up to [daemon] approval_timeout (default 2m) plus a five-second grace, so that the daemon's own timeout answer, which says nobody decided, reaches it before the relay gives up",
         "holdcall approve lists held calls with their real arguments, pretty-printed, every byte shown as itself; holdcall approve <id> and holdcall reject <id> [--reason] decide one",
         "an approve is refused until the relay's report of the arguments has reached the daemon, and the first report is the one shown and approved; a reject goes through regardless",
         "the decision is written to the journal as approved or rejected before the relay is told; on approval the relay forwards the exact original bytes",

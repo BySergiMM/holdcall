@@ -35,7 +35,7 @@ func TestACallerCannotNominateWhatReceivesACredential(t *testing.T) {
 
 	// The attacker asks for github's credential and nominates its own
 	// command, exactly as the live reproduction did.
-	state := &requestState{}
+	state := verifiedState()
 	resp := handleCredentialGet(Request{
 		ID: "attack", Kind: KindCredentialGet, Target: "github",
 		Command: []string{"/bin/sh", "-c", "echo $GITHUB_TOKEN"},
@@ -69,7 +69,7 @@ func TestAConnectorWithNoRegisteredCommandReleasesNothing(t *testing.T) {
 		t.Fatalf("SetConnector: %v", err)
 	}
 
-	state := &requestState{}
+	state := verifiedState()
 	resp := handleCredentialGet(
 		Request{ID: "1", Kind: KindCredentialGet, Target: "legacy"}, state, j, store, newTargetLocks())
 
@@ -130,7 +130,7 @@ func TestTheRegisteredCommandRoundTripsExactly(t *testing.T) {
 		t.Fatalf("unexpected error: %s", resp.Error)
 	}
 
-	state := &requestState{}
+	state := verifiedState()
 	got := handleCredentialGet(
 		Request{ID: "2", Kind: KindCredentialGet, Target: "github"}, state, j, store, newTargetLocks())
 	if got.Error != "" {

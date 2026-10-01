@@ -344,7 +344,29 @@ var errAlreadyRunning = errors.New("another daemon holds the socket")
 // attempt, and a daemon that ultimately loses backs off cleanly on its next
 // dial rather than unlinking a live socket forever.
 func listen(path string) (net.Listener, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	// The directory first, and checked rather than merely created: MkdirAll
+	// leaves an existing directory exactly as it found it. EnsurePrivateDir
+	// creates one that is missing with mode 0700, refuses one that somebody else
+	// owns -- who could replace the socket, whatever its mode -- which includes a
+	// shared directory such as /tmp, and warns about one this user owns that
+	// others can reach, without changing it: Holdcall did not make that one, and
+	// socket = ~/holdcall.sock names the home directory.
+	//
+	// That is what makes the bind itself safe where the directory is one of
+	// Holdcall's own, and this is the answer to the question of the window:
+	// net.Listen creates the socket with whatever the umask leaves it and it is
+	// only narrowed to 0600 once bound, but in a directory nobody else can enter
+	// nobody else can reach it in between. In a directory the operator chose and
+	// others can enter, the window is real and short, and what covers it is the
+	// peer check: a connection from another user is refused here, and a socket
+	// put in this one's place is refused by the shim (internal/peer). A
+	// restrictive umask around the bind was the alternative and was not taken:
+	// the umask belongs to the whole process, so every goroutine that created a
+	// file in the meantime would get a mode nobody chose for it, and two daemons
+	// starting in one process -- the tests do -- could restore each other's
+	// value wrongly. The chmod below stays as a second layer, and as the only
+	// one on a platform where a directory's privacy is not enforced (Windows).
+	if err := config.EnsurePrivateDir(filepath.Dir(path)); err != nil {
 		return nil, err
 	}
 	unlock, err := acquireStartupLock(path + ".lock")
@@ -389,7 +411,6 @@ func handle(
 	sessions *sessionRegistry, approvals *pendingRegistry, approvalTimeout time.Duration,
 ) {
 	defer conn.Close()
-	state := &requestState{}
 
 	// Sessions opened on this connection that have not been closed yet, each
 	// with the connector its start named: a rule can be scoped to a
@@ -439,30 +460,48 @@ func handle(
 	// keeps delivering buffered bytes after the writer has exited, so a
 	// client that writes and leaves could otherwise be read from after its
 	// pid was gone and denied for being fast.
-	if supported, isSelf, pid := peer.IsSelfPID(conn); supported && !isSelf {
-		// Told apart from an ordinary impostor for F-001: a peer at our own
-		// executable path running a different file is not an attacker, it is
-		// the new build of Holdcall an operator just installed over this running
-		// process. The trust boundary does not move either way -- this
-		// connection is refused exactly as it always was -- but the log line
-		// now says which case it was, and names the remedy for the one that
-		// has one.
-		//
-		// Diagnosed from pid, the one IsSelfPID already read conn's peer
-		// credentials for, rather than by touching conn again: a peer that
-		// has just been refused is, in practice, already closing its end,
-		// and a second connection-based read was observed to race that
-		// close and misreport a genuine upgrade as a plain impostor. See
-		// peer.IsSelfPID's doc comment.
-		if peer.DiagnosePID(pid) == peer.SameLaunchPathOlderBuild {
+	//
+	// "Holdcall" means this binary run by this user. The user is what the kernel
+	// reports for the connecting process, compared with the one this daemon runs
+	// as: the socket's directory and mode are what keep other users off it, and
+	// this refuses the one that got through anyway, rather than leaving the
+	// executable check to be the only thing standing between the two.
+	v := peer.Check(conn)
+	if v.Supported && !v.Same {
+		switch {
+		case v.WrongUser:
+			log.Printf("refusing a connection from a process running as another user (uid %d; this daemon runs as uid %d)",
+				v.PeerUID, v.SelfUID)
+		case peer.DiagnosePID(v.PID) == peer.SameLaunchPathOlderBuild:
+			// Told apart from an ordinary impostor for F-001: a peer at our own
+			// executable path running a different file is not an attacker, it is
+			// the new build of Holdcall an operator just installed over this
+			// running process. The trust boundary does not move either way --
+			// this connection is refused exactly as it always was -- but the log
+			// line now says which case it was, and names the remedy for the one
+			// that has one.
+			//
+			// Diagnosed from pid, the one Check already read conn's peer
+			// credentials for, rather than by touching conn again: a peer that
+			// has just been refused is, in practice, already closing its end,
+			// and a second connection-based read was observed to race that
+			// close and misreport a genuine upgrade as a plain impostor. See
+			// peer.IsSelfPID's doc comment.
 			self, _ := os.Executable()
 			log.Printf("refusing a connection from a different build of Holdcall at %s; "+
 				"this daemon is the older one, restart it with holdcall daemon restart", self)
-		} else {
+		default:
 			log.Printf("refusing a connection from an unverified peer")
 		}
 		return
 	}
+
+	// What got through is not the same as what was confirmed. A platform that
+	// cannot ask the kernel who is connecting (Windows) is let through above,
+	// because refusing it would refuse every relay on it, and the connection
+	// carries on as one nobody confirmed: the one thing it is never given is a
+	// secret. See requestState.peerVerified and handleCredentialGet.
+	state := &requestState{peerVerified: v.Verified()}
 
 	// The agent behind this connection, worked out once, at accept. The
 	// peer's pid is fixed for the life of the socket; its parent is read now

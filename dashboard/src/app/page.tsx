@@ -1,4 +1,3 @@
-import Waitlist from "@/components/Waitlist";
 import { state } from "@/lib/state";
 import "./landing.css";
 
@@ -23,19 +22,18 @@ const DECISION_LABEL: Record<string, string> = {
   rejected: "rejected",
 };
 
-// Structured data for the product page: what it is, that it costs nothing
-// for one person, and where it runs. Nothing here that the page does not
-// already say in prose.
+// Structured data for the product page: what it is, that it is free, and where
+// it runs. Nothing here that the page does not already say in prose.
 const JSON_LD = {
   "@context": "https://schema.org",
   "@type": "SoftwareApplication",
   name: "Holdcall",
   applicationCategory: "DeveloperApplication",
-  operatingSystem: "macOS",
+  operatingSystem: "macOS, Linux (Windows: experimental)",
   description:
     "A local relay that decides every MCP tool call on your machine, holds the dangerous ones for a human who sees the real arguments, and keeps a record you can verify offline.",
   url: "https://holdcall.vercel.app/",
-  offers: { "@type": "Offer", price: "0", priceCurrency: "EUR", description: "Free for one person and one machine" },
+  offers: { "@type": "Offer", price: "0", priceCurrency: "EUR", description: "Free and open source (MIT)" },
 };
 
 export default function Landing() {
@@ -50,15 +48,15 @@ export default function Landing() {
           <a href="#how">How it works</a>
           <a href="#honest">What it does not promise</a>
           <a href="/status/">Status</a>
-          <a className="lp-nav-cta" href="#access">
-            Early access
+          <a className="lp-nav-cta" href="#install">
+            Install
           </a>
         </nav>
       </header>
 
       <main>
         <section className="lp-hero" aria-labelledby="lp-title">
-          <p className="lp-eyebrow">For teams running agents with MCP tools</p>
+          <p className="lp-eyebrow">For developers running agents with MCP tools</p>
           <h1 id="lp-title">The control that stays on your machine.</h1>
           <p className="lp-lede">
             Holdcall sits between your agent and its MCP servers. It decides every tool call where the call happens, shows
@@ -66,8 +64,8 @@ export default function Landing() {
             arguments never leave the machine. Neither does the decision.
           </p>
           <div className="lp-actions">
-            <a className="lp-btn lp-btn-primary" href="#access">
-              Get early access
+            <a className="lp-btn lp-btn-primary" href="#install">
+              Install it
             </a>
             <a className="lp-btn" href="/status/">
               See what is verified
@@ -200,9 +198,11 @@ export default function Landing() {
           </ol>
           <p className="lp-how-under">
             Under the relay, one daemon per user decides against rules and budgets in SQLite, keeps credentials in the
-            OS store bound to one command, and writes the journal. It answers only to processes that are Holdcall, and it
-            works with no network. The agent&apos;s identity is derived from the executable that spawned the relay,
-            as the kernel reports it; nothing on the wire can claim to be Claude Code.
+            OS store and injects each only into the one command it is registered for, and writes the journal. It works
+            with no network. On Linux and macOS it answers only to the Holdcall binary run by you, and the agent&apos;s
+            identity is derived from the executable that spawned the relay, as the kernel reports it; nothing on the
+            wire can claim to be Claude Code. Windows has no way to ask the kernel that, which is why it is
+            experimental.
           </p>
           <figure className="lp-shot">
             <img src="/console.png" alt="The local console's Held view: one call to dangerous_tool held for a human, showing the agent, the connector, its real arguments with a bidirectional override made visible, and the approve and reject commands to copy" width="1440" height="900" loading="lazy" />
@@ -222,10 +222,11 @@ export default function Landing() {
               </dd>
             </div>
             <div>
-              <dt>Verified on macOS</dt>
+              <dt>Windows is experimental</dt>
               <dd>
-                Linux and Windows are compiled and vetted, not yet run. The status page says which claims hold on
-                which platform, per test.
+                The suite runs on Linux, macOS and Windows runners in CI. On Windows nothing can confirm who is on the
+                other end of the daemon&apos;s socket, so no credential is released there. The status page says which
+                claims hold on which platform, per test.
               </dd>
             </div>
             <div>
@@ -233,6 +234,13 @@ export default function Landing() {
               <dd>
                 A rule is keyed on agent, connector and tool. Conditions on what a call carries are not built; a human
                 reading the arguments is how that gap is covered today.
+              </dd>
+            </div>
+            <div>
+              <dt>Credentials are not private from you</dt>
+              <dd>
+                A secret sits in the OS credential store, out of your client&apos;s config, and goes only to the one
+                command it is registered for. Another program running as your user can still read it from the store.
               </dd>
             </div>
           </dl>
@@ -263,15 +271,21 @@ export default function Landing() {
           </p>
         </section>
 
-        <section className="lp-access" id="access" aria-labelledby="lp-access-title">
+        <section className="lp-access" id="install" aria-labelledby="lp-install-title">
           <div className="lp-inner">
-            <h2 id="lp-access-title">Early access</h2>
+            <h2 id="lp-install-title">Install it</h2>
             <p>
-              The engine is free for one person and one machine, and always will be. The team console, with the
-              journal of every machine, policy in one place and approvals from your phone, opens to a small group
-              first.
+              Free and open source under the MIT licence. The installer picks the latest release, checks the archive
+              against its <code>SHA256SUMS</code> and refuses on any mismatch. It never uses <code>sudo</code>. Windows
+              has no installer: take the <code>.zip</code> from the release page, and read the note above first.
             </p>
-            <Waitlist />
+            <pre className="lp-term lp-install" aria-label="Install command">
+              <span className="lp-prompt">$ </span>
+              {"curl -fsSL https://raw.githubusercontent.com/BySergiMM/holdcall/main/install.sh | sh"}
+            </pre>
+            <p className="lp-install-links">
+              <a href="https://github.com/BySergiMM/holdcall">Source, releases and issues on GitHub</a>
+            </p>
           </div>
         </section>
       </main>
@@ -279,6 +293,7 @@ export default function Landing() {
       <footer className="lp-foot">
         <span>Holdcall, {new Date(derived.commitDate).getUTCFullYear()}. Built from commit {derived.commit}.</span>
         <nav aria-label="Footer">
+          <a href="https://github.com/BySergiMM/holdcall">GitHub</a>
           <a href="/status/">Status</a>
           <a href="/status/#architecture">Architecture</a>
           <a href="/status/#decisions">Decisions</a>

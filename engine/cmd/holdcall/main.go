@@ -126,7 +126,8 @@ func usage() {
         Walk the journal's hash chain.
 
   holdcall console [--addr 127.0.0.1:7717]
-        Serve a local, read-only view of what has been recorded.
+        Serve a local, read-only view of what has been recorded. It prints the
+        address to open, which carries a token made when it starts.
 
   holdcall connector set <name> --env KEY -- <command> [args...]
   holdcall connector list | remove <name>
@@ -790,10 +791,22 @@ func runConsole(args []string) error {
 		return resp.Pending, nil
 	}
 
-	fmt.Println("holdcall console on http://" + listener.Addr().String())
+	// The token rides in the fragment, which a browser keeps to itself: it is in
+	// no request, no Referer and no server log. It is the one thing this process
+	// prints that is not safe to paste somewhere, and it lasts until the process
+	// ends.
+	fmt.Println("holdcall console on " + consoleURL(listener.Addr().String(), srv.Token()))
 	fmt.Println("reading", cfg.DatabasePath())
 	fmt.Println("read-only: this cannot change anything Holdcall recorded.")
+	fmt.Println("the address carries a token that lasts until this stops; anyone who has it can read the journal and see held calls.")
 	return http.Serve(listener, srv.Handler())
+}
+
+// consoleURL is the address runConsole prints: where the console listens, and
+// the token as a fragment, which is how the page learns it. Only the page ever
+// sees the fragment; the server is sent the token in a header.
+func consoleURL(addr, token string) string {
+	return "http://" + addr + "/#token=" + token
 }
 
 func runVerify(args []string) error {

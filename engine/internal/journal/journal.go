@@ -697,6 +697,19 @@ func Open(path, machineID string) (*Journal, error) {
 	// because it is stored in the file, but busy_timeout and foreign_keys do
 	// not.
 	//
+	// The order is part of the contract: the pragmas run as written, on every
+	// new connection, and busy_timeout is first. journal_mode(wal) is the first
+	// statement to touch the file, and on a file that is not in WAL yet it has
+	// to read the header and then write it. With the timeout not yet armed, a
+	// lock another connection held at that moment -- a second handle opened
+	// while the first was still creating the schema -- made the whole Open fail
+	// at once with "database is locked" instead of waiting the 5s it is owed.
+	// Armed first, Open waits for any lock that stops it starting to read. What
+	// no timeout can wait out is a read lock that has to become a write lock
+	// while another connection holds one: SQLite answers that at once, by
+	// design, because two connections waiting on each other would deadlock.
+	// open_busy_test.go holds a lock and checks that Open waits for it.
+	//
 	// _txlock=immediate takes the write lock when a transaction opens. Append
 	// reads the head and then inserts, and a deferred transaction only asks for
 	// write access at the insert: if anything else wrote in between, SQLite
@@ -705,8 +718,8 @@ func Open(path, machineID string) (*Journal, error) {
 	// stale. Asking up front turns that into an ordinary wait.
 	dsn := "file:" + path +
 		"?_txlock=immediate" +
-		"&_pragma=journal_mode(wal)" +
 		"&_pragma=busy_timeout(5000)" +
+		"&_pragma=journal_mode(wal)" +
 		"&_pragma=foreign_keys(1)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {

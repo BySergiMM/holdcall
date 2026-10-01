@@ -64,6 +64,8 @@ h1,h2,h3{margin:0;font-weight:600;line-height:1.25}
 .held-strip b{font-variant-numeric:tabular-nums}
 .held-strip a{color:inherit;font-weight:600}
 @keyframes pulse{0%{transform:scale(1)}50%{transform:scale(1.35)}100%{transform:scale(1)}}
+.locked{display:none;padding:8px 20px;background:var(--bad-soft);color:var(--bad);border-bottom:1px solid var(--line);font-size:13px}
+.locked.on{display:block}
 .held-strip .pulse{width:8px;height:8px;border-radius:50%;background:var(--warn);animation:pulse 1.2s ease-in-out 2}
 
 /* ---------- nav ---------- */
@@ -215,6 +217,12 @@ tbody tr.arrive{animation:arrive .35s ease-out both}
   <span class="pulse"></span>
   <span><b id="held-n">0</b> <span id="held-word">calls</span> held for you</span>
   <a href="#held">See what is waiting →</a>
+</div>
+
+<div class="locked" id="locked" role="alert">
+  <b>This page has no token, or the one it has is not this console's.</b>
+  Open the address <code>holdcall console</code> printed: it ends in <code>#token=</code> and a long string, which only
+  this browser sees. The token is made when the console starts, so a console started again prints a new one.
 </div>
 
 <nav aria-label="Views">
@@ -370,6 +378,32 @@ const el = (t, c, txt) => { const e = document.createElement(t); if (c) e.classN
 
 let cursor = 0, events = [], snapshot = null, policy = null, pending = null, selected = null, lastHeldCount = 0;
 const seen = new Set();
+
+/* ---------- token ---------- */
+// Everything but this page needs the token the console printed, in the address
+// it printed: a fragment, which a browser never puts in a request or a Referer.
+// It is taken out of the address bar at once, kept for this tab only, and sent
+// in a header by api() below, which is the only way this page asks for anything.
+// "#token=<hex>&view=<view>" opens a view in the same step, for a tab that has
+// no token yet to be given one by a script (a screenshot, say).
+let token = "", locked = false;
+try { token = sessionStorage.getItem("holdcall.console.token") || ""; } catch {}
+function takeToken() {
+  const m = /^#token=([0-9a-f]+)(?:&view=([A-Za-z0-9\/_-]+))?$/.exec(location.hash);
+  if (!m) return false;
+  token = m[1];
+  try { sessionStorage.setItem("holdcall.console.token", token); } catch {}
+  try { history.replaceState(null, "", location.pathname + location.search + (m[2] ? "#" + m[2] : "")); } catch {}
+  return true;
+}
+takeToken();
+function setLocked(on) { locked = on; $("#locked").classList.toggle("on", on); }
+async function api(path) {
+  if (!token) { setLocked(true); return new Response(null, {status: 401}); }
+  const r = await fetch(path, {headers: {Authorization: "Bearer " + token}});
+  setLocked(r.status === 401);
+  return r;
+}
 
 /* ---------- helpers ---------- */
 const shortId = (s) => s ? s.slice(0, 8) : "";
@@ -577,7 +611,7 @@ $("#explain").onsubmit = async (ev) => {
   ev.preventDefault();
   const tool = $("#x-tool").value.trim(), agent = $("#x-agent").value.trim(), conn = $("#x-conn").value.trim();
   if (!tool) return;
-  const r = await fetch("/api/explain?tool=" + encodeURIComponent(tool) + "&agent=" + encodeURIComponent(agent) + "&connector=" + encodeURIComponent(conn));
+  const r = await api("/api/explain?tool=" + encodeURIComponent(tool) + "&agent=" + encodeURIComponent(agent) + "&connector=" + encodeURIComponent(conn));
   const v = $("#verdict"); v.replaceChildren(); v.style.display = "";
   if (!r.ok) { v.appendChild(el("p", "note", "Could not explain: " + await r.text())); return; }
   const x = await r.json();
@@ -615,7 +649,7 @@ function select(e) {
   openDetail(); render();
 }
 async function selectSession(s) {
-  const r = await fetch("/api/sessions/" + encodeURIComponent(s.id)); if (!r.ok) return;
+  const r = await api("/api/sessions/" + encodeURIComponent(s.id)); if (!r.ok) return;
   const d = await r.json(); selected = null;
   $("#detail-hd").textContent = "session " + shortId(s.id);
   const dl = $("#detail-kv"); dl.replaceChildren();
@@ -650,15 +684,15 @@ function render() {
   $("#nav-journal").textContent = events.length; $("#nav-sessions").textContent = ((snapshot && snapshot.sessions) || []).length;
   if (policy) $("#nav-policy").textContent = (policy.rules || []).length + (policy.budgets || []).length;
 }
-async function pullSnapshot() { try { const r = await fetch("/api/snapshot"); if (!r.ok) return; snapshot = await r.json();
+async function pullSnapshot() { try { const r = await api("/api/snapshot"); if (!r.ok) return; snapshot = await r.json();
   const d = $("#daemon"); d.replaceChildren(el("span", "dot " + (snapshot.daemon.running ? "on" : ""))); d.append("daemon " + (snapshot.daemon.running ? "running" : "not running"));
   $("#entries").textContent = snapshot.journal.entries + " entries"; $("#head").textContent = "head " + (shortHash(snapshot.journal.head) || "—"); $("#head").dataset.full = snapshot.journal.head || "";
   render(); } catch {} }
-async function pullEvents() { try { for (;;) { const r = await fetch("/api/events?since=" + cursor + "&limit=" + PAGE); if (!r.ok) return; const page = await r.json();
+async function pullEvents() { try { for (;;) { const r = await api("/api/events?since=" + cursor + "&limit=" + PAGE); if (!r.ok) return; const page = await r.json();
   if (!page.events.length) break; events = page.events.slice().reverse().concat(events); if (events.length > KEEP) events.length = KEEP; cursor = page.cursor; if (page.events.length < PAGE) break; }
   if (currentView() === "journal" && !$("#follow").classList.contains("on")) return; render(); } catch {} }
-async function pullPolicy() { try { const r = await fetch("/api/policy"); if (!r.ok) return; policy = await r.json(); render(); } catch {} }
-async function pullPending() { try { const r = await fetch("/api/pending"); if (!r.ok) return; pending = await r.json(); renderHeld(); } catch {} }
+async function pullPolicy() { try { const r = await api("/api/policy"); if (!r.ok) return; policy = await r.json(); render(); } catch {} }
+async function pullPending() { try { const r = await api("/api/pending"); if (!r.ok) return; pending = await r.json(); renderHeld(); } catch {} }
 
 /* ---------- views, keys ---------- */
 let wanted = null; // a deep link waiting for the data it names: {kind:"entry", seq} or {kind:"session", id}
@@ -669,7 +703,12 @@ function showView(v) { const parts = v.split("/"); v = parts[0];
   document.querySelectorAll("nav button").forEach(x => x.classList.remove("sel")); document.querySelectorAll(".view").forEach(x => x.classList.remove("sel"));
   b.classList.add("sel"); $("#v-" + b.dataset.v).classList.add("sel"); render(); }
 document.querySelectorAll("nav button").forEach(b => b.onclick = () => { location.hash = b.dataset.v; });
-window.addEventListener("hashchange", () => showView(location.hash.slice(1)));
+window.addEventListener("hashchange", () => {
+  // The same page opened again with a new token (a console that was started
+  // again) changes only the fragment, so the browser does not reload it.
+  if (takeToken()) { pullAll(); if (location.hash.length > 1) showView(location.hash.slice(1)); return; }
+  showView(location.hash.slice(1));
+});
 if (location.hash.length > 1) showView(location.hash.slice(1));
 $("#head").onclick = () => { if ($("#head").dataset.full) copy($("#head").dataset.full, "head copied"); };
 $("#q").oninput = renderJournal; $("#f-kind").onchange = renderJournal; $("#f-dec").onchange = renderJournal;
@@ -683,7 +722,8 @@ document.addEventListener("keydown", (ev) => {
 });
 setInterval(() => { document.querySelectorAll(".card .age").forEach(a => {}); if (currentView() === "held") renderHeld(); }, 1000);
 
-pullSnapshot(); pullEvents(); pullPolicy(); pullPending();
+function pullAll() { pullSnapshot(); pullEvents(); pullPolicy(); pullPending(); }
+pullAll();
 setInterval(pullSnapshot, SNAPSHOT_MS); setInterval(pullEvents, EVENTS_MS); setInterval(pullPolicy, SNAPSHOT_MS); setInterval(pullPending, PENDING_MS);
 </script>
 </body>

@@ -15,7 +15,12 @@ python3 tools/console-demo/stage.py "$d" &            # prints READY when the ca
 HOLDCALL_HOME="$d/holdcall-home" HOME="$d/home" engine/bin/holdcall console --addr 127.0.0.1:7719
 ```
 
-Then open http://127.0.0.1:7719/#held. The console and the daemon must be the
+Then open the address it prints, which ends in `#token=` and the console's token
+for this run, with `&view=held` added to open the Held view in the same step:
+`http://127.0.0.1:7719/#token=<token>&view=held`. Without the token the page loads
+and says so, and shows nothing: every request for data needs it, and a headless
+browser started once per screenshot has to be given it in each address. The
+console and the daemon must be the
 same build: rebuild `holdcall`, and the running daemon will be refused as an
 older build until the script is restarted (that refusal is F-001 working).
 `?theme=dark` or `?theme=light` forces a theme for a screenshot.

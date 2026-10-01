@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"time"
 
@@ -50,7 +51,26 @@ var requestKinds = map[string]bool{
 type requestState struct {
 	kind        string // "" | "credential" | "connector" | "agent" | "policy" | "approval"
 	boundTarget string // meaningful only once kind == "credential"
+
+	// peerVerified is whether the kernel confirmed, when the connection was
+	// accepted, that its peer is this binary run by this user
+	// (peer.Verdict.Verified). The accept-time check already refuses a peer the
+	// platform could check and found wrong. This is for the one it could not
+	// check at all -- Windows, whose AF_UNIX offers no way to ask -- which that
+	// check has to let through, or no relay could connect there. What such a
+	// connection may do is decided request by request, and for a secret the
+	// answer is no: see handleCredentialGet.
+	//
+	// The zero value is "not verified", on purpose. A state built without
+	// asking releases nothing, so forgetting to ask fails closed.
+	peerVerified bool
 }
+
+// peerUnverifiedMessage is what a connection nobody could verify is told when
+// it asks for a credential: what is missing, and where the rest is written.
+const peerUnverifiedMessage = "credential not released: Holdcall could not verify who is asking. " +
+	"A secret is released only to a process the operating system has confirmed is Holdcall running as " +
+	"this user, and on Windows it cannot confirm that (docs/security.md, \"Windows\")"
 
 // serveRequest decodes, dispatches and answers one Request.
 func serveRequest(
@@ -208,6 +228,17 @@ func handleCredentialGet(
 	}
 	if !found {
 		return Response{ID: req.ID, Found: false}
+	}
+	// Before anything is read from the store, so that a connection nobody
+	// verified never causes the secret to be fetched at all. Found stays true
+	// with an error, the fail-closed shape: the shim refuses to start the
+	// downstream rather than start it without the credential it was configured
+	// to need. A target with no connector is answered above and unchanged --
+	// there is no secret to protect there, and a relay for a server that needs
+	// none must still start on a platform that cannot verify its peers.
+	if !state.peerVerified {
+		log.Printf("not releasing the credential of connector %q: the peer on this connection could not be verified", req.Target)
+		return Response{ID: req.ID, Found: true, Error: peerUnverifiedMessage}
 	}
 	// A connector with no registered command is not one without a restriction:
 	// it is one whose authorized command is unknown, which is the state every

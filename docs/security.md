@@ -23,6 +23,17 @@ The adversary is **a downstream MCP server**: code the operator did not write,
 running as the same user, spawned by Holdcall itself. Everything below is written
 against that.
 
+**One property this adversary defeats, stated before the rest so it is not
+missed: credential isolation does not hold against a process running as the same
+user.** What the daemon does is decide what it will hand over, and to whom. It
+does not, and cannot, decide who else in the same account may ask the operating
+system's credential store for a secret Holdcall put there, because that question
+never reaches the daemon: a server Holdcall spawned can run the same lookup
+Holdcall does (see *Known gaps*, "Credentials are readable by any process running
+as the same user"). Assume a compromised server can read the credential of every
+connector, not only its own. What does hold is narrower and is listed under that
+row.
+
 **Human approval (M6) is written against a second adversary: the model
 driving the client**, not only the server on the other side of a call. An
 `ask` rule exists because the operator does not trust a call's own
@@ -55,15 +66,37 @@ Not in the model, and worth being explicit about:
 
 ## What peer identity establishes, per platform
 
-Peer identity asks the kernel who is on the other end of a socket and whether
-it is running the same file we are. The question that decides its strength is
-whether the answer describes a **running image** or a **filename**.
+Peer identity asks the kernel who is on the other end of a socket: which user,
+and whether it is running the same file we are. The question that decides the
+strength of the second half is whether the answer describes a **running image**
+or a **filename**.
+
+**The user is asked first, and a different one ends the check.** The kernel's
+record of the connection carries the peer's effective user id (`SO_PEERCRED`
+on Linux, `LOCAL_PEERCRED` on macOS), and it is compared with this process's.
+A peer running as someone else is refused even if it is running the very same
+binary, which an image check alone cannot see: any user who can execute a
+file is running that file. Until this was added the check compared images and
+nothing else; what kept other users off the socket was its directory and mode,
+and that is still the first line (see *Private directories* below). Peer
+identity is the second, for the day one of those is wrong. The refusal says
+which check refused: "runs as another user" is not "is not Holdcall", and the
+log line and the client's message name the right one.
+`TestAPeerRunningAsAnotherUserIsRefusedEvenIfItRunsThisBinary`
+(`internal/peer/peer_uid_test.go`) is the attack: a real second process of the
+test binary, accepted, and then refused when only the user the daemon side
+believes it is changes. `TestAPeerThatReallyRunsAsAnotherUserIsRefused` does it
+with a real second uid (65534) and needs root, so it skips everywhere else,
+CI included: run as root on Linux it passes, and the first of the two is the
+one a runner executes. On macOS only the first runs, in CI; the comparison there
+is the same code over `LOCAL_PEERCRED`'s `cr_uid`, which `getpeereid(3)`
+documents as the peer's effective user.
 
 | | How the peer's image is resolved | Resists path swap |
 |---|---|---|
 | **Linux** | `stat("/proc/<pid>/exe")` — the kernel resolves the magic link to the inode the process is executing | yes |
 | **Darwin** | the vnode behind the peer's own mapping of its main image, via `proc_info`'s `PROC_PIDREGIONPATHINFO` | yes |
-| **Windows** | nothing — AF_UNIX exposes no peer-credential API | n/a, unsupported |
+| **Windows** | nothing — Holdcall has no peer-credentials call there (AF_UNIX on Windows carries none), so neither the user nor the image is asked | n/a, unsupported. See *Windows is experimental* below |
 
 Both unix implementations previously stat'ed a *path* (`kern.procargs2` on
 darwin, `readlink /proc/<pid>/exe` on linux) and were defeated with no race at
@@ -107,6 +140,120 @@ identity, but requires Security.framework and therefore cgo, which would end
 the `CGO_ENABLED=0` cross-compilation this project relies on. It was not
 needed: the vnode check answers the question actually being asked.
 
+## Private directories
+
+What keeps another user off the daemon starts with their not being able to reach
+it. On Linux and macOS the directories Holdcall keeps things in are treated by
+who made them:
+
+- **One Holdcall creates** (its home, its data directory or the directory the
+  socket is in, when it is not there yet) is created `0700`, its parents too.
+- **One that is already there** must belong to the user running Holdcall (a link
+  is followed, and the directory it leads to is the one checked). One somebody
+  else owns is refused, with a message naming it and the setting that moves it,
+  and the daemon does not start.
+- **One that is already there, is the user's own, and that group or other can
+  reach is left exactly as it is** and warned about once per process in the
+  daemon's log (and on the relay's stderr). Holdcall did not make it, and
+  `socket = ~/holdcall.sock` names the user's home directory: taking away the
+  access their other users and groups have to it is not Holdcall's to do, and a
+  `chmod` that fails where the mode is not the owner's to set (drvfs, NFS) would
+  stop the daemon over a directory it does not own. The exception is Holdcall's
+  own default runtime directory (below), which is tightened to `0700`, and which
+  is refused if it is a symbolic link.
+
+The socket is bound only inside a directory that is private, so it is never
+reachable in the gap between `net.Listen` creating it and the `chmod` that
+narrowed it (F-008 was exactly that gap), **except** where the operator chose a
+directory that others can enter. There the gap exists, and what covers it is
+the peer check: the daemon refuses a connection from another user, and a relay
+refuses a socket that is not the daemon's. The journal is the other casualty of
+such a directory: SQLite creates it with the umask's default, usually `0644`, so
+it is as readable as the directory lets it be, and the warning says so.
+
+Where the default socket goes follows from it: `$XDG_RUNTIME_DIR` when set (the
+XDG Base Directory specification makes it the user's own, mode 0700), otherwise
+the temp directory if it is already private to the user (macOS's per-user
+`$TMPDIR`), otherwise a `holdcall-<uid>` directory the user creates inside it.
+Never directly in a shared directory such as Linux's `/tmp`: root owns that, so a
+daemon that insists on owning its socket's directory could not start there, and
+one that did not insist could have its socket pre-created or replaced by any
+local user. Evidence: `TestEnsurePrivateDirRefusesADirectoryAnotherUserOwns`,
+`TestEnsurePrivateDirNeverChangesADirectoryItDidNotCreate`,
+`TestEnsurePrivateDirDoesNotTakeAHomeDirectoryAway`,
+`TestEnsurePrivateDirTightensTheDefaultRuntimeDirectory`,
+`TestEnsurePrivateDirRefusesALinkAtTheDefaultRuntimeDirectory`,
+`TestTheDefaultSocketIsNeverPutDirectlyInADirectoryOthersCanUse`
+(`internal/config/privatedir_test.go`) and `TestListenRefusesASocketDirectoryAnotherUserOwns`,
+`TestListenLeavesAPreExistingSocketDirectoryAsItIs`,
+`TestListenCreatesAMissingSocketDirectoryPrivate` (`internal/daemon/listen_dir_test.go`),
+which fail when the checks they exercise are removed. Another user's directory
+is simulated by making the test believe it runs as a different uid; no test here
+creates a real second account.
+
+**What this is not.** It is the first line, not a boundary against the same user:
+a process running as you owns the same directories. And on Windows none of it
+applies, see below.
+
+## Windows is experimental
+
+Holdcall builds for Windows, `release.yml` publishes a `.zip`, and the whole
+suite runs on `windows-latest` in CI (since 2026-09-28, F-029). That is all the
+evidence there is for Windows: a CI runner, not a person at a Windows desktop.
+The tests whose job is to show an attacker being refused are skipped there, each
+named with its reason in `.github/scripts/windows-skip-allowlist.txt`, because
+on Windows the attacker is not refused. **The guarantee at the top of this
+document does not hold on Windows against another process running as the same
+user.** Use it there to see what an agent does, not to stop one.
+
+| | Linux and macOS | Windows |
+|---|---|---|
+| The platform confirms who is connecting: this user, this binary | yes, for every connection at accept, and for the daemon by every relay before it sends a byte | **no.** Holdcall has no peer-credentials call there (see below). Every connection is accepted and every daemon is believed |
+| A process that is not Holdcall obtains a decision or writes journal entries (rows 3 and 4) | refused | **possible** for anything that can open the socket |
+| A process that binds the socket first is taken for the daemon, and sees each call's tool name and argument digest (rows 6 and 8) | refused by the relay | **taken for it**, and its decisions are believed |
+| A secret leaves the daemon | to a confirmed peer only, with the command it is registered for | **never.** `credential.get` for a configured connector is answered with an error before the store is read. The relay takes no connector, credential or command, from a daemon it cannot confirm, and does not start. `holdcall connector set` refuses to send a secret |
+| A server with no connector runs through the relay, decided and journaled | yes | yes |
+| Rules, budgets, `ask`, strict reading, fail-closed, the chain and `verify` | yes | the same code, and the tests that do not depend on peer identity run on `windows-latest`; nothing stops another process from using the same daemon |
+| Agent identity: an enrolment is an executable | yes | **no.** `holdcall agent add` fails, no session is ever matched to an enrolment, and only rules that name no agent apply |
+| Home, data and socket directories are private to the user | created `0700`; an existing one must be the user's own, and one that is open to others is warned about and not changed (except Holdcall's own default runtime directory, which is tightened) | **not checked.** No ACL is read or set; privacy rests on the default ACLs under the user's profile |
+| `holdcall daemon restart` | yes | refuses, and says how to stop the daemon by hand |
+| Daemons racing at startup are serialised | yes (`flock`) | no: the startup lock does nothing, so the stale-socket reclaim race is not closed |
+| Credential store | Keychain, Secret Service | DPAPI (`store_windows.go`). No test calls it, and with no secret able to move, nothing reaches it |
+
+Rows 2, 7 and 23 of the attack table below hold on Windows too, by a different
+mechanism: nothing secret moves. `TestOnWindowsARealDaemonReleasesNoCredentialOverARealSocket` and
+`TestOnWindowsARelayDoesNotSpawnWhatAnUnverifiedDaemonNamed` run that refusal on
+`windows-latest`, over a real socket. Rows 3, 4, 6 and 8 are open there.
+
+**Why a secret is refused rather than left as it was.** A connection nobody could
+verify was handled like a verified one, so anything able to open the socket could
+be handed any connector's credential with the command it was registered for.
+Refusing costs Windows its connectors, and it is the only choice that does not
+hand a secret to something nobody confirmed. The rule is not about Windows:
+`requestState.peerVerified` is `peer.Verdict.Verified()` wherever Holdcall runs,
+so a platform that gains a verdict gains the release with no further change.
+
+**What is open, and what it is not.** Microsoft's announcement of AF_UNIX on
+Windows lists ancillary data, which is what `SCM_CREDENTIALS` travels in, as
+unsupported
+([Windows Command Line blog](https://devblogs.microsoft.com/commandline/af_unix-comes-to-windows/)),
+so there is no equivalent of `SO_PEERCRED` or `LOCAL_PEERCRED`. The peer's
+process id can be read, though, through the `SIO_AF_UNIX_GETPEERPID` control
+code (defined in mingw-w64's `afunix.h`, and reported working on Windows 10
+1903 to 2004 in [microsoft/WSL#4676](https://github.com/microsoft/WSL/issues/4676);
+Microsoft's [Winsock IOCTL reference](https://learn.microsoft.com/en-us/windows/win32/winsock/winsock-ioctls)
+does not list it). Holdcall does not use it. A user and an image identity would
+have to be derived from that pid, which nothing in this repository does and
+nobody here could run to show it works; what is stated above is what the code
+does and no more. This corrects an earlier version of this document, which said
+Windows exposed no way to ask and that closing the gap needed a named-pipe
+transport: the pid route is the other candidate, and `docs/milestones.md` (M1)
+records the decision to use one unix-socket transport on all three platforms.
+
+If Windows ever gets a verdict, `TestOnWindowsARealDaemonReleasesNoCredentialOverARealSocket`
+fails and says so: the cue to implement `peer_windows.go`, to rewrite this
+section, and to delete that test.
+
 ## Attacks run against the current build
 
 | # | Attack | Result | Covered by |
@@ -144,6 +291,10 @@ needed: the vnode check answers the question actually being asked.
 | 31 | Speak the newer `server/discover` handshake so the client cannot parse Holdcall's refusals | **blocked** (refusals follow the negotiated dialect) | `dialect_test.go`, `deny_test.go`, `tools/relay-rig` |
 | 32 | Approve your own call from the model | **blocked only by circumstance, stated honestly rather than claimed further**: peer identity refuses anything that is not the `holdcall` binary, so a model that cannot execute commands has no way to reach `holdcall approve` at all -- but a model with shell access, which many agent setups grant, runs `holdcall approve` exactly as an operator typing it would, and nothing on the socket tells the two apart. See *Threat model* above and `docs/decisions/0005-human-approval.md`. | `peer_authz_test.go` (the peer-identity floor); not closed beyond it |
 | 33 | Exhaust a budget, then keep calling | **blocked** (the next allowed call is refused; a budget never grants) | `budget_test.go`, `budget_e2e_test.go` |
+| 34 | Connect as another user running the same binary | **blocked** (linux and darwin: the peer's user is compared before its image) | `peer_uid_test.go` |
+| 35 | Pre-create the socket's directory as another user, or leave the socket in a shared directory | **blocked** (linux and darwin: the daemon will not start in a directory another user owns) | `privatedir_test.go`, `listen_dir_test.go` |
+| 36 | Ask for a credential over a connection the platform could not verify | **blocked** (nothing is released, and the store is not read); this is every connection on Windows | `peer_unverified_test.go`, `peer_unverified_windows_test.go` |
+| 37 | Read the journal, or the arguments of a held call, from another process on this machine through the console's port | **blocked** (every path but the page needs a per-launch token; anyone who was handed it still reads everything) | `token_test.go`, `console_token_test.go` |
 
 Live vulnerabilities found by audit rather than hypotheticals: **1** (any local
 process could read every credential), **3** (the journal was writable by
@@ -161,6 +312,15 @@ management commands did not, and one of them carries the plaintext secret.
 and reproduced in scratch tests before the code shipped: two names could be
 enrolled against one executable with an unordered lookup between them, and
 `holdcall init`'s dry run printed the env block where client configs keep tokens.
+**34–36** were found by an audit that read the code, not by an attack on a
+running install: peer identity compared a peer's executable and not
+its user, the directories the socket and journal live in were assumed private
+rather than checked, and a connection the platform could not verify was handed
+credentials as if it had been. **37** is the console: it bound loopback and
+checked the `Host` header, and then answered whoever asked, including for the
+real arguments of the calls held for a human. With the new check switched off,
+the real command answers a read with no token with 200. Each has a test that
+fails when the check it exercises is removed.
 
 The table above is the attacks someone thought of, and `dashboard/data/state.json`
 is the copy the build checks -- every test named there must exist. When the two
@@ -169,7 +329,9 @@ disagree, the dashboard is the one that was checked.
 **18 qualified 2–8 on darwin until it was fixed**, because all of those rest on
 peer identity, and until the vnode check replaced the path comparison they were
 defeatable there. They now hold on both unix platforms. Rows 1 and 10–13 never
-depended on peer identity and hold everywhere.
+depended on peer identity and hold everywhere. On Windows rows 3, 4, 6 and 8 do
+not hold, and rows 2, 7 and 23 hold only because no secret moves there at all:
+see *Windows is experimental*.
 
 **19 was not a vulnerability but a false accusation**, which is its own kind of
 failure: `--expect-head` reported "entries have been removed and the chain
@@ -180,11 +342,14 @@ the chain rather than only at its tip.
 
 ## What protects what
 
-**Peer identity** keeps anything that is not this binary off the socket, in
-both directions. It is a floor, not the authorization model: anything able to
-execute the binary passes it. It is verified at accept, while the peer is
-certainly alive, which also closes the pid-reuse window a later check would
-leave.
+**Peer identity** keeps anything that is not this binary, run by this user, off
+the socket, in both directions. It is a floor, not the authorization model:
+anything able to execute the binary as this user passes it. It does nothing about
+a credential that a process of the same user reads straight from the operating
+system's store, which never involves the socket (see *Known gaps*). It is verified at
+accept, while the peer is certainly alive, which also closes the pid-reuse window
+a later check would leave. On Windows it does not exist; see *Windows is
+experimental*.
 
 **Session ownership** stops one run of Holdcall reporting under another's session.
 Peer identity cannot tell two runs apart; this can.
@@ -287,9 +452,10 @@ it can register a connector.
 
 | Gap | Severity | Why it is open |
 |---|---|---|
-| **Windows has no peer verification** | high, on Windows | AF_UNIX there exposes no `SO_PEERCRED` equivalent. Needs a named-pipe transport, which reverses a standing decision. Nothing in this project has ever been run on Windows. |
-| **Windows socket directory has no real ACL** | high, on Windows | `os.Chmod` only toggles the read-only attribute. Confidentiality rests on default temp-directory ACLs. |
+| **Windows has no peer verification** | high, on Windows | Not implemented. AF_UNIX there has no `SO_PEERCRED` equivalent; the peer's process id can be read (`SIO_AF_UNIX_GETPEERPID`) but is not, and a user and image identity would have to be derived from it. A named-pipe transport is the other route and reverses a standing decision. The suite does run on `windows-latest` in CI since 2026-09-28, with the tests that show an attacker refused skipped by name. Since this change no secret is released to a peer that cannot be verified, so on Windows no connector works. See *Windows is experimental*. |
+| **Windows directories have no real ACL** | high, on Windows | `os.Chmod` only toggles the read-only attribute, and nothing here reads or sets an ACL. Home, journal and socket privacy rests on the default ACLs under the user's profile. On Linux and macOS the directories are created `0700` and an existing one must be the user's own; see *Private directories*, which also says what is not done to a directory the user chose. |
 | **PATH resolution on the registered command** | medium | The registered argv is spawned through normal PATH lookup, so a caller that already controls PATH can front-run the binary name. Closing it needs process inversion. |
+| **Credentials are readable by any process running as the same user** | high, against the adversary in the threat model | Not through the daemon, so peer identity does not come into it. Each secret is stored under a name derived only from values any process of the user can compute (`holdcall-` and the first four bytes of the SHA-256 of the Holdcall home, with the connector name as the account), and nothing Holdcall passes to the store limits who may ask for it. Linux: the Secret Service entry `secret-tool lookup service holdcall-<hex> account <connector>` returns it. macOS: `security find-generic-password -a <connector> -s holdcall-<hex> -w`; Holdcall stores the item with no access list of its own (no `-T`, no `-A`), and whether the Keychain would then prompt a second program was not tested. Windows: the `.dpapi` file under the home is decrypted by `CryptUnprotectData` for any process of the same Windows user, because it is user-scoped and no entropy is passed. This is read from what `internal/credential` stores and how, an implementation inference: no test, and nothing in this repository, has queried a store from a second process. What holds: the secret is injected only into the one command it was registered for, never into another connector's environment, and it is not in argv, SQLite, a log, the console or a client's config. |
 | **The credential is handed to the connector** | medium | Injected into the downstream's environment, so a compromised connector has its own secret and, on Linux, any same-user process can read `/proc/<pid>/environ`. Holdcall cannot revoke what it has given away. |
 | **The journal is unkeyed** | medium | See the threat model. Only `--expect-head` covers rewriting. |
 | **A relay killed with SIGKILL cannot stop its connector** | low | Only a connector that reads its stdin notices. SIGTERM and SIGINT are handled; nothing can handle SIGKILL. |

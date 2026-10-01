@@ -20,10 +20,19 @@
 // CLI: a browser page on loopback is reachable by every other page on this
 // machine, and an approve reachable from it would be an approve reachable
 // from a model with a browser.
+//
+// What a bind to loopback does not do is say which of the processes on this
+// machine may read it. Any of them can open a connection, and the held calls
+// carry the real arguments of calls an agent is making right now. So every
+// request but the one for the page itself must carry a token generated when the
+// server was built and known to nobody who was not handed it: see Token.
 package console
 
 import (
+	"crypto/rand"
+	"crypto/subtle"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -42,6 +51,11 @@ import (
 //go:embed index.html
 var assets embed.FS
 
+// tokenBytes is the size of the per-launch token before it is written in hex:
+// 256 bits, twice the 128 that is already out of reach of guessing over a
+// socket.
+const tokenBytes = 32
+
 // DefaultLimit is how many entries a page request returns when it does not say.
 const DefaultLimit = 200
 
@@ -56,6 +70,11 @@ type Server struct {
 	socket string
 	mux    *http.ServeMux
 
+	// token is what a request must carry, as "Authorization: Bearer <token>",
+	// to read anything but the page. It is made by New and not settable, so
+	// there is no Server that answers without one.
+	token string
+
 	// Pending reads the calls the daemon is holding for a human. Optional:
 	// nil means this console cannot ask (no daemon, or a caller that did
 	// not wire one), and /api/pending says so rather than failing. Set by
@@ -66,7 +85,7 @@ type Server struct {
 // New builds the server. src must be a read-only journal: nothing here writes,
 // but the guarantee should come from the handle rather than from this promise.
 func New(src readmodel.Source, socketPath string) *Server {
-	s := &Server{src: src, socket: socketPath, mux: http.NewServeMux()}
+	s := &Server{src: src, socket: socketPath, mux: http.NewServeMux(), token: newToken()}
 	s.mux.HandleFunc("/", s.handleIndex)
 	s.mux.HandleFunc("/api/snapshot", s.handleSnapshot)
 	s.mux.HandleFunc("/api/events", s.handleEvents)
@@ -77,9 +96,34 @@ func New(src readmodel.Source, socketPath string) *Server {
 	return s
 }
 
-// Handler wraps the routes with the three rules that make this safe to leave
-// running: nothing but GET, no guessing at content types, and no answering to
-// a name that is not loopback.
+// newToken is tokenBytes of the operating system's randomness, in hex. It
+// cannot return an error: crypto/rand.Read does not, since Go 1.24, and a
+// machine with no randomness does not get to run a program at all.
+func newToken() string {
+	b := make([]byte, tokenBytes)
+	rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+// Token is what the person who started this console is handed, in the address
+// the command prints, and what the page sends back with every request. It
+// exists for as long as this Server does: a console started again has a new one,
+// and a page holding the old one is told so by a 401.
+func (s *Server) Token() string { return s.token }
+
+// authorised reports whether r carries the token, and only in the Authorization
+// header. Not in the query string, which ends up in history, logs and Referer,
+// and not in a cookie, which a browser would send to every other server on
+// 127.0.0.1 as well. The comparison takes the same time wherever the first
+// difference is.
+func (s *Server) authorised(r *http.Request) bool {
+	got, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	return ok && subtle.ConstantTimeCompare([]byte(got), []byte(s.token)) == 1
+}
+
+// Handler wraps the routes with the four rules that make this safe to leave
+// running: nothing but GET, no guessing at content types, no answering to
+// a name that is not loopback, and no answering without the token.
 //
 // The last one is what Listen's loopback bind does not give. A page on any
 // site can point a script at http://its-own-name:7717 and have DNS answer
@@ -88,6 +132,13 @@ func New(src readmodel.Source, socketPath string) *Server {
 // connectors, session ids, digests, the chain head. The bind address never
 // sees the difference; the Host header does, so a request that arrived under
 // any other name is refused before a route runs.
+//
+// The token is required of every path except exactly "/", which is the page:
+// one file embedded in the binary that holds nothing from any journal, and has
+// to load before it can be given a token. Everything else, a route that exists
+// and one that does not, is refused without one, so a route added later is
+// closed until someone decides otherwise rather than open until someone
+// remembers.
 func (s *Server) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !hostIsLoopback(r.Host) {
@@ -100,6 +151,12 @@ func (s *Server) Handler() http.Handler {
 			return
 		}
 		w.Header().Set("X-Content-Type-Options", "nosniff")
+		if r.URL.Path != "/" && !s.authorised(r) {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="holdcall console"`)
+			w.Header().Set("Cache-Control", "no-store")
+			http.Error(w, "this needs the token holdcall console printed with its address", http.StatusUnauthorized)
+			return
+		}
 		s.mux.ServeHTTP(w, r)
 	})
 }

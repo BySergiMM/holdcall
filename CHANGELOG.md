@@ -15,7 +15,58 @@ test names behind each claim live.
 
 What 0.1.3 will say when it is cut. Nothing here is released yet.
 
+### Security
+
+- **The console answers only to whoever was handed its address.**
+  `holdcall console` makes a 256-bit token when it starts and prints it in the
+  address it asks you to open (`http://127.0.0.1:7717/#token=...`; the token is
+  in the fragment, which a browser keeps to itself). Every request but the page
+  itself must carry it. Until now any process that could open a connection to
+  the port could read the journal and, from `/api/pending`, the real arguments
+  of the calls held for a human. Upgrading: a bookmarked plain address opens a
+  page that says it has no token and shows nothing; the token lasts until that
+  console stops, so a console started again prints a new one.
+- **A peer is checked for the user it runs as, not only for the file it runs.**
+  The daemon and the relay compared the other side's executable and nothing
+  else, so another user running the same binary passed the check. Both now
+  compare the effective uid as well, on Linux and macOS. Not on Windows, which
+  has no peer credentials to ask (see below).
+- **Windows no longer releases credentials or connectors.** The daemon served
+  a connection the platform could not verify, which is every connection on
+  Windows, like a verified one, so a process of the same user able to open the
+  socket could ask for a connector's secret and receive it. A secret now goes
+  only to a peer that was verified, and the relay takes no connector or
+  credential from a daemon it could not confirm. On Windows, which stays
+  experimental, that means connectors do not work and `holdcall connector set`
+  refuses to send a secret; decisions, rules and the journal are as before.
+- **A socket or data directory another user owns is refused.** The daemon
+  bound its socket wherever the path said, so a directory another user owns --
+  `/tmp` itself, say -- let that user put or replace the socket. The home, the
+  data directory and the socket's directory must now belong to the user running
+  Holdcall, or the daemon does not start and says which directory and which
+  setting to change. Directories Holdcall creates are `0700`. One that was
+  already there, is yours and is open to group or other is **not** changed
+  (a `socket = ~/holdcall.sock` would otherwise take away your home's access
+  from everyone else): it is warned about in the daemon's log, and
+  `chmod 700` closes it. Linux and macOS; nothing is checked on Windows.
+
+### Changed
+
+- **Linux: the default socket moves when `XDG_RUNTIME_DIR` is not set.** It
+  used to go directly in `/tmp`, where any local user can pre-create a path.
+  It goes in `/tmp/holdcall-<uid>/` now (the temp directory itself is still
+  used where it is already private to you, as macOS's `$TMPDIR` is, and
+  `$XDG_RUNTIME_DIR` when set is as before). A daemon an earlier version
+  started on the old path is not found by the new one and keeps running
+  orphaned: run `holdcall daemon restart` after upgrading, or stop it by hand.
+
 ### Fixed
+
+- **Opening the journal waits for a lock instead of failing at once.** The
+  journal switched the database to WAL before arming `busy_timeout`, so a lock
+  another connection held at that moment made the open fail with "database is
+  locked" instead of waiting the five seconds it is owed. A daemon starting
+  while another handle was mid-write failed intermittently.
 
 - **A held call nobody decides no longer ends the session, and is no longer
   reported as a human's rejection.** With `approval_timeout` running out, the

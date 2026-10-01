@@ -1,9 +1,15 @@
-# Homebrew formula for Holdcall. Not yet in a tap: install it as a file with
-#   brew install --formula packaging/homebrew/holdcall.rb
-# once the repository is public (Homebrew cannot fetch a private release).
-# The sha256 values are the ones in the v0.1.1 release's SHA256SUMS. When a
-# release is made by the workflow rather than by hand, regenerate this file
-# from the new SHA256SUMS; the URLs and checksums are the whole formula.
+# Homebrew formula for Holdcall v0.1.2. It is not published: the tap
+# BySergiMM/homebrew-tap exists (it holds the OmniMac cask) but has no
+# Formula/holdcall.rb, so `brew install bysergimm/tap/holdcall` does not work, and
+# nothing in this repository says it does. This file only records the release's
+# URLs and checksums; checking it with `brew` has not been done.
+# The sha256 values are the ones of the v0.1.2 release's assets (they match the
+# digests GitHub reports for them). To publish it, this file would be added to
+# that tap as Formula/holdcall.rb. Installing from a bare path
+# (`brew install --formula packaging/homebrew/holdcall.rb`) depends on the
+# Homebrew version, which may refuse it; that was not tried. When a release is
+# made by the workflow rather than by hand, regenerate this file from the new
+# SHA256SUMS; the URLs and checksums are the whole formula.
 class Holdcall < Formula
   desc "Local relay that decides every MCP tool call and holds the dangerous ones for a human"
   homepage "https://holdcall.vercel.app"

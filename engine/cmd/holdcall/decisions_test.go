@@ -101,12 +101,10 @@ func TestCLIAndConsoleAgreeOnEveryCallState(t *testing.T) {
 	}
 
 	// What the console serves, from the entries it streams.
-	srv := httptest.NewServer(console.New(j, "/nonexistent.sock").Handler())
+	c := console.New(j, "/nonexistent.sock")
+	srv := httptest.NewServer(c.Handler())
 	defer srv.Close()
-	res, err := srv.Client().Get(srv.URL + "/api/sessions/s")
-	if err != nil {
-		t.Fatal(err)
-	}
+	res := consoleGet(t, srv, c, "/api/sessions/s")
 	defer res.Body.Close()
 	var detail struct {
 		Session readmodel.Session `json:"session"`

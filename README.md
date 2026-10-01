@@ -16,9 +16,10 @@ It is for a developer who already runs one of those clients with MCP servers
 configured and wants three things none of them give you on their own: a
 record of what a tool was asked to do, a way to refuse one by name before it
 runs, and each server's credential kept out of a client's plaintext config
-and away from the servers it isn't registered for. It is pre-alpha — see
-Status below for exactly what that means before you point it at something
-you cannot afford to have go wrong.
+and handed only to the one server it is registered for. That last one is not
+a defence against another program running as you; *Credentials* below says
+exactly what it is. It is pre-alpha — see Status below for exactly what that
+means before you point it at something you cannot afford to have go wrong.
 
 ## Status
 
@@ -56,6 +57,16 @@ Pre-alpha, and honest about it. What works:
   the journal before the relay acts on it.
 - **`holdcall init` and `holdcall doctor`** — pointing a client at Holdcall, and checking
   the result, without hand-editing JSON.
+
+**Windows is experimental.** The engine builds for Windows and the suite runs on
+a Windows runner in CI, and that is all that is established there. Windows
+cannot tell who connects to the daemon, so another process running as you can
+obtain decisions, write to the journal and stand in for the daemon; and for the
+same reason no credential is released there, so `holdcall connector set` and any
+relay for a configured connector refuse to run. Agent enrolment does not work
+either. Everything else, rules, budgets, `ask` and the journal, is the same
+code. The table of what is and is not enforced, platform by platform, is *Windows
+is experimental* in `docs/security.md`.
 
 `docs/milestones.md` is the order the rest comes in; see *What does not
 exist yet* below.
@@ -96,14 +107,15 @@ tested on. The installer resolves the latest release, verifies the archive
 against `SHA256SUMS`, and refuses on any mismatch:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/BySergiMM/holdcall/m1-bootstrap/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/BySergiMM/holdcall/main/install.sh | sh
 ```
 
 POSIX `sh`, never `sudo`, writes only inside `HOLDCALL_INSTALL_DIR` (default
 `$HOME/.local/bin`). Resolves the latest GitHub release, or
 `HOLDCALL_VERSION=vX.Y.Z` to pin one, checks the archive's SHA-256 against that
 release's `SHA256SUMS`, and refuses — nothing written — on any mismatch.
-Windows has no `sh`: take the `.zip` from the release page.
+Windows has no `sh`: take the `.zip` from the release page, and read *Windows is
+experimental* under Status first.
 
 A release binary adds the ldflags that make `holdcall version` report something
 other than `0.0.0-dev`, the same ones `.github/workflows/release.yml` uses
@@ -150,12 +162,17 @@ the call never reached the server that would have run it.
 
 ```bash
 holdcall log        # shows the call: deny, no result
-holdcall console    # the same journal, plus held calls, sessions and policy, at 127.0.0.1:7717
+holdcall console    # the same journal, plus held calls, sessions and policy; prints the address to open
 ```
 
 ![The console's Journal view over a demo journal: every entry in chain order with its kind, tool, decision, agent and connector, and entry 22, a rejected call, open beside it with its prev_hash and hash](docs/images/console.png)
 
-The console is read-only and serves loopback only. It has five views:
+The console is read-only and serves loopback only. It also needs a token: it
+makes one when it starts and prints it as part of the address to open
+(`http://127.0.0.1:7717/#token=…`), the page sends it with every request for
+data, and a process on the machine that was not handed the address is refused.
+Whoever has the address reads everything the console shows, and the token is
+gone when the console stops. It has five views:
 an overview of the record (chain check, decisions, detectable gaps, the
 policy in effect), the calls **held** for a human with their real
 arguments and the `holdcall approve` / `holdcall reject` lines to copy, the
@@ -164,7 +181,8 @@ the chain, **sessions** with a timeline each, and the **policy** with an
 "explain a call" form that runs the daemon's own decision function. Deciding
 stays on the command line on purpose: a page any other page on this machine
 can reach must not be able to approve. `/#held`, `/#journal/22` and
-`/#sessions/<id>` open a view, an entry or a session directly.
+`/#sessions/<id>` open a view, an entry or a session directly, in a tab that
+already holds the token.
 
 ![The console's Held view: one call to dangerous_tool held for a human, with the agent, connector, its real arguments including a bidirectional override shown as an escape, and the approve and reject commands to copy](docs/images/console-held.png)
 
@@ -237,10 +255,25 @@ holdcall serve --connector github        # runs the registered server, with the 
 
 The secret is never a command-line argument and never reaches SQLite. A command
 given on the command line is ignored when a connector supplies one: the daemon
-decides what receives a credential, not the caller.
+decides what receives a credential, not the caller. Not on Windows, where no
+credential is released and `connector set` refuses; see Status.
 
-Both ends of the daemon socket verify each other by peer identity, so neither
-a process pretending to be a shim nor one pretending to be the daemon gets in.
+On Linux and macOS both ends of the daemon socket verify each other: the kernel
+says which user, and which executable, is on the other end, so another user, or a
+program that is not this binary, is refused by the daemon and is not taken for
+the daemon by a relay. Windows cannot do that; see Status.
+
+**That does not make a credential private from another program running as you.**
+The secret sits in the operating system's credential store under a name anyone can
+work out, and nothing Holdcall does limits which of your own processes may ask the
+store for it, so a program running as your user, an MCP server that Holdcall
+started included, can read any secret Holdcall keeps there without going through
+the daemon at all. The one server a secret is injected into also has it in its
+environment, which your other processes can read (on Linux, `/proc/<pid>/environ`).
+What Holdcall does guarantee is narrower: it injects a credential only into the
+one command it was registered for, never writes one to a client's config, argv,
+the journal, a log or the console, and the daemon releases one only to a
+Holdcall binary run by you. `docs/security.md` has the detail, under *Known gaps*.
 
 ## What the record is, and is not
 
@@ -275,10 +308,10 @@ the calls do.
   (`docs/decisions/0005-human-approval.md`).
 - **Conditions on a call's arguments, or on time.** A rule matches `(agent,
   connector, tool)` and nothing else.
-- **Anything run on Windows.** DPAPI credential storage and all five
-  cross-compiled targets exist, but no code here has ever executed on a
-  real Windows machine — see *Building* and `docs/security.md`'s *Known
-  gaps* table.
+- **A Windows that can verify who connects.** Windows is experimental: the
+  suite runs on a Windows runner in CI, but nothing there confirms the peer of
+  the daemon's socket, so no credential is released and agent enrolment does
+  not work — see Status and `docs/security.md`'s *Windows is experimental*.
 
 `docs/milestones.md` has the test names behind every claim above, and
 `docs/architecture.md` says where each layer lives and what one call goes
@@ -337,7 +370,9 @@ tools/ci-linux.sh              # the same, in an Ubuntu VM (needs limactl)
 ## Performance
 
 `docs/benchmarks.md`, with the commands that reproduce every figure. The
-decision a call waits for costs p99 0.27 ms including the durable write.
+decision a call waits for costs p99 0.27 ms for one relay, including the
+journal commit, on one Apple M5. What a commit there does and does not survive
+(not shown to survive a power cut) is under *Decision path* in that file.
 
 ## Where the project actually stands
 

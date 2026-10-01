@@ -2,11 +2,10 @@
 
 One thing in this repository is deployed: `dashboard/`, a static site built
 from the repository -- the product page at `/` and the status page at
-`/status/` -- plus one function, `api/waitlist.js`, that stores early-access
-addresses and nothing else. `docs/dashboard.md` describes it, and its
-*Deployment* section is the record of how it is published and why it is
-public. This file exists for the engine, which is not deployed anywhere and is
-not meant to be.
+`/status/` -- with no function and no server behind it. `docs/dashboard.md`
+describes it, and its *Deployment* section is the record of how it is
+published and why it is public. This file exists for the engine, which is not
+deployed anywhere and is not meant to be.
 
 ## The engine is not a service
 
@@ -17,8 +16,10 @@ has no server-side component and no hosted API.
 The one HTML file in the engine, `engine/internal/console/index.html`, is
 embedded in the binary and served by `holdcall console` over **loopback only**, and
 since 2026-09-14 only to a loopback name in the `Host` header -- a page on
-another site that rebinds its own name to 127.0.0.1 is refused. It makes three
-same-origin requests and no external ones. It is an observability view of the
+another site that rebinds its own name to 127.0.0.1 is refused. Every route but
+the page needs a token that `holdcall console` makes when it starts and prints
+in the address to open. Its requests are all same-origin, to its own `/api`
+routes, and none goes anywhere else. It is an observability view of the
 local journal, deliberately read-only and deliberately unreachable from a
 network interface. It is not a website and cannot be hosted.
 

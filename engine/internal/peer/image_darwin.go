@@ -165,7 +165,7 @@ func selfImageID() (Image, bool) {
 }
 
 // ExecPathOf returns the path pid was launched from, via kern.procargs2 --
-// see peerExecPath in peer_darwin.go, which this wraps and which isSelfImpl
+// see peerExecPath in peer_darwin.go, which this wraps and which checkImpl
 // already uses as its own weaker fallback when the vnode mechanism above
 // cannot be trusted.
 //

@@ -100,13 +100,11 @@ func TestCLIAndConsoleAgree(t *testing.T) {
 	text := out.String()
 
 	// Console: the same journal over HTTP.
-	srv := httptest.NewServer(console.New(j, "/nonexistent.sock").Handler())
+	c := console.New(j, "/nonexistent.sock")
+	srv := httptest.NewServer(c.Handler())
 	defer srv.Close()
 
-	res, err := srv.Client().Get(srv.URL + "/api/snapshot")
-	if err != nil {
-		t.Fatal(err)
-	}
+	res := consoleGet(t, srv, c, "/api/snapshot")
 	defer res.Body.Close()
 	var api struct {
 		Journal       readmodel.JournalState `json:"journal"`
@@ -209,12 +207,10 @@ func TestChainSeqIsTheAuthoritativeOrderOnBothSurfaces(t *testing.T) {
 	}
 
 	// And over HTTP.
-	srv := httptest.NewServer(console.New(j, "/nonexistent.sock").Handler())
+	c := console.New(j, "/nonexistent.sock")
+	srv := httptest.NewServer(c.Handler())
 	defer srv.Close()
-	res, err := srv.Client().Get(srv.URL + "/api/events?since=0")
-	if err != nil {
-		t.Fatal(err)
-	}
+	res := consoleGet(t, srv, c, "/api/events?since=0")
 	defer res.Body.Close()
 	var api readmodel.Page
 	if err := json.NewDecoder(res.Body).Decode(&api); err != nil {
@@ -316,12 +312,10 @@ func TestCLIAndConsoleAgreeOnPolicyCounts(t *testing.T) {
 	renderPolicy(&out, pol)
 	text := out.String()
 
-	srv := httptest.NewServer(console.New(j, "/nonexistent.sock").Handler())
+	c := console.New(j, "/nonexistent.sock")
+	srv := httptest.NewServer(c.Handler())
 	defer srv.Close()
-	res, err := srv.Client().Get(srv.URL + "/api/policy")
-	if err != nil {
-		t.Fatal(err)
-	}
+	res := consoleGet(t, srv, c, "/api/policy")
 	defer res.Body.Close()
 	var api readmodel.Policy
 	if err := json.NewDecoder(res.Body).Decode(&api); err != nil {

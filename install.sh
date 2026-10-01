@@ -1,7 +1,7 @@
 #!/bin/sh
 # install.sh -- download, verify and install a holdcall release binary.
 #
-#   curl -fsSL https://raw.githubusercontent.com/BySergiMM/holdcall/m1-bootstrap/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/BySergiMM/holdcall/main/install.sh | sh
 #
 # POSIX sh on purpose: this runs as `sh` regardless of what shell piped it
 # in, so it avoids bashisms rather than assuming bash is what is reading it.
