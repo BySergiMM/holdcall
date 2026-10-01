@@ -25,8 +25,9 @@ not to. There is no bounty programme.
 
 - The relay forwarding a `tools/call` that the daemon did not allow, or one
   the human did not approve.
-- A process that is not this binary obtaining a decision, a credential, or
-  an approval from the daemon socket.
+- A process that is not this binary, run by this user, obtaining a decision, a
+  credential, or an approval from the daemon socket, on Linux or macOS. On
+  Windows that is known: see below.
 - A credential reaching a process other than the one connector it was
   registered for, or appearing in argv, SQLite, a log, or the console.
 - A held call's arguments reaching the journal, a log, or a network.
@@ -37,7 +38,10 @@ not to. There is no bounty programme.
 
 The chain is unkeyed: a local attacker who can write `holdcall.db` can rewrite
 history and it will verify, which is why `holdcall verify --expect-head` exists
-and why the project never calls the journal tamper-proof. Peer identity is
-unsupported on Windows, and nothing here has run there. Enrolling an agent
-is as privileged as running Holdcall. These are documented decisions, not
-findings; `docs/security.md` and `docs/decisions/` say why.
+and why the project never calls the journal tamper-proof. Windows is
+experimental: the suite runs on a Windows runner in CI, but Holdcall does not
+verify the peer of its socket there, so a process running as the same user can
+obtain decisions, write journal entries and stand in for the daemon, and no
+credential is released at all. Enrolling an agent is as privileged as running
+Holdcall. These are documented decisions, not findings; `docs/security.md` and
+`docs/decisions/` say why.

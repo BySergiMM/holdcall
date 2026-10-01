@@ -65,16 +65,25 @@ sends a byte, and refuses to take decisions from anything else.
 ## Layer 2: the daemon (`internal/daemon`)
 
 One per user, started on demand by the first relay and detached from any
-terminal. It listens on a unix socket whose path is derived from the Holdcall
-home (`~/Library/Application Support/holdcall` on macOS, `$XDG_RUNTIME_DIR` or
-the temp dir elsewhere). Two things happen at accept, before a byte is read:
+terminal. It listens on a unix socket named by a short hash of the Holdcall home
+(the home is the user's choice and may be too deep for a socket path, so the
+socket cannot live in it), in a directory only this user can use:
+`$XDG_RUNTIME_DIR`, else the temp directory if it is already private (macOS's
+`$TMPDIR`), else a `holdcall-<uid>` directory inside it (Linux's `/tmp`). The
+home, data and socket directories are created `0700` and checked at startup, and
+the daemon refuses to start in one another user owns
+(`config.EnsurePrivateDir`; not on Windows, where nothing is checked). Two things
+happen at accept, before a byte is read:
 
-- **Peer identity** (`internal/peer`): the kernel is asked which executable
-  the connecting process is running (dev/ino of its main image on macOS via
-  `proc_info`, `/proc/<pid>/exe` on Linux; unsupported on Windows). Anything
-  that is not this same binary is refused. An older build of Holdcall at the same
+- **Peer identity** (`internal/peer`): the kernel is asked which user the
+  connecting process runs as (its effective uid, compared with the daemon's) and
+  which executable it is running (dev/ino of its main image on macOS via
+  `proc_info`, `/proc/<pid>/exe` on Linux). Anything that runs as another user,
+  or is not this same binary, is refused. An older build of Holdcall at the same
   path is refused too, but named as such, and `holdcall daemon restart` is the
-  remedy.
+  remedy. On Windows nothing is asked: the connection is let through and carries
+  on as one nobody verified, and such a connection is never given a credential
+  (`docs/security.md`, *Windows is experimental*).
 - **Agent identity**: the relay's parent process is resolved the same way
   and matched against the enrolments in `nim_agents` (`holdcall agent add <name>
   <path>`). The result is bound to the session at `session.start` and never
@@ -141,8 +150,9 @@ Secret Service through `secret-tool` on Linux, DPAPI on Windows. The daemon
 records which env var name and which argv may receive it. A relay asks for
 the credential at spawn time over its own short-lived connection; the daemon
 decides what gets spawned, not the caller, and injects the value into the
-connector's environment only. The value is never in argv, never in SQLite,
-never in the console.
+connector's environment only. The daemon releases it only to a peer the kernel
+confirmed, and the relay takes a connector only from a daemon it confirmed. The
+value is never in argv, never in SQLite, never in the console.
 
 ## Layer 6: the operator's surfaces (`cmd/holdcall`, `internal/console`)
 

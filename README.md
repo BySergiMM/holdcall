@@ -57,6 +57,16 @@ Pre-alpha, and honest about it. What works:
 - **`holdcall init` and `holdcall doctor`** — pointing a client at Holdcall, and checking
   the result, without hand-editing JSON.
 
+**Windows is experimental.** The engine builds for Windows and the suite runs on
+a Windows runner in CI, and that is all that is established there. Windows
+cannot tell who connects to the daemon, so another process running as you can
+obtain decisions, write to the journal and stand in for the daemon; and for the
+same reason no credential is released there, so `holdcall connector set` and any
+relay for a configured connector refuse to run. Agent enrolment does not work
+either. Everything else, rules, budgets, `ask` and the journal, is the same
+code. The table of what is and is not enforced, platform by platform, is *Windows
+is experimental* in `docs/security.md`.
+
 `docs/milestones.md` is the order the rest comes in; see *What does not
 exist yet* below.
 
@@ -103,7 +113,8 @@ POSIX `sh`, never `sudo`, writes only inside `HOLDCALL_INSTALL_DIR` (default
 `$HOME/.local/bin`). Resolves the latest GitHub release, or
 `HOLDCALL_VERSION=vX.Y.Z` to pin one, checks the archive's SHA-256 against that
 release's `SHA256SUMS`, and refuses — nothing written — on any mismatch.
-Windows has no `sh`: take the `.zip` from the release page.
+Windows has no `sh`: take the `.zip` from the release page, and read *Windows is
+experimental* under Status first.
 
 A release binary adds the ldflags that make `holdcall version` report something
 other than `0.0.0-dev`, the same ones `.github/workflows/release.yml` uses
@@ -237,7 +248,8 @@ holdcall serve --connector github        # runs the registered server, with the 
 
 The secret is never a command-line argument and never reaches SQLite. A command
 given on the command line is ignored when a connector supplies one: the daemon
-decides what receives a credential, not the caller.
+decides what receives a credential, not the caller. Not on Windows, where no
+credential is released and `connector set` refuses; see Status.
 
 Both ends of the daemon socket verify each other by peer identity, so neither
 a process pretending to be a shim nor one pretending to be the daemon gets in.
@@ -272,10 +284,10 @@ the calls do.
   a hosting account, which is the operator's to provide.
 - **Conditions on a call's arguments, or on time.** A rule matches `(agent,
   connector, tool)` and nothing else.
-- **Anything run on Windows.** DPAPI credential storage and all five
-  cross-compiled targets exist, but no code here has ever executed on a
-  real Windows machine — see *Building* and `docs/security.md`'s *Known
-  gaps* table.
+- **A Windows that can verify who connects.** Windows is experimental: the
+  suite runs on a Windows runner in CI, but nothing there confirms the peer of
+  the daemon's socket, so no credential is released and agent enrolment does
+  not work — see Status and `docs/security.md`'s *Windows is experimental*.
 
 `docs/milestones.md` has the test names behind every claim above, and
 `docs/architecture.md` says where each layer lives and what one call goes
