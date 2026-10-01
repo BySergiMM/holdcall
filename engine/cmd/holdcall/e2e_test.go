@@ -118,7 +118,24 @@ func build(t *testing.T) *stack {
 		t.Fatal(err)
 	}
 
-	s.env = append(os.Environ(), "HOLDCALL_HOME="+s.home, "CONNECTOR_LOG="+s.log)
+	// A daemon puts its socket, and the startup lock beside it, in the temp
+	// directory (XDG_RUNTIME_DIR first, where that is set), named for the home it
+	// serves. One that is killed at the end of a test cannot remove them, so each
+	// test left a pair in the machine's temp directory for good, and a run of
+	// this package added a dozen of them every time. Pointing the children at a
+	// directory of this test's own, removed with it, is what takes them away.
+	// Short, because an AF_UNIX path is capped near 104 bytes and t.TempDir() is
+	// not short (nor is macOS's TMPDIR, which is why the prefix is one letter);
+	// private by MkdirTemp's mode, which the daemon requires of the directory
+	// its socket is in.
+	runtimeDir, err := os.MkdirTemp("", "h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(runtimeDir) })
+
+	s.env = append(os.Environ(), "HOLDCALL_HOME="+s.home, "CONNECTOR_LOG="+s.log,
+		"TMPDIR="+runtimeDir, "TMP="+runtimeDir, "TEMP="+runtimeDir, "XDG_RUNTIME_DIR="+runtimeDir)
 	return s
 }
 
@@ -1190,5 +1207,49 @@ func TestAnInPlaceUpgradeIsDiagnosedAndDaemonRestartFixesIt(t *testing.T) {
 	r.send(t, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"echo","arguments":{}}}`)
 	if _, isError, _ := decodeLine(t, r.next(t)); isError {
 		t.Errorf("a call was refused by the daemon holdcall daemon restart started")
+	}
+}
+
+// A killed daemon cannot remove its socket or the startup lock beside it, so
+// whatever directory they were created in keeps them. The end-to-end tests used
+// to leave a pair in the machine's temp directory for every daemon they started
+// -- a dozen per run of this package, never removed -- until build pointed the
+// children at a directory of the test's own.
+//
+// The temp directory of this process is made a short one of this test's own,
+// so that what is in it afterwards is what this test caused and nothing a
+// package running beside it did. The children inherit it, which is exactly the
+// situation the harness has to take care of: against the old harness the
+// daemon's socket and lock land in it and are still there when the test is over.
+// XDG_RUNTIME_DIR is set too, because a daemon prefers it to the temp
+// directory wherever it is set, as it is on a CI runner.
+func TestTheEndToEndHarnessLeavesNothingBehindInTheTempDirectory(t *testing.T) {
+	root, err := os.MkdirTemp("", "r")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(root) })
+	for _, k := range []string{"TMPDIR", "TMP", "TEMP", "XDG_RUNTIME_DIR"} {
+		t.Setenv(k, root)
+	}
+
+	t.Run("a daemon is started, answers and is killed", func(t *testing.T) {
+		s := build(t)
+		s.daemon(t)
+		if out, _ := s.run(t, "status"); !strings.Contains(out, "daemon   running") {
+			t.Fatalf("the daemon this test starts is not running:\n%s", out)
+		}
+	})
+
+	left, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(left) != 0 {
+		var names []string
+		for _, e := range left {
+			names = append(names, e.Name())
+		}
+		t.Errorf("the harness left %d entries in the temp directory: %s", len(left), strings.Join(names, ", "))
 	}
 }
