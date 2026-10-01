@@ -200,9 +200,11 @@ export default function Landing() {
           </ol>
           <p className="lp-how-under">
             Under the relay, one daemon per user decides against rules and budgets in SQLite, keeps credentials in the
-            OS store bound to one command, and writes the journal. It answers only to processes that are Holdcall, and it
-            works with no network. The agent&apos;s identity is derived from the executable that spawned the relay,
-            as the kernel reports it; nothing on the wire can claim to be Claude Code.
+            OS store and injects each only into the one command it is registered for, and writes the journal. It works
+            with no network. On Linux and macOS it answers only to the Holdcall binary run by you, and the agent&apos;s
+            identity is derived from the executable that spawned the relay, as the kernel reports it; nothing on the
+            wire can claim to be Claude Code. Windows has no way to ask the kernel that, which is why it is
+            experimental.
           </p>
           <figure className="lp-shot">
             <img src="/console.png" alt="The local console's Held view: one call to dangerous_tool held for a human, showing the agent, the connector, its real arguments with a bidirectional override made visible, and the approve and reject commands to copy" width="1440" height="900" loading="lazy" />
@@ -222,10 +224,11 @@ export default function Landing() {
               </dd>
             </div>
             <div>
-              <dt>Verified on macOS</dt>
+              <dt>Windows is experimental</dt>
               <dd>
-                Linux and Windows are compiled and vetted, not yet run. The status page says which claims hold on
-                which platform, per test.
+                The suite runs on Linux, macOS and Windows runners in CI. On Windows nothing can confirm who is on the
+                other end of the daemon&apos;s socket, so no credential is released there. The status page says which
+                claims hold on which platform, per test.
               </dd>
             </div>
             <div>
@@ -233,6 +236,13 @@ export default function Landing() {
               <dd>
                 A rule is keyed on agent, connector and tool. Conditions on what a call carries are not built; a human
                 reading the arguments is how that gap is covered today.
+              </dd>
+            </div>
+            <div>
+              <dt>Credentials are not private from you</dt>
+              <dd>
+                A secret sits in the OS credential store, out of your client&apos;s config, and goes only to the one
+                command it is registered for. Another program running as your user can still read it from the store.
               </dd>
             </div>
           </dl>

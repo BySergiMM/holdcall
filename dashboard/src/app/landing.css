@@ -114,7 +114,7 @@
 
 /* ------------------------------------------------------------- honest */
 .lp-honest { max-width: var(--lp-max); margin: 0 auto; padding: 3rem var(--lp-gutter); border-top: 1px solid var(--border); }
-.lp-honest dl { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2rem; margin: 1rem 0 0; }
+.lp-honest dl { display: grid; grid-template-columns: repeat(2, 1fr); gap: 2rem; margin: 1rem 0 0; }
 .lp-honest dt { font-family: var(--lp-display); font-size: 1.25rem; margin-bottom: 0.4rem; }
 .lp-honest dd { margin: 0; color: var(--text-2); }
 
