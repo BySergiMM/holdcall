@@ -124,9 +124,13 @@ policy has the same verifiable history as calls.
 
 ## Layer 4: the journal (`internal/journal`)
 
-`nim_journal` is append-only (triggers refuse update and delete) and
-hash-chained: each entry's hash covers a canonical encoding of its fields
-plus the previous hash, from a genesis derived from the machine id.
+`nim_journal` is append-only by construction of the code, not by anything in
+the database: no statement the engine runs updates or deletes an entry (a call is
+two entries, never one row that changes), and there are no SQL triggers, so
+nothing in SQLite refuses an update or delete made by another process that can
+write the file. What catches that is the hash chain, which is unkeyed
+(`docs/journal-format.md`): each entry's hash covers a canonical encoding of its
+fields plus the previous hash, from a genesis derived from the machine id.
 `docs/journal-format.md` is normative and versioned (schema 1 to 4); a second
 implementation can reproduce the bytes from it alone, and the tests do.
 Kinds: `session.start`, `call.request`, `call.outcome`, `session.end`,
@@ -217,6 +221,10 @@ ms with a budget configured, against a 2 s timeout.
 Not built: conditions on a call's arguments or on time, notifications for
 held calls, a hosted mirror (M8, planned as "what this machine reported"), a
 second OS principal for the daemon (which is what F-006 and a keyed journal
-both need). Never executed: anything on Windows, and Linux only in CI, which
-is what `docs/security.md`'s gaps table and the dashboard's platform columns
-say.
+both need). On Linux and Windows the evidence is CI: the suite passes on
+`ubuntu-latest` since 2026-09-26 and on `windows-latest` since 2026-09-28, and
+nothing in these documents records a person running either by hand; on Windows
+the tests that show an attacker refused are skipped by name. Windows is
+experimental: it verifies no peer, so it releases no credential.
+`docs/security.md`'s gaps table and the dashboard's platform columns say the
+same.
