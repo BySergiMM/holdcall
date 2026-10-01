@@ -345,16 +345,21 @@ var errAlreadyRunning = errors.New("another daemon holds the socket")
 // dial rather than unlinking a live socket forever.
 func listen(path string) (net.Listener, error) {
 	// The directory first, and checked rather than merely created: MkdirAll
-	// leaves an existing directory exactly as it found it, so one that was
-	// already there and that other users could reach stayed that way.
-	// EnsurePrivateDir narrows one this user owns to 0700, and refuses one that
-	// somebody else owns -- who could replace the socket, whatever its mode --
-	// which includes a shared directory such as /tmp.
+	// leaves an existing directory exactly as it found it. EnsurePrivateDir
+	// creates one that is missing with mode 0700, refuses one that somebody else
+	// owns -- who could replace the socket, whatever its mode -- which includes a
+	// shared directory such as /tmp, and warns about one this user owns that
+	// others can reach, without changing it: Holdcall did not make that one, and
+	// socket = ~/holdcall.sock names the home directory.
 	//
-	// That is also what makes the bind itself safe, and this is the answer to
-	// the question of the window: net.Listen creates the socket with whatever
-	// the umask leaves it and it is only narrowed to 0600 once bound, but in a
-	// directory nobody else can enter nobody else can reach it in between. A
+	// That is what makes the bind itself safe where the directory is one of
+	// Holdcall's own, and this is the answer to the question of the window:
+	// net.Listen creates the socket with whatever the umask leaves it and it is
+	// only narrowed to 0600 once bound, but in a directory nobody else can enter
+	// nobody else can reach it in between. In a directory the operator chose and
+	// others can enter, the window is real and short, and what covers it is the
+	// peer check: a connection from another user is refused here, and a socket
+	// put in this one's place is refused by the shim (internal/peer). A
 	// restrictive umask around the bind was the alternative and was not taken:
 	// the umask belongs to the whole process, so every goroutine that created a
 	// file in the meantime would get a mode nobody chose for it, and two daemons

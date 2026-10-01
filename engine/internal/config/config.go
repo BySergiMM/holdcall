@@ -270,11 +270,11 @@ func LogPath() string { return filepath.Join(Home(), "daemon.log") }
 
 func (c Config) DatabasePath() string { return filepath.Join(c.Daemon.DataDir, "holdcall.db") }
 
-// EnsureDirs creates the layout and makes each directory in it private to this
-// user: the home, the data directory the journal lives in, and the directory the
-// socket is in. A directory that was already there is checked, not assumed --
-// one this user owns that others could reach is narrowed to 0700, and one
-// another user owns is refused. See EnsurePrivateDir.
+// EnsureDirs creates the layout, private to this user: the home, the data
+// directory the journal lives in, and the directory the socket is in. A
+// directory that was already there is checked, not assumed -- one another user
+// owns is refused, and one this user owns that others could reach is left as it
+// is and warned about, because Holdcall did not make it. See EnsurePrivateDir.
 //
 // The refusal names which of the three it was and where to change it, because
 // the operator who reads it has a configuration to fix and not a bug to report.

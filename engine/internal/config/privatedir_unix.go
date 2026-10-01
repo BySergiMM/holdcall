@@ -3,10 +3,14 @@
 package config
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"syscall"
 )
 
@@ -19,42 +23,59 @@ import (
 var currentUID = os.Geteuid
 
 // EnsurePrivateDir makes dir a directory only the user running this process can
-// use, or says why it cannot be one.
+// use where that is Holdcall's to decide, and says plainly where it is not.
 //
-// A directory that does not exist is created, parents included, with mode 0700.
-// One that does exist must be a directory this user owns -- a symbolic link is
-// followed to the directory it stands for, and that one is what is checked --
-// and if group or other have any access to it, that access is removed with
-// chmod 0700. One that belongs to anybody else is refused with ErrDirNotOurs.
+// Three cases, and what separates them is who made the directory:
 //
-// Why the directory and not only what goes in it: os.MkdirAll(dir, 0o700) leaves
-// an existing directory exactly as it found it, so a 0755 directory that was
-// there first stayed 0755. And the things Holdcall keeps in these directories are
-// not created private. A socket is made with whatever the umask leaves it and
-// only narrowed afterwards, and SQLite creates the journal with the umask's
-// default, usually 0644 -- what keeps other users away from them is the
-// directory, so the directory has to be checked rather than assumed.
+//   - A directory that does not exist is created, parents included, and the
+//     directory itself with mode 0700. That one is Holdcall's own.
+//   - A directory that exists is checked, and must belong to this user: one that
+//     belongs to anybody else is refused with ErrDirNotOurs, because whoever owns a
+//     directory can replace what is in it whatever the modes of the things inside
+//     say. A symbolic link is followed to the directory it stands for, and that is
+//     the one checked -- a home on another disk is legitimate.
+//   - If that directory, owned by this user, gives group or other any access, what
+//     happens depends on whose it is. Holdcall's own default runtime directory
+//     (see defaultRuntimeDir) is tightened with chmod 0700, and must not be a
+//     symbolic link: it sits in a directory that everybody can write to, and a link
+//     put there could point chmod at a directory of this user's that was never
+//     Holdcall's. Any other directory -- one the operator chose, which Holdcall did
+//     not make -- is left exactly as it is, and what is said is a warning. The
+//     operator who writes socket = ~/holdcall.sock has named their home directory,
+//     and taking away the access their other users and groups have to it is not
+//     something a tool starting a socket gets to do. chmod can also fail where the
+//     mode is not the owner's to set (drvfs, NFS), and a daemon that refused to
+//     start over that would be a worse outcome than the one it was avoiding.
 //
-// Once this has returned nil nobody else can reach the directory's entries, nor
-// rename or replace the directory itself if it sits in one they cannot write to,
-// so what is created inside it afterwards needs no window of care. The one
-// directory it cannot protect is a shared one such as /tmp, which is owned by
-// root and is refused: see defaultSocket for where the default socket goes
-// instead.
+// What the warning does not mean: the socket is created and then narrowed to
+// 0600 whatever its directory, and the daemon refuses every connection from
+// another user and every shim that does not verify it (see internal/peer). What
+// stays only as private as the directory is whatever else is kept in it, the
+// journal included: SQLite creates it with the umask's default, usually 0644.
 //
 // Nothing here is for Windows. There a directory's mode is not its permissions
 // (see privatedir_other.go).
 func EnsurePrivateDir(dir string) error {
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
-	// Stat, not Lstat: a home that is a symlink to another disk is legitimate,
-	// and what has to be ours is the directory it leads to. A link planted by
-	// somebody else can only lead somewhere we own, where chmod 0700 is
-	// harmless, or somewhere we do not, where the owner check below refuses.
-	fi, err := os.Stat(dir)
+	dir = filepath.Clean(dir)
+	created, err := mkdirLeaf(dir)
 	if err != nil {
 		return err
+	}
+	// The directories that are Holdcall's own are the ones it just made and the
+	// one it keeps its default socket in. For those, Lstat: a link is refused
+	// rather than followed. For the others, Stat -- see above.
+	own := created || dir == defaultRuntimeDir()
+	stat := os.Stat
+	if own {
+		stat = os.Lstat
+	}
+	fi, err := stat(dir)
+	if err != nil {
+		return err
+	}
+	if fi.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%s is a symbolic link, and Holdcall's own directory is never one: "+
+			"it would lead wherever whoever made the link chose", dir)
 	}
 	if !fi.IsDir() {
 		return fmt.Errorf("%s exists and is not a directory", dir)
@@ -69,13 +90,63 @@ func EnsurePrivateDir(dir string) error {
 		return fmt.Errorf("%w: %s is owned by uid %d, and this process runs as uid %d",
 			ErrDirNotOurs, dir, st.Uid, self)
 	}
-	if fi.Mode().Perm()&0o077 != 0 {
+	if mode := fi.Mode().Perm(); mode&0o077 != 0 {
+		if !own {
+			warnOnce(dir, mode)
+			return nil
+		}
 		if err := os.Chmod(dir, 0o700); err != nil {
 			return fmt.Errorf("%s is open to other users (mode %04o) and could not be made private: %w",
-				dir, fi.Mode().Perm(), err)
+				dir, mode, err)
 		}
 	}
 	return nil
+}
+
+// mkdirLeaf creates dir, with its parents, and says whether it was dir that this
+// call created: Mkdir on the last element is what tells a directory made here
+// from one that was already there, which MkdirAll cannot.
+func mkdirLeaf(dir string) (created bool, err error) {
+	if err := os.MkdirAll(filepath.Dir(dir), 0o700); err != nil {
+		return false, err
+	}
+	switch err := os.Mkdir(dir, 0o700); {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, fs.ErrExist):
+		return false, nil
+	default:
+		return false, err
+	}
+}
+
+// warn says something to the operator. A variable so a test can hear it; in
+// production it is the log, which for the daemon is its log file and for the
+// relay is the stderr the client shows.
+var warn = func(format string, args ...any) { log.Printf("holdcall: warning: "+format, args...) }
+
+// warned remembers which directories this process has already complained about:
+// EnsureDirs and the daemon's listen both look at the socket's directory, and
+// one complaint is the right number.
+var warned sync.Map
+
+func warnOnce(dir string, mode os.FileMode) {
+	if _, again := warned.LoadOrStore(dir, struct{}{}); again {
+		return
+	}
+	warn("%s can be used by other users (mode %04o). Holdcall did not create it, so it does not change it. "+
+		"The socket stays mode 0600 and the daemon verifies who connects, but the journal and anything else "+
+		"kept in this directory are only as private as the directory is: chmod 700 %s, "+
+		"or point the setting that names it at a directory of its own.", dir, mode, dir)
+}
+
+// defaultRuntimeDir is the directory of this user's own that the default socket
+// goes in when XDG_RUNTIME_DIR names none and the temp directory is shared. It is
+// the only directory outside Holdcall's home that Holdcall treats as its own
+// without having created it in this call, because it is the one place where
+// something that is not Holdcall has already been told it is Holdcall's.
+func defaultRuntimeDir() string {
+	return filepath.Join(os.TempDir(), "holdcall-"+strconv.Itoa(currentUID()))
 }
 
 // privateToUs reports whether dir exists, belongs to this user and gives nobody
@@ -106,9 +177,8 @@ func privateToUs(dir string) bool {
 // If somebody else got there first, what this user gets is a refusal to start,
 // with the reason, never a daemon in a place another user controls.
 func socketTempDir() string {
-	tmp := os.TempDir()
-	if privateToUs(tmp) {
+	if tmp := os.TempDir(); privateToUs(tmp) {
 		return tmp
 	}
-	return filepath.Join(tmp, "holdcall-"+strconv.Itoa(currentUID()))
+	return defaultRuntimeDir()
 }

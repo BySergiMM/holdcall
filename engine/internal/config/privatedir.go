@@ -10,4 +10,8 @@ import "errors"
 // so a socket or a journal kept there would be at that user's mercy. chmod would
 // fail for anyone but root, and for root it would mean quietly taking a
 // directory away from its owner.
+//
+// The converse is deliberate too: a directory this user owns, which Holdcall did
+// not create and which others can reach, is not refused and is not narrowed. It
+// is the operator's, and they get a warning.
 var ErrDirNotOurs = errors.New("directory belongs to another user")

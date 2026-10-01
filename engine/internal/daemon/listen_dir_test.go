@@ -13,17 +13,19 @@ import (
 	"github.com/BySergiMM/holdcall/engine/internal/config"
 )
 
-// A socket directory that was already there, and that other users could reach,
-// used to stay that way: MkdirAll(dir, 0o700) does nothing to a directory that
-// exists. Other users could then list and enter the directory the socket sits in,
-// and the socket itself was only narrowed to 0600 after it was bound.
-func TestListenNarrowsAPreExistingSocketDirectory(t *testing.T) {
+// A socket directory that was already there is the operator's, not the
+// daemon's. socket = ~/holdcall.sock makes the home directory the socket's
+// directory, and a daemon that narrowed it to 0700 would have taken away the
+// access of the user's other users and groups to their home -- and one that
+// stopped because a chmod failed (drvfs, NFS) would not have started at all. The
+// socket is private by its own mode and the peer check, which is what covers it.
+func TestListenLeavesAPreExistingSocketDirectoryAsItIs(t *testing.T) {
 	dir, err := os.MkdirTemp("", "hcsock")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(dir) })
-	if err := os.Chmod(dir, 0o755); err != nil { // what a directory somebody else made looks like
+	if err := os.Chmod(dir, 0o755); err != nil { // what the operator's own directory looks like
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, "d.sock")
@@ -34,17 +36,48 @@ func TestListenNarrowsAPreExistingSocketDirectory(t *testing.T) {
 	}
 	defer ln.Close()
 
-	if got := modeOfPath(t, dir); got != 0o700 {
-		t.Errorf("the socket's directory is %04o after listen, want 0700: other users can still reach it", got)
+	if got := modeOfPath(t, dir); got != 0o755 {
+		t.Errorf("the socket's directory is %04o after listen; it existed at 0755 and is not the daemon's to change", got)
 	}
 	if got := modeOfPath(t, path); got != 0o600 {
-		t.Errorf("the socket is %04o, want 0600", got)
+		t.Errorf("the socket is %04o, want 0600: it is what keeps other users out of a directory they can enter", got)
 	}
 	conn, err := net.Dial("unix", path)
 	if err != nil {
 		t.Fatalf("the socket cannot be dialled by its own user: %v", err)
 	}
 	conn.Close()
+}
+
+// What the daemon does make, it makes private: a socket directory that is not
+// there yet is created 0700 however loose the directory around it is.
+func TestListenCreatesAMissingSocketDirectoryPrivate(t *testing.T) {
+	parent, err := os.MkdirTemp("", "hcsock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(parent) })
+	if err := os.Chmod(parent, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(parent, "run")
+	path := filepath.Join(dir, "d.sock")
+
+	ln, err := listen(path)
+	if err != nil {
+		t.Fatalf("listen with a socket directory that does not exist yet: %v", err)
+	}
+	defer ln.Close()
+
+	if got := modeOfPath(t, dir); got != 0o700 {
+		t.Errorf("the directory listen created is %04o, want 0700", got)
+	}
+	if got := modeOfPath(t, parent); got != 0o755 {
+		t.Errorf("the parent that was already there was changed from 0755 to %04o", got)
+	}
+	if got := modeOfPath(t, path); got != 0o600 {
+		t.Errorf("the socket is %04o, want 0600", got)
+	}
 }
 
 // A directory another user owns is one in which that user can replace the

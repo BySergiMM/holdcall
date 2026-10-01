@@ -822,8 +822,8 @@
       "id": "directories-private-to-the-user",
       "title": "The socket, the journal and Holdcall's home are in directories only the user can reach",
       "status": "verified",
-      "statement": "Holdcall's home, its data directory and the directory the socket is in are created 0700, and one that already exists must belong to the user running Holdcall, with any group or other access removed. A directory another user owns is refused and the daemon does not start. The default socket is never placed directly in a shared directory such as /tmp.",
-      "notGuaranteed": "Not on Windows, where no ACL is read or set. And it is the first line of defence against other users, not a boundary against a process of the same user, which owns the same directories.",
+      "statement": "Holdcall's home, its data directory and the directory the socket is in are created 0700 when they do not exist, and one that already exists must belong to the user running Holdcall. A directory another user owns is refused and the daemon does not start. The default socket is never placed directly in a shared directory such as /tmp, and the holdcall-<uid> directory it goes in instead is tightened to 0700 and refused if it is a symbolic link.",
+      "notGuaranteed": "A directory that already existed, that the user owns and that the operator pointed Holdcall at (socket = ~/holdcall.sock names the home directory) is left as it is, not narrowed, and warned about: the socket is still 0600 and every peer is checked, but the journal in such a data directory is only as private as the directory. Not on Windows, where no ACL is read or set. And it is the first line of defence against other users, not a boundary against a process of the same user, which owns the same directories.",
       "implementation": [
         "engine/internal/config/privatedir.go",
         "engine/internal/config/privatedir_unix.go",
@@ -832,10 +832,15 @@
       ],
       "tests": [
         "TestEnsurePrivateDirRefusesADirectoryAnotherUserOwns",
-        "TestEnsurePrivateDirNarrowsADirectoryWeOwnThatOthersCouldReach",
+        "TestEnsurePrivateDirNeverChangesADirectoryItDidNotCreate",
+        "TestEnsurePrivateDirDoesNotTakeAHomeDirectoryAway",
+        "TestEnsurePrivateDirMakesWhatItCreatesPrivateAndLeavesTheParentAlone",
+        "TestEnsurePrivateDirTightensTheDefaultRuntimeDirectory",
+        "TestEnsurePrivateDirRefusesALinkAtTheDefaultRuntimeDirectory",
         "TestTheDefaultSocketIsNeverPutDirectlyInADirectoryOthersCanUse",
         "TestListenRefusesASocketDirectoryAnotherUserOwns",
-        "TestListenNarrowsAPreExistingSocketDirectory",
+        "TestListenLeavesAPreExistingSocketDirectoryAsItIs",
+        "TestListenCreatesAMissingSocketDirectoryPrivate",
         "TestTheDaemonDoesNotStartWithItsSocketInADirectoryAnotherUserOwns"
       ],
       "platforms": {
@@ -1533,11 +1538,12 @@
       "category": "identity",
       "status": "pass",
       "wasLive": false,
-      "evidence": "The daemon bound its socket in whatever directory the path named, creating it if missing and leaving an existing one as it found it, and the default path could land directly in /tmp, where any local user can create a path first. Directories are now checked: one another user owns is refused, one this user owns is narrowed to 0700, and the default is never directly in a shared directory. Another user's directory is simulated by making the test believe it runs as a different uid; no test here creates a real second account. Linux and macOS only: nothing is checked on Windows.",
+      "evidence": "The daemon bound its socket in whatever directory the path named, creating it if missing and leaving an existing one as it found it, and the default path could land directly in /tmp, where any local user can create a path first. Directories are now checked: one another user owns is refused, one that is missing is created 0700, Holdcall's own default runtime directory is tightened to 0700 and refused if it is a link, and the default is never directly in a shared directory. A pre-existing directory the operator chose and that others can reach is left as it is and warned about, so the attack is closed for every directory Holdcall makes or owns by name and, for the operator's own, answered by the 0600 socket and the peer check. Another user's directory is simulated by making the test believe it runs as a different uid; no test here creates a real second account. Linux and macOS only: nothing is checked on Windows.",
       "tests": [
         "TestListenRefusesASocketDirectoryAnotherUserOwns",
-        "TestListenNarrowsAPreExistingSocketDirectory",
+        "TestListenLeavesAPreExistingSocketDirectoryAsItIs",
         "TestEnsurePrivateDirRefusesADirectoryAnotherUserOwns",
+        "TestEnsurePrivateDirRefusesALinkAtTheDefaultRuntimeDirectory",
         "TestTheDefaultSocketIsNeverPutDirectlyInADirectoryOthersCanUse",
         "TestTheDaemonDoesNotStartWithItsSocketInADirectoryAnotherUserOwns"
       ]
@@ -1840,9 +1846,9 @@
       "title": "Socket permissions have a window at creation",
       "problem": "net.Listen creates the socket with the process umask; chmod 0600 follows immediately after.",
       "impact": "There was a brief window where the socket was connectable by other local users. Peer verification still refused them, and now the directory does first.",
-      "evidence": "Fixed: engine/internal/daemon/daemon.go listen() first creates or checks the socket's directory (config.EnsurePrivateDir) and binds only inside one that only this user can enter, so there is nobody to connect between net.Listen and the chmod. A directory another user owns is refused, which also covers a shared one such as /tmp. TestListenRefusesASocketDirectoryAnotherUserOwns and TestListenNarrowsAPreExistingSocketDirectory fail when the check is removed. Linux and macOS only: Windows checks no directory permission (F-002).",
+      "evidence": "Fixed for every directory Holdcall makes or owns by name: engine/internal/daemon/daemon.go listen() first creates or checks the socket's directory (config.EnsurePrivateDir) and binds inside one that only this user can enter, so there is nobody to connect between net.Listen and the chmod. A directory another user owns is refused, which also covers a shared one such as /tmp. TestListenRefusesASocketDirectoryAnotherUserOwns fails when the check is removed. Not closed where the operator chose a directory that already existed and that others can enter (socket = ~/holdcall.sock): it is left as it is and warned about, because Holdcall did not make it, and there the window is covered by the peer check and not by the directory. TestListenLeavesAPreExistingSocketDirectoryAsItIs pins both halves: the directory is untouched and the socket is 0600. Linux and macOS only: Windows checks no directory permission (F-002).",
       "status": "fixed",
-      "nextAction": "None on Linux and macOS. The umask the old next action proposed was not used: it belongs to the whole process, and a private directory does not depend on it.",
+      "nextAction": "None for directories Holdcall makes. The umask the old next action proposed was not used: it belongs to the whole process, and a private directory does not depend on it. For a directory the operator chose and others can enter, the warning says to chmod 700 it or move the setting.",
       "provenance": "declared"
     },
     {
