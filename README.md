@@ -270,6 +270,9 @@ the calls do.
   reported, labelled as such on every row, and holds pinned heads apart from
   synced rows (`docs/decisions/0006-what-the-mirror-may-claim.md`). It needs
   a hosting account, which is the operator's to provide.
+- **Decisions in parallel within a session.** A call held for a human stalls
+  every other message of its session until it is decided or times out
+  (`docs/decisions/0005-human-approval.md`).
 - **Conditions on a call's arguments, or on time.** A rule matches `(agent,
   connector, tool)` and nothing else.
 - **Anything run on Windows.** DPAPI credential storage and all five

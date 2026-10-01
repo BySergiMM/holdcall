@@ -31,8 +31,8 @@ and the MCP servers it talks to. It runs on your machine, needs no
 network, and decides every tool call before it reaches the server: allow,
 deny, or hold it for a human. A held call shows you the real arguments,
 every byte, and waits for `holdcall approve` or `holdcall reject`. Nobody
-deciding within the timeout is a rejection, and the model is told a human
-said no, so it does not retry.
+deciding within the timeout is a rejection, and the model is told that
+nobody decided, so it does not retry.
 
 Everything it sees goes into an append-only SQLite journal, hash-chained,
 that you can verify offline with `holdcall verify`; the format is
