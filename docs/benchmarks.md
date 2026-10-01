@@ -57,11 +57,16 @@ measurement and not the intent:
 - Nothing in `engine/` sets `synchronous` or `fullfsync`, so the SQLite build's
   own defaults apply. They are documented as `FULL` and off, and this file used
   to say `synchronous=FULL` as if Holdcall chose it; nothing here reads the
-  value back. They are not the same in every build: a journal connection opened
-  in the SQLite that runs this test suite in a Linux sandbox
-  (`ncruces/go-sqlite3`, not the `modernc.org/sqlite` the release is built with)
-  reports `synchronous=1` (NORMAL) with `fullfsync=0`. What the shipped driver
-  reports was not measured.
+  value back. They are not the same in every build, and one observation says
+  so: a one-off, made while this was being written, in a Linux sandbox that
+  could not download `modernc.org/sqlite`. There the tests ran against a
+  stand-in for it built on `ncruces/go-sqlite3`, and a journal connection
+  opened through that stand-in reported `synchronous=1` (NORMAL) with
+  `fullfsync=0`. That is not reproducible from this repository: neither the
+  stand-in nor the way it was wired in is in it, nothing here runs it, and it is
+  not the driver the release is built with. It shows that two SQLite builds can
+  disagree about the default and nothing more. What the shipped driver reports
+  was not measured.
 - On macOS, where every figure here was taken, SQLite flushes with a plain
   `fsync` unless `PRAGMA fullfsync` is on. Apple's `fsync(2)` page says `fsync`
   does not make the drive write through its own cache and that `F_FULLFSYNC`
