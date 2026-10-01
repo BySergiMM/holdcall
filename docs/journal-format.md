@@ -502,12 +502,16 @@ this construction is secret, so anyone able to edit a row is equally able to
 recompute every hash from the genesis onwards, and the result verifies cleanly.
 Truncating the tail and recomputing is likewise undetectable.
 
-On durability, for the record: these connections run with `synchronous=FULL`,
-so SQLite flushes the write-ahead log before reporting a commit, and a power cut
-should not drop entries it had already accepted — as far as the hardware honours
-the flush. That value is SQLite's own default rather than something chosen here,
-which is a thin thing for a durability property to rest on; pinning it belongs
-with the milestone that decides what a commit on the critical path may cost.
+On durability, for the record: nothing in `engine/` sets `synchronous` or
+`fullfsync`, so the SQLite build's own defaults decide whether an entry that was
+committed survives a power cut, and that is **not claimed**. The documented
+default is `FULL`, which flushes the write-ahead log before a commit is
+reported, but it is not the same in every build (a one-off probe through a
+stand-in driver reported `synchronous=1`, see `docs/benchmarks.md`), and the
+shipped driver's value was not measured. What is guaranteed is the order: the
+commit returns before the decision is sent. Pinning the settings belongs with
+the milestone that decides what a commit on the critical path may cost; it is
+recorded as open finding F-034.
 
 The seed is not part of the journal. If `machine-id` goes missing, the first
 entry cannot be checked against anything, and `holdcall verify` says so rather than
