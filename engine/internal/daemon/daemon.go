@@ -329,7 +329,24 @@ var errAlreadyRunning = errors.New("another daemon holds the socket")
 // attempt, and a daemon that ultimately loses backs off cleanly on its next
 // dial rather than unlinking a live socket forever.
 func listen(path string) (net.Listener, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	// The directory first, and checked rather than merely created: MkdirAll
+	// leaves an existing directory exactly as it found it, so one that was
+	// already there and that other users could reach stayed that way.
+	// EnsurePrivateDir narrows one this user owns to 0700, and refuses one that
+	// somebody else owns -- who could replace the socket, whatever its mode --
+	// which includes a shared directory such as /tmp.
+	//
+	// That is also what makes the bind itself safe, and this is the answer to
+	// the question of the window: net.Listen creates the socket with whatever
+	// the umask leaves it and it is only narrowed to 0600 once bound, but in a
+	// directory nobody else can enter nobody else can reach it in between. A
+	// restrictive umask around the bind was the alternative and was not taken:
+	// the umask belongs to the whole process, so every goroutine that created a
+	// file in the meantime would get a mode nobody chose for it, and two daemons
+	// starting in one process -- the tests do -- could restore each other's
+	// value wrongly. The chmod below stays as a second layer, and as the only
+	// one on a platform where a directory's privacy is not enforced (Windows).
+	if err := config.EnsurePrivateDir(filepath.Dir(path)); err != nil {
 		return nil, err
 	}
 	unlock, err := acquireStartupLock(path + ".lock")

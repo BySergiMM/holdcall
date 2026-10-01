@@ -2,9 +2,7 @@ package daemon
 
 import (
 	"encoding/json"
-	"fmt"
 	"net"
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -30,9 +28,12 @@ func start(t testing.TB) (cfg config.Config, dbPath string) {
 		t.Fatalf("creating the test home's machine-id: %v", err)
 	}
 	// The socket lives outside home on purpose: an AF_UNIX path is capped near
-	// 104 bytes and a temp directory is already most of that.
-	sock := filepath.Join(os.TempDir(), fmt.Sprintf("holdcall-test-%d.sock", time.Now().UnixNano()%1e9))
-	t.Cleanup(func() { os.Remove(sock) })
+	// 104 bytes and a temp directory is already most of that. And in a directory
+	// of its own, not directly in the temp directory: the daemon refuses a socket
+	// directory another user owns, which on Linux CI is /tmp, and the startup
+	// lock it keeps beside the socket is never removed, so a test that put both
+	// in /tmp left a file behind for every run.
+	sock := tempSocketPath(t)
 
 	cfg = config.Config{
 		Daemon: config.Daemon{Socket: sock, DataDir: filepath.Join(home, "data")},
@@ -93,8 +94,7 @@ func startWithApprovalTimeout(t testing.TB, timeout time.Duration) (cfg config.C
 	if _, err := config.CreateMachineID(); err != nil {
 		t.Fatalf("creating the test home's machine-id: %v", err)
 	}
-	sock := filepath.Join(os.TempDir(), fmt.Sprintf("holdcall-test-%d.sock", time.Now().UnixNano()%1e9))
-	t.Cleanup(func() { os.Remove(sock) })
+	sock := tempSocketPath(t) // see start for why it has a directory of its own
 
 	cfg = config.Config{
 		Daemon: config.Daemon{

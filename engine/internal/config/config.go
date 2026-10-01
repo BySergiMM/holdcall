@@ -18,6 +18,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -181,6 +182,13 @@ const MaxSocketPath = 100
 // may be arbitrarily deep, which silently breaks the daemon. Hashing it gives
 // a name that is both short and unique per install, so two homes on one
 // machine never collide.
+//
+// Where it goes is a directory only this user can use: XDG_RUNTIME_DIR, which
+// the specification requires to be owned by the user and mode 0700, or else the
+// temp directory if that is already private (macOS's $TMPDIR is) and a
+// directory of this user's own inside it if it is not (Linux's /tmp, shared by
+// everyone). See socketTempDir. Never directly in a shared directory: the daemon
+// refuses to start in a directory another user owns, see EnsurePrivateDir.
 func defaultSocket() string {
 	sum := sha256.Sum256([]byte(Home()))
 	name := "holdcall-" + hex.EncodeToString(sum[:4]) + ".sock"
@@ -189,7 +197,7 @@ func defaultSocket() string {
 			return filepath.Join(dir, name)
 		}
 	}
-	return filepath.Join(os.TempDir(), name)
+	return filepath.Join(socketTempDir(), name)
 }
 
 // Validate rejects a configuration that cannot work, with an explanation.
@@ -237,7 +245,7 @@ func ReadMachineID() (string, bool) {
 // journal entries depend on the previous one.
 func CreateMachineID() (string, error) {
 	id := NewID()
-	if err := os.MkdirAll(Home(), 0o700); err != nil {
+	if err := EnsurePrivateDir(Home()); err != nil {
 		return "", err
 	}
 	if err := os.WriteFile(MachineIDPath(), []byte(id), 0o600); err != nil {
@@ -262,12 +270,45 @@ func LogPath() string { return filepath.Join(Home(), "daemon.log") }
 
 func (c Config) DatabasePath() string { return filepath.Join(c.Daemon.DataDir, "holdcall.db") }
 
-// EnsureDirs creates the layout with owner-only permissions.
+// EnsureDirs creates the layout and makes each directory in it private to this
+// user: the home, the data directory the journal lives in, and the directory the
+// socket is in. A directory that was already there is checked, not assumed --
+// one this user owns that others could reach is narrowed to 0700, and one
+// another user owns is refused. See EnsurePrivateDir.
+//
+// The refusal names which of the three it was and where to change it, because
+// the operator who reads it has a configuration to fix and not a bug to report.
 func (c Config) EnsureDirs() error {
-	for _, dir := range []string{Home(), c.Daemon.DataDir, filepath.Dir(c.Daemon.Socket)} {
-		if err := os.MkdirAll(dir, 0o700); err != nil {
+	for _, d := range c.layout() {
+		if err := d.ensure(); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// layoutDir is one directory of the layout, with what to call it and what to
+// tell an operator to change when it cannot be used.
+type layoutDir struct{ what, dir, fix string }
+
+func (c Config) layout() []layoutDir {
+	return []layoutDir{
+		{"the home directory", Home(), "Set HOLDCALL_HOME to a directory you own."},
+		{"the data directory", c.Daemon.DataDir, "Set [daemon] data_dir in " + Path() + " to a directory you own."},
+		{"the socket directory", filepath.Dir(c.Daemon.Socket),
+			"Set [daemon] socket in " + Path() + " to a path inside a directory you own."},
+	}
+}
+
+func (d layoutDir) ensure() error {
+	err := EnsurePrivateDir(d.dir)
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, ErrDirNotOurs):
+		return fmt.Errorf("%s cannot be used: %w. Holdcall keeps its socket and its journal only in "+
+			"directories its own user owns, because whoever owns a directory can replace what is in it. %s",
+			d.what, err, d.fix)
+	}
+	return fmt.Errorf("%s cannot be used: %w", d.what, err)
 }

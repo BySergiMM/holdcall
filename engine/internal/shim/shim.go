@@ -1138,7 +1138,7 @@ func StartDaemon() bool {
 	// exist yet when `holdcall connector set` is the first thing run. Opening the
 	// file then failed, the error was dropped, and the daemon's first words
 	// -- the ones that explain why it did not start -- went nowhere.
-	if err := os.MkdirAll(config.Home(), 0o700); err != nil {
+	if err := config.EnsurePrivateDir(config.Home()); err != nil {
 		fmt.Fprintf(os.Stderr, "holdcall: cannot create %s for the daemon's log: %v\n", config.Home(), err)
 	}
 	log, err := os.OpenFile(config.LogPath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
