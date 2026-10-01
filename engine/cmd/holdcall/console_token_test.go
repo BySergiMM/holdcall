@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"encoding/hex"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
@@ -31,6 +30,20 @@ func consoleGet(t *testing.T, srv *httptest.Server, c *console.Server, path stri
 	return res
 }
 
+// waitForTheJournal returns once the journal can be opened for reading, which
+// `holdcall log` does and refuses to do before the daemon has created it.
+func waitForTheJournal(t *testing.T, s *stack) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := s.run(t, "log"); err == nil {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatal("the daemon never created a journal that can be read")
+}
+
 // What the command prints is the only way the person who started the console
 // learns its token, so the address has to carry it where the page looks, in
 // the fragment, which a browser keeps out of every request.
@@ -47,7 +60,12 @@ func TestTheAddressTheConsolePrintsCarriesTheTokenInItsFragment(t *testing.T) {
 // -- tried against the binary rather than against a handler built in a test.
 func TestTheConsoleTheCommandStartsAnswersOnlyToWhoWasHandedItsAddress(t *testing.T) {
 	s := build(t)
-	s.daemon(t) // starts the daemon, which is what creates the journal the console reads
+	s.daemon(t)
+	// The daemon binds its socket before it opens the journal, so "running" does
+	// not yet mean there is one for the console to read. Without this the test
+	// passed wherever the daemon was quick and failed where it was not (a CI
+	// runner, Windows above all) with the console saying it had no journal yet.
+	waitForTheJournal(t, s)
 
 	cmd := exec.Command(s.holdcall, "console", "--addr", "127.0.0.1:0")
 	cmd.Env = s.env
@@ -55,7 +73,11 @@ func TestTheConsoleTheCommandStartsAnswersOnlyToWhoWasHandedItsAddress(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd.Stderr = io.Discard
+	// Kept, not discarded: a console that could not start says why on stderr and
+	// prints no address, and "the first line is empty" is no help to whoever reads
+	// a CI log.
+	var stderr syncBuffer
+	cmd.Stderr = &stderr
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +99,7 @@ func TestTheConsoleTheCommandStartsAnswersOnlyToWhoWasHandedItsAddress(t *testin
 
 	m := regexp.MustCompile(`^holdcall console on (http://127\.0\.0\.1:\d+)/#token=([0-9a-f]+)\s*$`).FindStringSubmatch(first)
 	if m == nil {
-		t.Fatalf("the first line is not the address with a token in its fragment: %q", first)
+		t.Fatalf("the first line is not the address with a token in its fragment: %q\nstderr: %s", first, stderr.String())
 	}
 	base, token := m[1], m[2]
 	if raw, err := hex.DecodeString(token); err != nil || len(raw) < 16 {
