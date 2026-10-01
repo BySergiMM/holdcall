@@ -2,6 +2,7 @@ package console
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -679,5 +680,32 @@ func TestPendingShowsWhatTheDaemonHolds(t *testing.T) {
 	}
 	if !out.Available || len(out.Pending) != 1 || string(out.Pending[0].Arguments) != `{"to":"ceo@example.com"}` {
 		t.Fatalf("the held call and its real arguments should be shown: %s", body)
+	}
+}
+
+// The page tells an operator what happens to a held call nobody decides. It
+// said the client is told a human said no, which was the daemon's own wording
+// for a timeout until a timeout got an answer of its own: the client is told
+// that nobody decided (mcp.DeniedApprovalTimedOut), and a page that says
+// otherwise is describing a refusal that no longer exists.
+func TestThePageSaysTheClientIsToldNobodyDecidedWhenAHeldCallTimesOut(t *testing.T) {
+	srv, _ := serve(t, nil)
+
+	res, err := http.Get(srv.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	raw, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := string(raw)
+
+	if strings.Contains(page, "a human said no") {
+		t.Error("the page still says the client is told a human said no when nobody decides a held call")
+	}
+	if !strings.Contains(page, "the client is told that nobody decided") {
+		t.Error("the page does not say what the client is told when nobody decides a held call")
 	}
 }

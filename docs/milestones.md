@@ -554,7 +554,8 @@ What landed:
   journal) and a hold id. The relay sends one `call.arguments` event
   carrying the raw bytes of that call, and waits for the final answer on the
   same connection, up to `[daemon] approval_timeout` (default `2m`, read by
-  both the daemon and the relay from one `config.Config`) -- the same wait
+  both the daemon and the relay from one `config.Config`) plus a five-second
+  grace for the daemon's own timeout answer -- the same wait
   `decisionTimeout` already does for an ordinary verdict, extended only for
   this case. Nothing about the call is journaled while it is held: no entry
   exists for a call in this state, by construction, which is what keeps the
@@ -584,9 +585,13 @@ What landed:
   (`TestAConnectionThatDropsWhilePendingRejectsWhatItLeftPending`) -- so the
   journal never ends up holding a call that was neither approved nor
   rejected. The client is told which kind of refusal it got:
-  `mcp.DeniedByHuman` for an explicit reject or the daemon's own timeout,
-  `mcp.DeniedApprovalTimedOut` for the relay's own local backstop, when even
-  that answer never arrived.
+  `mcp.DeniedByHuman` for an explicit reject, `mcp.DeniedApprovalTimedOut`
+  for the daemon's own timeout (answered `timed_out` on the wire, while the
+  journal keeps `rejected`) and for the relay's own local backstop, when even
+  that answer never arrived within the grace
+  (`TestARealDaemonsApprovalTimeoutIsAnsweredAsATimeoutAndTheSessionGoesOn`,
+  `TestAnApprovalTimeoutAnswersTheClientWithItsOwnRefusalText`). A timeout
+  does not end the session: the next call is decided as usual.
 - **The human's reason for a rejection stays out of the chain.**
   `holdcall reject <id> --reason <text>` logs the reason on the daemon's own log
   and returns it to the CLI that asked; it is never written to the journal
@@ -607,7 +612,9 @@ What landed:
   `holdcall approve` from a separate process lists it with the real arguments,
   approving it is what lets the connector's own answer reach the client, and
   a second call under the same rule is rejected -- the client sees the
-  refusal, the connector never sees the call.
+  refusal, the connector never sees the call. A call nobody decides is
+  refused as a timeout, and the next call in the same session reaches the
+  connector (`TestRealApprovalTimeoutEndsTheHoldAndTheSessionGoesOn`).
 
 What it does not do, stated rather than implied:
 

@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -201,8 +202,17 @@ func TestRejectingACallWritesRejectedBeforeTellingTheRelay(t *testing.T) {
 
 // The journal never holds a call that was neither approved nor rejected:
 // nobody deciding within approval_timeout rejects it just as an explicit
-// holdcall reject would.
+// holdcall reject would, and is recorded as exactly that. What the relay is
+// told is not the same: it hears DecisionTimedOut, because a relay told
+// "rejected" answers the client that a human looked at the call and said no,
+// and nobody did (docs/decisions/0005-human-approval.md, addendum of
+// 2026-09-30). This test used to assert that the wire said rejected.
 func TestAnApprovalTimeoutRejectsAndJournalsTheCall(t *testing.T) {
+	var logged lockedBuffer
+	old := log.Writer()
+	log.SetOutput(&logged)
+	t.Cleanup(func() { log.SetOutput(old) })
+
 	cfg, dbPath := startWithApprovalTimeout(t, 150*time.Millisecond)
 	askRule(t, cfg, "send_email", "", "")
 
@@ -228,10 +238,13 @@ func TestAnApprovalTimeoutRejectsAndJournalsTheCall(t *testing.T) {
 	if err := json.Unmarshal(raw, &final); err != nil {
 		t.Fatal(err)
 	}
-	if final.Decision != journal.DecisionRejected {
-		t.Errorf("timeout decision = %q, want rejected", final.Decision)
+	if final.Decision != DecisionTimedOut {
+		t.Errorf("timeout decision on the wire = %q, want %q: a relay told %q would say a human rejected a call nobody looked at",
+			final.Decision, DecisionTimedOut, journal.DecisionRejected)
 	}
 
+	// The record is unchanged by any of this: one rejection, the same value an
+	// explicit holdcall reject writes, in a chain that still verifies.
 	j := openJournal(t, dbPath)
 	waitFor(t, j, 3)
 	calls, err := j.RecentCalls(10)
@@ -241,6 +254,57 @@ func TestAnApprovalTimeoutRejectsAndJournalsTheCall(t *testing.T) {
 	if len(calls) != 1 || calls[0].Decision != journal.DecisionRejected {
 		t.Errorf("journaled calls = %+v, want one rejected", calls)
 	}
+	if rep, err := j.Verify(""); err != nil || !rep.OK {
+		t.Errorf("the journal after a timeout does not verify: %v %+v", err, rep)
+	}
+
+	// The journal cannot tell this rejection from a human's, so the daemon's
+	// own log is where an operator can see that nobody looked. The line is
+	// written by the timer's goroutine once it has answered the relay, so a
+	// test that has just read the answer can get here first: it waits for it.
+	const logLine = "nobody decided within the approval timeout"
+	for deadline := time.Now().Add(3 * time.Second); !strings.Contains(logged.String(), logLine) && time.Now().Before(deadline); {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !strings.Contains(logged.String(), logLine) {
+		t.Errorf("the daemon's log does not say the call timed out:\n%s", logged.String())
+	}
+
+	// A human who arrives after the timer is told why there is nothing to
+	// decide, in words that name the wait running out rather than an unknown id.
+	admin, err := net.Dial("unix", cfg.Daemon.Socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	resp, err := SendRequest(admin, Request{
+		ID: "late", Kind: KindApprovalDecide, ApprovalID: d.Hold, ApprovalDecision: journal.DecisionApproved,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(resp.Error, "wait runs out") {
+		t.Errorf("a late approve of a timed-out call was answered %q, want it to say the wait ran out", resp.Error)
+	}
+}
+
+// lockedBuffer is a log sink the daemon's goroutines may write to while a
+// test reads what has been written so far.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
 
 // A session that ends while one of its calls is still pending leaves nobody

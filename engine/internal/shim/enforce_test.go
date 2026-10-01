@@ -44,6 +44,10 @@ type fakeDaemon struct {
 	silent bool
 	// hangUp closes the connection instead of replying.
 	hangUp bool
+	// hangUpOnArguments closes the connection when call.arguments arrives
+	// for a held call, instead of waiting for a human: a daemon that dies
+	// mid-hold.
+	hangUpOnArguments bool
 }
 
 func newDaemon(t *testing.T) *fakeDaemon {
@@ -86,11 +90,15 @@ func (d *fakeDaemon) serve(conn net.Conn) {
 		d.mu.Lock()
 		d.events = append(d.events, ev)
 		answer, afterArguments, silent, hangUp := d.answer, d.afterArguments, d.silent, d.hangUp
+		hangUpOnArguments := d.hangUpOnArguments
 		d.mu.Unlock()
 
 		var reply any
 		switch {
 		case ev.Kind == daemon.KindCallArguments:
+			if hangUpOnArguments {
+				return
+			}
 			if afterArguments == nil {
 				continue // the shim waits, exactly like silent for call.request
 			}
@@ -199,7 +207,7 @@ type rig struct {
 // all, which is the fail-closed case.
 func newRig(t *testing.T, d *fakeDaemon) *rig {
 	t.Helper()
-	return newRigWithApprovalTimeout(t, d, 0)
+	return newRigWithApprovalWait(t, d, 0, 0)
 }
 
 // newRigWithApprovalTimeout is newRig for the tests that exercise a call an
@@ -209,8 +217,25 @@ func newRig(t *testing.T, d *fakeDaemon) *rig {
 // leaves it at to mean anything.
 func newRigWithApprovalTimeout(t *testing.T, d *fakeDaemon, approvalTimeout time.Duration) *rig {
 	t.Helper()
+	return newRigWithApprovalWait(t, d, approvalTimeout, testApprovalGrace)
+}
 
-	r := &reporter{ch: make(chan item, 256), done: make(chan struct{}), approvalTimeout: approvalTimeout}
+// testApprovalGrace is the grace a test rig gives the daemon's answer to a
+// held call, in place of the five real seconds: long enough that a test can
+// tell "answered inside the grace" from "answered at approval_timeout" on a
+// loaded machine, short enough that a test waiting it out is not slow.
+const testApprovalGrace = 300 * time.Millisecond
+
+// newRigWithApprovalWait is newRigWithApprovalTimeout with the grace chosen
+// too, for the tests whose subject is the window between approval_timeout and
+// the moment the relay gives up.
+func newRigWithApprovalWait(t *testing.T, d *fakeDaemon, approvalTimeout, approvalGrace time.Duration) *rig {
+	t.Helper()
+
+	r := &reporter{
+		ch: make(chan item, 256), done: make(chan struct{}),
+		approvalTimeout: approvalTimeout, approvalGrace: approvalGrace,
+	}
 	if d != nil {
 		conn, err := net.Dial("unix", d.path)
 		if err != nil {
@@ -229,6 +254,22 @@ func newRigWithApprovalTimeout(t *testing.T, d *fakeDaemon, approvalTimeout time
 	}
 	t.Cleanup(func() { r.close() })
 	return &rig{shim: s, daemon: d, connector: &syncBuf{}, client: client}
+}
+
+// lostCount and causeList read what the reporter has counted as unrecorded and
+// why, under the lock the loop goroutine writes them under. The approval tests
+// use them to tell a session that is still whole from one the relay gave up
+// on: hanging up on the daemon is the only thing there that is counted.
+func (r *reporter) lostCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.lost
+}
+
+func (r *reporter) causeList() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.causes...)
 }
 
 // relay pushes frames from the client and returns once they have all been

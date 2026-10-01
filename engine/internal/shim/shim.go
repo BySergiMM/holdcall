@@ -12,10 +12,13 @@
 //
 // One answer takes longer than the rest: a rule that says "ask" holds the
 // call for a human, and the relay's wait extends from decisionTimeout to
-// approval_timeout for that one call, on the same connection -- see
-// reporter.awaitApproval and docs/decisions/0005-human-approval.md. Every
-// other rule in this paragraph still applies to it: a way of not getting a
-// final answer within that longer bound is still a denial.
+// approval_timeout plus approvalGrace for that one call, on the same
+// connection -- see reporter.awaitApproval and
+// docs/decisions/0005-human-approval.md. What ends an undecided hold is the
+// daemon's own timer, at approval_timeout, and what arrives then is its
+// answer; the grace is only the room it needs to give one. Every other rule
+// in this paragraph still applies to it: a way of not getting a final answer
+// within that longer bound is still a denial.
 //
 // Everything else still flows without waiting. Other methods are relayed
 // untouched and never consult the daemon, and sessions, outcomes and anomalies
@@ -68,6 +71,26 @@ import (
 // and denied, putting an allow in the journal for a call that never happened.
 // That call reads as pending, never as executed. docs/milestones.md sets it out.
 const decisionTimeout = 2 * time.Second
+
+// approvalGrace is how long past approval_timeout the relay keeps listening
+// for the answer to a call an ask rule holds, before it concludes that the
+// daemon is gone.
+//
+// The daemon's own timer is what ends an undecided hold. It is armed the
+// moment the call is held, a round trip before the relay has read "pending"
+// and started its own clock, so it fires first -- but by that round trip and
+// no more, and it journals the rejection before it answers anyone, which is
+// the order every decision keeps. A relay whose deadline was exactly
+// approval_timeout was therefore hanging up on a daemon that was a journal
+// write away from answering. Hanging up is terminal (see drop): reproduced
+// with v0.1.2, the held call was refused and then every later call in the
+// session was denied too.
+//
+// Five seconds is the journal's own busy timeout, the longest that write can
+// take when another connection is holding the database. The wait past it is
+// spent only when the daemon says nothing at all, and a daemon that has
+// died closes the connection, which ends the wait at once rather than here.
+const approvalGrace = 5 * time.Second
 
 // Options describes one relayed server.
 type Options struct {
@@ -145,10 +168,18 @@ func Run(opts Options) error {
 	// The downstream command is not checked here. A connector can supply it,
 	// and which one wins is only known once the daemon has answered.
 
-	// A configuration that cannot work is worth one line on stderr, where the
-	// client will show it, rather than a relay that quietly records nothing.
+	// A configuration that cannot work is worth saying so on stderr, where the
+	// client will show it, rather than a relay that quietly denies everything.
+	//
+	// What happens next is not "relay anyway": the daemon runs the same
+	// Validate before it listens, so the one this relay tries to start exits
+	// on the same error and none is ever reachable. The relay itself does
+	// start, and everything that is not a tools/call passes through, but
+	// every tools/call is denied for want of a daemon to decide it.
 	if err := opts.Config.Validate(); err != nil {
-		fmt.Fprintf(os.Stderr, "holdcall: %v\nnim: relaying anyway; calls will not be recorded\n", err)
+		fmt.Fprintf(os.Stderr,
+			"holdcall: %v\nholdcall: the daemon will not start with this configuration, so every tool call in this session will be denied; other messages are still relayed\n",
+			err)
 	}
 	if err := opts.Config.EnsureDirs(); err != nil {
 		fmt.Fprintf(os.Stderr, "holdcall: %v\n", err)
@@ -521,7 +552,7 @@ func refusalName(a mcp.Anomaly) string {
 func (s *Shim) refuse(what string) {
 	s.refused.Do(func() {
 		fmt.Fprintf(os.Stderr,
-			"holdcall: not relaying %s\nnim: Holdcall cannot inspect it, and forwarding it would put a call in front of a server unchecked\n",
+			"holdcall: not relaying %s\nholdcall: Holdcall cannot inspect it, and forwarding it would put a call in front of a server unchecked\n",
 			what)
 	})
 }
@@ -610,9 +641,12 @@ const (
 	// docs/decisions/0005-human-approval.md.
 	verdictApproved
 	verdictRejectedByHuman
-	// verdictApprovalTimedOut is its own outcome, not verdictNoDecision:
-	// nobody deciding in time is not the daemon failing to answer, and the
+	// verdictApprovalTimedOut is its own outcome, neither verdictNoDecision
+	// nor verdictRejectedByHuman: nobody deciding in time is not the daemon
+	// failing to answer, and it is not a person saying no either, and the
 	// client is told so in its own words -- see mcp.DeniedApprovalTimedOut.
+	// It is what the daemon's own daemon.DecisionTimedOut answer maps to,
+	// and also what the relay concludes when even that answer never comes.
 	verdictApprovalTimedOut
 )
 
@@ -643,6 +677,13 @@ type reporter struct {
 	// copy from, rather than hardcoded like decisionTimeout: unlike the 2 s
 	// bound, an operator is expected to tune this one.
 	approvalTimeout time.Duration
+	// approvalGrace is added to approvalTimeout to get how long the relay
+	// actually waits, so that the daemon's own timeout answer, which is what
+	// ends an undecided hold, arrives before the relay gives up: see
+	// approvalGrace the constant, which dialDaemon sets this from. A field
+	// rather than the constant itself so that a test can shorten it; zero,
+	// which only a reporter built without dialDaemon has, means no grace.
+	approvalGrace time.Duration
 
 	ch   chan item
 	done chan struct{}
@@ -668,6 +709,7 @@ func dialDaemon(cfg config.Config) *reporter {
 	r := &reporter{
 		ch: make(chan item, 256), done: make(chan struct{}),
 		approvalTimeout: cfg.ApprovalTimeoutOrDefault(),
+		approvalGrace:   approvalGrace,
 	}
 	conn, err := net.DialTimeout("unix", cfg.Daemon.Socket, 300*time.Millisecond)
 	if err != nil {
@@ -687,7 +729,7 @@ func dialDaemon(cfg config.Config) *reporter {
 	if conn != nil {
 		if genuine, pid := daemonIsGenuine(conn); !genuine {
 			fmt.Fprintf(os.Stderr,
-				"holdcall: %s\nnim: refusing to take decisions from it; every tool call in this session will be denied\n",
+				"holdcall: %s\nholdcall: refusing to take decisions from it; every tool call in this session will be denied\n",
 				peerRefusalReason(cfg, pid, peer.DiagnosePID(pid)))
 			conn.Close()
 			conn = nil
@@ -702,7 +744,7 @@ func dialDaemon(cfg config.Config) *reporter {
 		// be refused -- and a user who is not told that will read the refusals
 		// as the tools being broken.
 		fmt.Fprintf(os.Stderr,
-			"holdcall: no daemon is listening on %s\nnim: a call Holdcall cannot record is a call Holdcall will not forward, so every tool call in this session will be denied\n",
+			"holdcall: no daemon is listening on %s\nholdcall: a call Holdcall cannot record is a call Holdcall will not forward, so every tool call in this session will be denied\n",
 			cfg.Daemon.Socket)
 	}
 	go r.loop()
@@ -923,25 +965,44 @@ func verdictFor(decision string) (verdict, bool) {
 		return verdictApproved, true
 	case journal.DecisionRejected:
 		return verdictRejectedByHuman, true
+	case daemon.DecisionTimedOut:
+		// The daemon journals this call as rejected, but what the client is
+		// told is not that a human rejected it: nobody looked in time.
+		return verdictApprovalTimedOut, true
 	case daemon.DecisionUndecided:
 		return verdictNoDecision, true
 	}
 	return verdictNoDecision, false
 }
 
+// approvalWait is how long the relay listens for the final answer to a call
+// an ask rule holds: approval_timeout, which is when the daemon's own timer
+// ends an undecided hold, plus approvalGrace for that timer's answer to get
+// here.
+func (r *reporter) approvalWait() time.Duration {
+	return r.approvalTimeout + r.approvalGrace
+}
+
 // awaitApproval sends the call's real arguments once the daemon has said it
-// is holding the call for a human, then waits up to approvalTimeout for the
+// is holding the call for a human, then waits up to approvalWait for the
 // final answer on the same connection -- the same exchange decisionTimeout
 // already bounds, only longer, because deciding this one needs a human
 // rather than a rule lookup. See docs/decisions/0005-human-approval.md.
 //
+// The answer that ends an undecided hold is the daemon's, not this
+// function's: its own timer is armed the moment it starts holding the call,
+// fires at approval_timeout, journals the rejection and answers
+// daemon.DecisionTimedOut, which verdictFor maps to its own refusal text.
+// Reaching the end of approvalWait without any answer -- not even that one --
+// means the daemon is unreachable rather than merely undecided, and so does
+// the connection ending before then. Those are the cases this function gives
+// up in; only the first is reported to the client as a timeout, because only
+// there did the wait itself run out.
+//
 // A failure here denies the call, exactly as every other path through
-// exchange does, and drops the connection: the daemon has its own timer at
-// the same bound, armed the moment it started holding the call, so reaching
-// this without an answer means even that did not arrive, which is the
-// daemon being unreachable, not merely undecided.
+// exchange does, and drops the connection.
 func (r *reporter) awaitApproval(it item) verdict {
-	deadline := time.Now().Add(r.approvalTimeout)
+	deadline := time.Now().Add(r.approvalWait())
 
 	r.conn.SetWriteDeadline(deadline)
 	if err := r.enc.Encode(daemon.Event{
@@ -955,8 +1016,16 @@ func (r *reporter) awaitApproval(it item) verdict {
 	r.conn.SetReadDeadline(deadline)
 	raw, err := r.dec.ReadRaw()
 	if err != nil {
-		r.drop("nobody decided a pending call within " + r.approvalTimeout.String())
-		return verdictApprovalTimedOut
+		if errors.Is(err, os.ErrDeadlineExceeded) {
+			r.drop(fmt.Sprintf("the daemon did not answer a call held for a human within %s "+
+				"(approval_timeout plus %s), not even with its own timeout", r.approvalWait(), r.approvalGrace))
+			return verdictApprovalTimedOut
+		}
+		// The connection ended rather than the clock: the daemon went away
+		// mid-hold. Nobody timed anything out, so the client is not told so --
+		// it is told what every other lost daemon is told.
+		r.drop("the daemon stopped answering while a call was held for a human")
+		return verdictNoDecision
 	}
 
 	d, ok := r.readDecision(raw, it.ev)
@@ -992,12 +1061,12 @@ func (r *reporter) drop(reason string) {
 // The clock starts here rather than at the write, so time spent queued behind
 // other reports counts against the same budget. A caller cannot wait longer
 // than decisionTimeout for an ordinary verdict, or decisionTimeout plus
-// approvalTimeout for a call an ask rule ends up holding -- the outer bound
+// approvalWait for a call an ask rule ends up holding -- the outer bound
 // below covers both, because ask does not yet know which this call will be.
 func (r *reporter) ask(ev daemon.Event, arguments json.RawMessage) verdict {
 	reply := make(chan verdict, 1)
 	deadline := time.Now().Add(decisionTimeout)
-	outer := deadline.Add(r.approvalTimeout)
+	outer := deadline.Add(r.approvalWait())
 
 	if !r.offer(item{ev: ev, arguments: arguments, reply: reply, deadline: deadline}) {
 		// A full queue is not a reason to let a call through, and waiting for
@@ -1012,7 +1081,7 @@ func (r *reporter) ask(ev daemon.Event, arguments json.RawMessage) verdict {
 		return v
 	case <-time.After(time.Until(outer)):
 		// The loop sets its own deadlines -- decisionTimeout for the first
-		// reply, then its own approvalTimeout-based one if that reply was
+		// reply, then its own approvalWait-based one if that reply was
 		// pending -- so this should be unreachable. It is here because
 		// "should be" is not a bound.
 		return verdictNoDecision
@@ -1058,7 +1127,7 @@ func (r *reporter) miss(reason string) {
 
 	if first {
 		fmt.Fprintf(os.Stderr,
-			"holdcall: not recording every call -- %s\nnim: the relay is unaffected; the journal for this session will be incomplete\n",
+			"holdcall: not recording every call -- %s\nholdcall: the relay is unaffected; the journal for this session will be incomplete\n",
 			reason)
 	}
 }
