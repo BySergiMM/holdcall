@@ -53,7 +53,7 @@ import (
 //
 // Measured rather than picked, and re-derivable rather than remembered. The
 // numbers and the commands that produce them are in docs/benchmarks.md; in
-// short, the round trip including the durable journal write is p99 0.27 ms for
+// short, the round trip including the journal commit is p99 0.27 ms for
 // one relay and 1.6 ms with sixteen contending (Apple M5, darwin/arm64). Two
 // seconds is three orders of magnitude past that, so it cannot fire because
 // the daemon is busy -- only because it is wedged or gone.

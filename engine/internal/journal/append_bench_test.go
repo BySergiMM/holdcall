@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// The journal write is inside the decision round trip -- the entry is durable
+// The journal write is inside the decision round trip -- the entry is committed
 // before the answer is sent -- so it is the floor under every number in
 // internal/daemon's benchmarks. Measuring it alone says how much of that cost
 // is SQLite and how much is everything else.
@@ -38,7 +38,9 @@ func callRequest(seq int64) Entry {
 }
 
 // BenchmarkAppend is one chained, committed entry: read the head, encode,
-// hash, insert, commit. synchronous is FULL, so this includes the flush.
+// hash, insert, commit. Holdcall does not set synchronous or fullfsync, so what
+// the commit's flush costs is the SQLite build's default; see docs/benchmarks.md
+// on what a commit measured this way does and does not survive.
 func BenchmarkAppend(b *testing.B) {
 	j := benchJournal(b)
 	b.ResetTimer()

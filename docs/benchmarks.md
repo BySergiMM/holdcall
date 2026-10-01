@@ -27,7 +27,7 @@ justifying a timeout; the tail is the thing that has to stay clear of it.
 | Machine | Apple M5, 10 cores, darwin/arm64 |
 | Go | 1.26.5 |
 | Build | `CGO_ENABLED=0`, `modernc.org/sqlite` (pure Go) |
-| Journal | `synchronous=FULL`, WAL, `_txlock=immediate` |
+| Journal | WAL, `_txlock=immediate`. `synchronous` and `fullfsync` are not set by Holdcall: the SQLite build's defaults applied (see *What "committed" means here*) |
 | Date | 2026-09-14 |
 | State | `m1-bootstrap`, after M4 (a decision reads the rules table) |
 
@@ -39,7 +39,7 @@ server numbers and are not claimed to be.
 The whole round trip a relay blocks on: write `call.request` to the socket,
 look the call up in the rules table, append the chained entry to SQLite **and
 commit it**, write the decision back, read it. The journal write is included
-deliberately — the entry is durable before the answer is sent, and excluding it
+deliberately — the entry is committed before the answer is sent, and excluding it
 would measure something Holdcall never does.
 
 | Benchmark | p50 | p95 | p99 | max |
@@ -47,6 +47,32 @@ would measure something Holdcall never does.
 | `DecisionRoundTrip` (one relay) | 0.091 ms | 0.182 ms | 0.263 ms | 1.00 ms |
 | `DecisionRoundTripContended` (16 relays) | 1.22 ms | 1.76 ms | 1.96 ms | 8.45 ms |
 | `DecisionDenied` (one relay, refused) | 0.092 ms | 0.133 ms | 0.169 ms | 0.42 ms |
+
+**What "committed" means here.** The order is what is guaranteed: the commit
+returns before the decision is sent, so a decision a relay acts on is in the
+journal even if Holdcall is killed straight afterwards. What these numbers do not
+show is that the commit survives a power cut, for two reasons that concern this
+measurement and not the intent:
+
+- Nothing in `engine/` sets `synchronous` or `fullfsync`, so the SQLite build's
+  own defaults apply. They are documented as `FULL` and off, and this file used
+  to say `synchronous=FULL` as if Holdcall chose it; nothing here reads the
+  value back. They are not the same in every build: a journal connection opened
+  in the SQLite that runs this test suite in a Linux sandbox
+  (`ncruces/go-sqlite3`, not the `modernc.org/sqlite` the release is built with)
+  reports `synchronous=1` (NORMAL) with `fullfsync=0`. What the shipped driver
+  reports was not measured.
+- On macOS, where every figure here was taken, SQLite flushes with a plain
+  `fsync` unless `PRAGMA fullfsync` is on. Apple's `fsync(2)` page says `fsync`
+  does not make the drive write through its own cache and that `F_FULLFSYNC`
+  does; SQLite uses `F_FULLFSYNC` only with that pragma, which is off by default.
+  So "committed" here means handed to the operating system and the drive.
+
+Read the commit cost as the cost of that, not of making an entry survive a power
+cut: the `partial-writes` row of the status page records that nothing tests the
+latter. Setting `synchronous(FULL)`, and on macOS `fullfsync(1)`, in the journal's
+DSN would make the setting Holdcall's own instead of the build's. That has not
+been done, and it would change these numbers.
 
 **What this justifies.** `decisionTimeout` is 2 s — three orders of magnitude
 past the worst p99 above. It cannot fire because the daemon is busy, only
@@ -150,6 +176,8 @@ watch if inspection ever grows beyond a digest.
   *behaviour*; it records no timings. Adding them there would need a real
   client in the loop and is the honest way to answer "does a user notice".
 - **Anything on Linux or Windows.** Every figure above is darwin/arm64.
+- **Whether a commit survives a power cut**, or what the shipped SQLite driver's
+  `synchronous` is. See *What "committed" means here*.
 - **A cold or locked keychain**, for the reason given above.
 - **Sustained load or a large existing journal.** `Append` is measured against
   a fresh database; SQLite's behaviour as a file grows and WAL checkpoints is

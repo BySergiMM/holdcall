@@ -361,7 +361,9 @@ tools/ci-linux.sh              # the same, in an Ubuntu VM (needs limactl)
 ## Performance
 
 `docs/benchmarks.md`, with the commands that reproduce every figure. The
-decision a call waits for costs p99 0.27 ms including the durable write.
+decision a call waits for costs p99 0.27 ms for one relay, including the
+journal commit, on one Apple M5. What a commit there does and does not survive
+(not shown to survive a power cut) is under *Decision path* in that file.
 
 ## Where the project actually stands
 
