@@ -1171,6 +1171,43 @@ func DialDaemon(cfg config.Config) (net.Conn, error) {
 	return conn, nil
 }
 
+// DialDaemonForSecret is DialDaemon for a request that carries a secret.
+//
+// DialDaemon refuses a daemon the platform could check and found not to be
+// Holdcall, and lets one it could not check at all through, because refusing
+// that would refuse every command on a platform that cannot check anything.
+// That is the wrong trade for a request whose body is a credential in the
+// clear: there, "could not tell" is not "fine", and the secret is not sent to
+// a daemon nobody confirmed. On Windows that is every daemon, so
+// `holdcall connector set` does not work there until the platform can answer.
+func DialDaemonForSecret(cfg config.Config) (net.Conn, error) {
+	conn, err := dialOrStart(cfg)
+	if err != nil {
+		return nil, err
+	}
+	genuine, verdict := daemonIsGenuine(conn)
+	if !genuine {
+		err := peerRefusalError(cfg, verdict, "refusing to talk to it")
+		conn.Close()
+		return nil, err
+	}
+	if err := secretRefusal(cfg, verdict); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	return conn, nil
+}
+
+// secretRefusal is nil only for a daemon the platform confirmed. See
+// DialDaemonForSecret.
+func secretRefusal(cfg config.Config, v peer.Verdict) error {
+	if v.Verified() {
+		return nil
+	}
+	return fmt.Errorf("holdcall cannot verify that what is listening on %s is Holdcall (%s), so it does not send it a secret",
+		cfg.Daemon.Socket, v.Reason())
+}
+
 // ErrDaemonNotReachable means nothing answered the daemon's socket within the
 // timeout -- as opposed to something answering that is not Holdcall, which
 // DialRunningDaemon reports as a different error entirely. The distinction
@@ -1261,6 +1298,8 @@ func buildDownstreamCmd(command []string, env []string) *exec.Cmd {
 //   - Found=true with no error: the env to inject and the one command it may
 //     be injected into. A response carrying a credential but no command is
 //     itself refused; that pairing is the whole authorization.
+//   - Found=true from a daemon the platform could not verify (Windows): refused
+//     whatever it says, see injectionFromAnswer.
 func fetchConnector(cfg config.Config, connector string) (injection, error) {
 	conn, err := dialOrStart(cfg)
 	if err != nil {
@@ -1271,7 +1310,8 @@ func fetchConnector(cfg config.Config, connector string) (injection, error) {
 	// Whoever is on the other end of this decides what command receives a
 	// credential, so it has to be Holdcall. Refusing to spawn is the only safe
 	// answer here: an impostor's answer is worse than no answer.
-	if genuine, verdict := daemonIsGenuine(conn); !genuine {
+	genuine, verdict := daemonIsGenuine(conn)
+	if !genuine {
 		return injection{}, peerRefusalError(cfg, verdict, "refusing to ask it for a credential or a command")
 	}
 
@@ -1289,8 +1329,30 @@ func fetchConnector(cfg config.Config, connector string) (injection, error) {
 		return injection{}, nil
 	}
 
+	return injectionFromAnswer(verdict, cfg.Daemon.Socket, connector, resp)
+}
+
+// injectionFromAnswer is what a daemon's answer to credential.get is worth,
+// given what the kernel said about the daemon that gave it. It is split from
+// fetchConnector, which does the talking, so that the one case a linux or
+// macOS machine never meets -- a daemon nobody could verify -- can be tested
+// there as well as on the platform where every daemon is one.
+//
+// An answer that carries a connector (Found) is also an instruction to run a
+// command with a secret in its environment, so it is taken only from a daemon
+// the platform confirmed is Holdcall: on Windows, where nothing can be
+// confirmed, no connector is ever taken, and what answered the socket could be
+// anything its user can run. An answer that carries no connector asks the
+// relay to run nothing it was not already told to, and is taken from anyone,
+// because refusing it would refuse every relay on a platform that cannot verify.
+func injectionFromAnswer(v peer.Verdict, socket, connector string, resp daemon.Response) (injection, error) {
 	if !resp.Found {
 		return injection{}, nil
+	}
+	if !v.Verified() {
+		return injection{}, fmt.Errorf(
+			"connector %q is configured, but Holdcall cannot verify that what answered on %s is Holdcall (%s), "+
+				"so it takes neither a credential nor a command from it", connector, socket, v.Reason())
 	}
 	if resp.Error != "" {
 		return injection{}, fmt.Errorf(

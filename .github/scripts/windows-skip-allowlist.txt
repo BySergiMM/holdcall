@@ -10,11 +10,14 @@
 #   AF_UNIX (afunix.sys exposes no SO_PEERCRED/LOCAL_PEERPID equivalent),
 #   and said so rather than ship an unverified one -- see
 #   engine/internal/peer/peer_windows.go and image_windows.go. Production
-#   code treats "unsupported" as "not a denial" throughout (daemon.go's
-#   accept check, shim.go's daemonIsGenuine), which is a real, documented,
-#   known limitation (docs/security.md, docs/milestones.md's M3 audit), not
-#   a testing gap -- these tests exist to prove an attacker is refused, and
-#   on this platform today it is not.
+#   code treats "unsupported" as "not a denial" for the accept check
+#   (daemon.go) and for decisions (shim.go's daemonIsGenuine), which is a
+#   real, documented, known limitation (docs/security.md), not a testing gap
+#   -- these tests exist to prove an attacker is refused, and on this
+#   platform today it is not. It is a denial where a secret is concerned: a
+#   credential is never released to a peer that cannot be verified, nor a
+#   connector's command taken from a daemon that cannot be, and the windows
+#   tests that show that are not in this list because they run and pass.
 #
 #   Agent enrolment (peer.ImageOfFile) is an admitted stub on Windows for
 #   the same reason: "nothing in this project has ever run on Windows and
@@ -34,7 +37,7 @@ TestAnImpostorCannotDecideCalls	same daemonIsGenuine gap: on windows the shim wo
 TestDialDaemonRefusesAnImpostor	same daemonIsGenuine gap: DialDaemon would hand back a connection to the impostor on windows instead of refusing it
 TestAPathSwapDoesNotDefeatPeerIdentity	peer identity is unsupported on windows by design; IsSelf reports supported=false, so the property this test demonstrates cannot be shown there
 TestAReplacedFileIsReportedStaleRatherThanFailing	agent enrolment resolves identity via peer.ImageOfFile, which always errors on windows (image_windows.go); enrolling the file this test needs already fails before it can go stale
-TestTheDaemonsCommandIsSpawnedNotTheCallersEndToEnd	fixture hardcodes /bin/echo and /bin/sh -c, neither of which exists at that path on windows; not a peer-identity gap, a fixture one
+TestTheDaemonsCommandIsSpawnedNotTheCallersEndToEnd	fixture hardcodes /bin/echo and /bin/sh -c, neither of which exists at that path on windows; and on windows the relay takes no connector from a daemon it cannot verify (shim.injectionFromAnswer), so there is no injection to check -- TestOnWindowsARelayDoesNotSpawnWhatAnUnverifiedDaemonNamed checks the refusal instead
 TestWithNoConnectorTheCallersCommandRuns	fixture hardcodes /bin/echo, which does not exist at that path on windows; not a peer-identity gap, a fixture one
 TestStatusDoesNotCallAnImpostorTheDaemon	peer identity is unsupported on windows, so status cannot tell an impostor apart there; the same gap the Known gaps table records
 TestAnInPlaceUpgradeIsDiagnosedAndDaemonRestartFixesIt	peer identity is unsupported on windows, so an older build cannot be told apart from anything; and holdcall daemon restart is not supported there

@@ -234,7 +234,7 @@ func BenchmarkCredentialLookup(b *testing.B) {
 	samples := make([]time.Duration, 0, b.N)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		state := &requestState{}
+		state := verifiedState()
 		start := time.Now()
 		resp := handleCredentialGet(
 			Request{ID: "1", Kind: KindCredentialGet, Target: "github"}, state, j, store, locks)

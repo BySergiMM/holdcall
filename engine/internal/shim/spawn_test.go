@@ -110,8 +110,10 @@ func runShim(t *testing.T, opts Options) (stdout string, err error) {
 func TestTheDaemonsCommandIsSpawnedNotTheCallersEndToEnd(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("this test spawns a real downstream command hardcoded as /bin/echo or /bin/sh -c, " +
-			"neither of which exists at that path on windows; the credential-injection logic under " +
-			"test is not windows-specific, only this fixture's command strings are")
+			"neither of which exists at that path on windows; and a connector's answer is not taken " +
+			"from a daemon that cannot be verified, which on windows is every daemon, so the " +
+			"injection it checks does not happen there at all -- " +
+			"TestOnWindowsARelayDoesNotSpawnWhatAnUnverifiedDaemonNamed checks the refusal instead")
 	}
 	const secret = "ghp_REAL_SECRET_must_not_leak"
 

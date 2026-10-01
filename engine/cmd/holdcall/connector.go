@@ -98,7 +98,13 @@ func runConnectorSet(args []string) error {
 		return err
 	}
 
-	conn, err := dialConnectorDaemon()
+	// The one request that sends a secret out, so the one that does not accept
+	// a daemon the platform could not verify: see shim.DialDaemonForSecret.
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	conn, err := shim.DialDaemonForSecret(cfg)
 	if err != nil {
 		return err
 	}

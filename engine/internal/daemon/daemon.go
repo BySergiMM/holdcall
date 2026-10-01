@@ -391,7 +391,6 @@ func handle(
 	sessions *sessionRegistry, approvals *pendingRegistry, approvalTimeout time.Duration,
 ) {
 	defer conn.Close()
-	state := &requestState{}
 
 	// Sessions opened on this connection that have not been closed yet, each
 	// with the connector its start named: a rule can be scoped to a
@@ -447,7 +446,8 @@ func handle(
 	// as: the socket's directory and mode are what keep other users off it, and
 	// this refuses the one that got through anyway, rather than leaving the
 	// executable check to be the only thing standing between the two.
-	if v := peer.Check(conn); v.Supported && !v.Same {
+	v := peer.Check(conn)
+	if v.Supported && !v.Same {
 		switch {
 		case v.WrongUser:
 			log.Printf("refusing a connection from a process running as another user (uid %d; this daemon runs as uid %d)",
@@ -475,6 +475,13 @@ func handle(
 		}
 		return
 	}
+
+	// What got through is not the same as what was confirmed. A platform that
+	// cannot ask the kernel who is connecting (Windows) is let through above,
+	// because refusing it would refuse every relay on it, and the connection
+	// carries on as one nobody confirmed: the one thing it is never given is a
+	// secret. See requestState.peerVerified and handleCredentialGet.
+	state := &requestState{peerVerified: v.Verified()}
 
 	// The agent behind this connection, worked out once, at accept. The
 	// peer's pid is fixed for the life of the socket; its parent is read now
