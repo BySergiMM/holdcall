@@ -1,9 +1,9 @@
-# Homebrew formula for Holdcall v0.1.2. It is not published: the tap
+# Homebrew formula for Holdcall v0.1.3. It is not published: the tap
 # BySergiMM/homebrew-tap exists (it holds the OmniMac cask) but has no
 # Formula/holdcall.rb, so `brew install bysergimm/tap/holdcall` does not work, and
 # nothing in this repository says it does. This file only records the release's
 # URLs and checksums; checking it with `brew` has not been done.
-# The sha256 values are the ones of the v0.1.2 release's assets (they match the
+# The sha256 values are the ones of the v0.1.3 release's assets (they match the
 # digests GitHub reports for them). To publish it, this file would be added to
 # that tap as Formula/holdcall.rb. Installing from a bare path
 # (`brew install --formula packaging/homebrew/holdcall.rb`) depends on the
@@ -13,28 +13,28 @@
 class Holdcall < Formula
   desc "Local relay that decides every MCP tool call and holds the dangerous ones for a human"
   homepage "https://holdcall.vercel.app"
-  version "0.1.2"
+  version "0.1.3"
   license "MIT"
 
   on_macos do
     on_arm do
-      url "https://github.com/BySergiMM/holdcall/releases/download/v0.1.2/holdcall_v0.1.2_darwin_arm64.tar.gz"
-      sha256 "24e87d114b1ad11b9a27a4d063cb8f107c64752b826e338505f8ad4eb0ee42a0"
+      url "https://github.com/BySergiMM/holdcall/releases/download/v0.1.3/holdcall_v0.1.3_darwin_arm64.tar.gz"
+      sha256 "1c1e4b1c0b9be6f65baf02a1dec36a22c7537a71ce30da7e262a1c0f134cea02"
     end
     on_intel do
-      url "https://github.com/BySergiMM/holdcall/releases/download/v0.1.2/holdcall_v0.1.2_darwin_amd64.tar.gz"
-      sha256 "077326ac0f045e96d6d6a13cc1399d6b5ae6c11c02f53beee45eb972d1dfb4f1"
+      url "https://github.com/BySergiMM/holdcall/releases/download/v0.1.3/holdcall_v0.1.3_darwin_amd64.tar.gz"
+      sha256 "d37863e98cda4787355fdc3842ffacc58b42620cf044fad09902c8a003c127e8"
     end
   end
 
   on_linux do
     on_arm do
-      url "https://github.com/BySergiMM/holdcall/releases/download/v0.1.2/holdcall_v0.1.2_linux_arm64.tar.gz"
-      sha256 "e4c7486b3b2b4de9a2918f4e6d17695fafa98e73a4b8b0d7c84f0c92cd58a293"
+      url "https://github.com/BySergiMM/holdcall/releases/download/v0.1.3/holdcall_v0.1.3_linux_arm64.tar.gz"
+      sha256 "2a9b77bade2a167a41f6569b8e1da75b80c3126c0493d0991102fa8a14344fa4"
     end
     on_intel do
-      url "https://github.com/BySergiMM/holdcall/releases/download/v0.1.2/holdcall_v0.1.2_linux_amd64.tar.gz"
-      sha256 "d3881ffa6b4ae5b260735432b3e1f54dd69aa1b8b2c8ca9c099558d2a00051c6"
+      url "https://github.com/BySergiMM/holdcall/releases/download/v0.1.3/holdcall_v0.1.3_linux_amd64.tar.gz"
+      sha256 "67f99eb1b06e6e062042627b5a667eb16a55117152fc83c5556b98225681c63d"
     end
   end
 
@@ -50,6 +50,6 @@ class Holdcall < Formula
   end
 
   test do
-    assert_match "holdcall v0.1.2", shell_output("#{bin}/holdcall version")
+    assert_match "holdcall v0.1.3", shell_output("#{bin}/holdcall version")
   end
 end
