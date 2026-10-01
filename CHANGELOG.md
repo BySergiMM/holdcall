@@ -13,7 +13,54 @@ test names behind each claim live.
 
 ## [Unreleased]
 
-Nothing since 0.1.2.
+What 0.1.3 will say when it is cut. Nothing here is released yet.
+
+### Fixed
+
+- **A held call nobody decides no longer ends the session, and is no longer
+  reported as a human's rejection.** With `approval_timeout` running out, the
+  relay and the daemon's own timer raced, and either result was wrong. When
+  the relay's clock won, it hung up on the daemon for good and every later
+  call in that session was denied with "could not reach a decision". When the
+  daemon's answer won, the model was told "A human reviewing this call's real
+  arguments rejected it" about a call nobody had looked at. The relay now
+  waits `approval_timeout` plus a five-second grace, the daemon answers a
+  timeout with a value of its own (`timed_out`), and the model is told
+  "nobody decided within the approval timeout". The next call in the session
+  is decided as usual. The journal is unchanged: the call is still recorded
+  as `rejected`, so existing journals verify as before, and the daemon's log
+  now says, for each one, that nobody decided.
+  Upgrading: where the daemon and the relay check each other (macOS, Linux)
+  a daemon and a relay from different builds already refuse each other, and
+  `holdcall daemon restart` is the remedy. Where they do not (Windows), a
+  relay from an earlier version does not know `timed_out`, denies the call
+  and drops its connection to the daemon, so the rest of that session is
+  denied.
+- **A daemon that goes away while it holds a call is no longer reported as an
+  approval timeout.** The relay counted any failed read as the wait running
+  out, so a daemon killed a second into a one-minute hold was reported as
+  "nobody decided" at that moment. The client is told "could not reach a
+  decision", and the relay's stderr says the daemon stopped answering.
+- **The relay's two-line notices say `holdcall:` on both lines.** The second
+  line of five of them still began `nim:`, the product's name before the
+  rename.
+- **A configuration the daemon refuses is reported for what it does.** A
+  socket path past the limit made the relay print "relaying anyway; calls
+  will not be recorded". It relays nothing unrecorded: the daemon it then
+  tries to start runs the same check and exits, so no daemon is ever
+  reachable and every `tools/call` is denied, while every other message is
+  still relayed. The notice now says that.
+- **The console says what a client is told when nobody decides a held call.**
+  The note under "Held for a human" still said the client is told a human
+  said no.
+
+### Changed
+
+- **Head-of-line blocking is documented as a known limitation.** While a call
+  is held for a human, every other message in the same session waits behind
+  it, up to `approval_timeout`; other connectors' sessions are not affected.
+  Not fixed here: it needs decisions to be asynchronous, which is a redesign
+  of the relay. See `docs/decisions/0005-human-approval.md`.
 
 ## [0.1.2] - 2026-09-28
 

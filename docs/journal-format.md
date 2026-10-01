@@ -444,13 +444,14 @@ One direction holds:
 
 The converse does not. **An `allow` or `approved` is not evidence the call was
 made.** The relay gives up after two seconds (or, while a call is held for a
-human, after `approval_timeout`) and SQLite's busy timeout is five, so a
-heavily contended write can be committed after the relay has already denied
-the call and answered the client. Nothing distinguishes that entry from a
-call still running: both are an `allow`/`approved` with no `call.outcome`, and
-both read as `readmodel.CallPending` -- a reader's *derived* state for "no
-outcome yet," unrelated to the daemon's wire-only `pending` value below,
-which never reaches this column at all.
+human, after `approval_timeout` plus a five-second grace) and SQLite's busy
+timeout is five, so a heavily contended write can be committed after the
+relay has already denied the call and answered the client. Nothing
+distinguishes that entry from a call still running: both are an
+`allow`/`approved` with no `call.outcome`, and both read as
+`readmodel.CallPending` -- a reader's *derived* state for "no outcome yet,"
+unrelated to the daemon's wire-only `pending` value below, which never
+reaches this column at all.
 
 **A refusal produces one entry, not two, whether it is `deny` or
 `rejected`.** There is no `call.outcome` for work that never happened, and

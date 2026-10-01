@@ -75,33 +75,48 @@ held call waits. Two clocks, not one, both fail toward denial:
   the one that actually decides: if nobody calls `holdcall approve`/`holdcall reject`
   before it fires, it rejects the call itself -- the same `call.request`
   entry, decision `rejected`, that an explicit `holdcall reject` would write --
-  and tells the relay so, unasked.
+  and tells the relay so, unasked, in a value of its own on the wire:
+  `timed_out`, not `rejected` (see the 2026-09-30 addendum).
 - **The relay's own wait**, on the same connection, is a backstop rather
-  than the primary mechanism: it is armed for the same duration, started a
-  moment later (after the round trip that told it the call was pending), so
-  in the ordinary case it hears the daemon's own timeout fire first and
-  never needs its own. Reaching it without an answer at all means the
-  daemon did not even manage to send that -- unreachable, not merely
-  undecided -- and the relay denies locally and drops the connection, the
-  same terminal failure `decisionTimeout` already uses for a daemon that
-  stops answering (`engine/internal/shim/shim.go`).
+  than the primary mechanism: it lasts `approval_timeout` plus a grace of
+  five seconds (`approvalGrace` in `engine/internal/shim/shim.go`), and it
+  starts a moment after the daemon's timer (after the round trip that told
+  it the call was pending). The grace is what lets the daemon's answer in:
+  its timer fires at `approval_timeout`, but it writes the rejection to the
+  journal before it answers anyone, so the answer arrives after that write
+  -- a few milliseconds when the journal is idle, and up to its five-second
+  busy timeout when another connection holds the database. In the ordinary
+  case the relay hears the daemon's own timeout and never needs its own.
+  Reaching the end of the grace without an answer at all means the daemon
+  did not even manage to send that -- unreachable, not merely undecided --
+  and the relay denies locally and drops the connection, the same terminal
+  failure `decisionTimeout` already uses for a daemon that stops answering
+  (`engine/internal/shim/shim.go`).
 
 This is the same argument `docs/decisions/0001-failure-behaviour.md` makes
 for every other way of not getting a decision, extended to a wait long
 enough that "nobody has looked yet" is the ordinary case rather than the
 exception: a call that is never decided must never sit in a state that lets
-it through by default, and both clocks land on the one answer that upholds
-that -- reject, journaled, recorded like any other decision.
+it through by default, and both clocks land on a refusal -- the daemon's
+timer on a rejection, journaled like any other decision, and the relay's
+backstop, which speaks only when the daemon cannot, on a local denial. The
+relay never writes to the journal; a daemon that is still alive records the
+rejection through its own timer whatever the relay did.
 
-The client is told which kind of refusal it got. `mcp.DeniedByHuman`
-("a human reviewing this call's real arguments rejected it") is what an
-explicit `holdcall reject` or the daemon's own timeout both answer with, because
-from the calling agent's side both mean the same thing: this specific call
-did not clear the hold. `mcp.DeniedApprovalTimedOut` is reserved for the
-relay's own local backstop -- a distinct sentence for a distinct failure,
-the outage rather than the refusal, following the same "different sentences
-on purpose" argument `engine/internal/mcp/deny.go` already makes for
-`DeniedByPolicy` versus `DeniedNoDecision`.
+The client is told which kind of refusal it got.
+`mcp.DeniedByHuman` ("a human reviewing this call's real arguments rejected
+it") is what a human's `holdcall reject` answers with: a person looked and
+said no. `mcp.DeniedApprovalTimedOut` ("nobody decided
+within the approval timeout") is what the daemon's own timeout answers
+with, because nobody looked and the model must not be told that somebody
+did, and it is also what the relay's backstop reports when even the
+daemon's answer never arrives within the grace. A daemon that goes away
+while it holds a call, or that could not record the decision, is reported
+as `mcp.DeniedNoDecision` ("could not reach a decision"), as every other
+daemon the relay loses is: no wait ran out, so no timeout is claimed.
+Different sentences on purpose, following the same argument
+`engine/internal/mcp/deny.go` already makes for `DeniedByPolicy` versus
+`DeniedNoDecision`.
 
 ## Pending calls live only in memory
 
@@ -118,10 +133,12 @@ process itself is killed outright, every call it was holding vanishes with
 no journal entry at all**, exactly as an ordinary session in progress does
 today when the daemon dies mid-flight (`docs/journal-format.md`'s "what the
 record can and cannot tell you about losses" already says this about
-sessions and outcomes, and it is the same fact here). The relay's own
-approval-timeout backstop is what a client sees in that case: no answer
-ever arrives, so it denies locally after `approval_timeout` and reports the
-timeout text, but nothing is written to say the call was ever held at all.
+sessions and outcomes, and it is the same fact here). What a client sees in
+that case is the relay noticing: the connection to the daemon ends with the
+process, so it denies locally at once -- not after `approval_timeout`, which
+is the wait for a daemon that is still there and silent -- and reports
+`mcp.DeniedNoDecision`. Nothing is written to say the call was ever held at
+all.
 
 **A daemon that shuts down in the ordinary way -- its connections closing
 rather than the process being cut off mid-write -- does reject what it was
@@ -146,6 +163,26 @@ Holdcall has no notion of a second identity to delegate to. Those would each nee
 a subject this milestone does not have, the same argument
 `docs/decisions/0003`'s closing section makes about conditions, time bounds
 and budgets.
+
+## Known limitation: a held call stalls its whole session
+
+The relay decides one `tools/call` at a time, and it does not read the
+client's next message until it has an answer. While a call is held -- up to
+`approval_timeout`, two minutes by default -- every other message in that
+session waits behind it: other calls, including ones no rule would hold, and
+messages that are not calls at all, such as a `ping`. Measured with the built
+binary, three runs: a call was held and a human approved it two seconds in; a
+`tools/call` sent 0.3 s after the held one, and a `ping` sent with it, were
+answered at the same moment as the held call, having waited 1.7 s each.
+
+Only that session waits. A client starts one relay per MCP server, each with
+its own connection to the daemon: a call held on one connector did not delay
+a call on another (under 4 ms in the same three runs).
+
+This is a limitation, not something the design argues for. Removing it means
+deciding calls asynchronously and matching each answer to its request by id
+-- a redesign of the relay's request path, which this decision does not
+include.
 
 ## Addendum, 2026-09-15: nothing to approve until the arguments have arrived
 
@@ -175,3 +212,74 @@ of `holdcall approve`, and for the guarantee's wording: the only text a human ca
 trust is the bytes the server would receive, and now nothing can be approved
 before those bytes exist on the daemon's side.
 
+## Addendum, 2026-09-30: a timeout is told as a timeout, and the relay waits for the daemon's answer
+
+The timeout section above describes the intent, and v0.1.2 did not deliver
+it. Both clocks ran for `approval_timeout`, the relay's starting one round
+trip after the daemon's; and the daemon journals the rejection before it
+answers anyone, so its answer reached the relay at best in a dead heat with
+the relay's deadline, and usually after it (with `approval_timeout` at one
+second, the daemon's answer takes a few milliseconds past it). Reproduced
+against the v0.1.2 code with the built binary, a real daemon and a client
+speaking raw JSON-RPC, `approval_timeout` at two seconds: one call an `ask`
+rule holds and nobody decides, then three ordinary calls in the same
+session. Three sessions, and both outcomes turned up, unpredictably, and
+both were wrong:
+
+- In one the daemon's answer got there first. It said `rejected`, the relay
+  mapped that to `mcp.DeniedByHuman`, and the model was told that a human
+  had reviewed the call and refused it, when nobody had looked.
+- In two the relay's clock got there first. It gave up, and giving up is
+  terminal (`drop`): the connection to the daemon was closed for the rest of
+  the session, so each of the three calls after it -- ones no rule touches --
+  was denied with "could not reach a decision", while the daemon had done
+  nothing wrong.
+
+The test that existed used a fake daemon that never answers, so all it could
+see was the relay's own deadline; it had no daemon whose answer could lose
+the race.
+
+Three things changed:
+
+- **The relay waits `approval_timeout` plus a grace** (`approvalGrace`, five
+  seconds: the journal's own busy timeout, the longest the daemon's write can
+  take while another connection holds the database), so that the daemon's
+  timeout answer is what arrives. Only silence past the grace means an
+  unreachable daemon, and that case is as it was: the call is denied and the
+  connection dropped.
+- **The daemon answers a timeout `timed_out`** (`daemon.DecisionTimedOut`),
+  and the relay maps it to `mcp.DeniedApprovalTimedOut`. A human's `reject`
+  still answers `rejected`. The value exists on the wire only, like
+  `pending` and `undecided`.
+- **A connection that ends while a call is held is no longer reported as a
+  timeout.** The relay took any failed read for the wait running out, so a
+  daemon killed one second into a one-minute hold was reported to the model
+  as "nobody decided within the approval timeout" at that moment (measured
+  on v0.1.2: answered 0.00 s after the kill). It is `mcp.DeniedNoDecision`
+  now, and the relay's stderr says the daemon stopped answering.
+
+With those, the same three sessions: the held call refused as a timeout, and
+the three calls after it served.
+
+What did not change is the journal. A timed-out call is still recorded as
+`rejected`, with no outcome, exactly as an explicit `holdcall reject` is.
+`docs/journal-format.md` is normative and versioned, every reader already
+treats `rejected` as "this call did not clear its hold", and a new value
+would need a migration to answer a question about the relay's wire, which is
+never persisted. Journals written before this change are read exactly as
+before, because nothing in how they are written or read moved. The cost is
+that the journal cannot tell a timeout from a human's rejection -- the
+reason text is not journaled either; only the wire carries it -- so the
+daemon logs one line for each timeout, with the session and the seq and
+never the arguments, which is where an operator can tell that nobody looked.
+`holdcall log` and the console show a rejected call with no outcome, which is
+what it is, and a `holdcall approve` or `holdcall reject` that arrives
+afterwards is told that a call "leaves that list once it is decided or its
+wait runs out".
+
+Builds that mix: where peer identity is checked (macOS, Linux) a daemon and
+a relay from different builds already refuse each other. Where it is not
+(Windows), a relay that predates `timed_out` meets a value it does not know,
+takes it for a break in the protocol, closes the connection and denies: it
+fails closed, the model is told "could not reach a decision", and the rest of
+that session is denied.
