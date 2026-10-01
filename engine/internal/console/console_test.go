@@ -19,6 +19,25 @@ func sp(s string) *string { return &s }
 func ip(v int64) *int64   { return &v }
 func bp(v bool) *bool     { return &v }
 
+// start serves s the way the page reaches it: a request that brings no
+// credentials of its own arrives with the token, as the page's api() sends it.
+// The tests in this file are about what the console shows and refuses by every
+// other rule, and need not each repeat that. The tests of the token itself, in
+// token_test.go, serve a Server with httptest.NewServer(s.Handler()) and send
+// exactly what they mean to.
+func start(t *testing.T, s *Server) *httptest.Server {
+	t.Helper()
+	h := s.Handler()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "" {
+			r.Header.Set("Authorization", "Bearer "+s.Token())
+		}
+		h.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
 // serve builds a console over a real journal, opened the way the command opens
 // it: read-only.
 func serve(t *testing.T, write func(*journal.Journal)) (*httptest.Server, string) {
@@ -40,9 +59,7 @@ func serve(t *testing.T, write func(*journal.Journal)) (*httptest.Server, string
 	}
 	t.Cleanup(func() { reader.Close() })
 
-	srv := httptest.NewServer(New(reader, filepath.Join(t.TempDir(), "absent.sock")).Handler())
-	t.Cleanup(srv.Close)
-	return srv, path
+	return start(t, New(reader, filepath.Join(t.TempDir(), "absent.sock"))), path
 }
 
 func session(id, connector string) journal.Entry {
@@ -303,8 +320,7 @@ func TestMissingSeedIsReportedAsMissingMaterial(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reader.Close()
-	srv := httptest.NewServer(New(reader, "/nonexistent.sock").Handler())
-	defer srv.Close()
+	srv := start(t, New(reader, "/nonexistent.sock"))
 
 	_, body := get(t, srv, "/api/snapshot")
 	state := decode[map[string]any](t, body)["journal"].(map[string]any)
@@ -666,8 +682,7 @@ func TestPendingShowsWhatTheDaemonHolds(t *testing.T) {
 		return []daemon.PendingInfo{{ID: "s1-1", Tool: "send_email", Agent: "claude-code", Connector: "mail",
 			Arguments: json.RawMessage(`{"to":"ceo@example.com"}`), ArgumentsKnown: true, StartedAt: "2026-09-25T10:00:00Z"}}, nil
 	}
-	srv := httptest.NewServer(s.Handler())
-	defer srv.Close()
+	srv := start(t, s)
 
 	_, body := get(t, srv, "/api/pending")
 	var out struct {
