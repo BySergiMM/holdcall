@@ -28,8 +28,9 @@ not to. There is no bounty programme.
 - A process that is not this binary, run by this user, obtaining a decision, a
   credential, or an approval from the daemon socket, on Linux or macOS. On
   Windows that is known: see below.
-- A credential reaching a process other than the one connector it was
-  registered for, or appearing in argv, SQLite, a log, or the console.
+- Holdcall delivering a credential to anything other than the one connector it
+  was registered for, or a credential appearing in argv, SQLite, a log, or the
+  console.
 - A held call's arguments reaching the journal, a log, or a network.
 - A journal edit that `holdcall verify` does not detect *and* that the format
   says it should.
@@ -43,5 +44,9 @@ experimental: the suite runs on a Windows runner in CI, but Holdcall does not
 verify the peer of its socket there, so a process running as the same user can
 obtain decisions, write journal entries and stand in for the daemon, and no
 credential is released at all. Enrolling an agent is as privileged as running
-Holdcall. These are documented decisions, not findings; `docs/security.md` and
+Holdcall. Credential isolation does not hold against a process running as the
+same user, an MCP server that Holdcall started included: Holdcall does not
+restrict the operating system's credential store to itself, and the one server a
+secret is injected into has it in its environment.
+These are documented decisions, not findings; `docs/security.md` and
 `docs/decisions/` say why.

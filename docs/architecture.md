@@ -152,7 +152,11 @@ the credential at spawn time over its own short-lived connection; the daemon
 decides what gets spawned, not the caller, and injects the value into the
 connector's environment only. The daemon releases it only to a peer the kernel
 confirmed, and the relay takes a connector only from a daemon it confirmed. The
-value is never in argv, never in SQLite, never in the console.
+value is never in argv, never in SQLite, never in the console. What this layer
+does not do is keep the secret from another process of the same user: Holdcall
+asks the stores for no scope narrower than the user, so such a process can read it
+from the store without the daemon, and the connector it is injected into has it in
+its environment (`docs/security.md`, *Known gaps*).
 
 ## Layer 6: the operator's surfaces (`cmd/holdcall`, `internal/console`)
 

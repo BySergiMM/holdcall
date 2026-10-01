@@ -23,6 +23,17 @@ The adversary is **a downstream MCP server**: code the operator did not write,
 running as the same user, spawned by Holdcall itself. Everything below is written
 against that.
 
+**One property this adversary defeats, stated before the rest so it is not
+missed: credential isolation does not hold against a process running as the same
+user.** What the daemon does is decide what it will hand over, and to whom. It
+does not, and cannot, decide who else in the same account may ask the operating
+system's credential store for a secret Holdcall put there, because that question
+never reaches the daemon: a server Holdcall spawned can run the same lookup
+Holdcall does (see *Known gaps*, "Credentials are readable by any process running
+as the same user"). Assume a compromised server can read the credential of every
+connector, not only its own. What does hold is narrower and is listed under that
+row.
+
 **Human approval (M6) is written against a second adversary: the model
 driving the client**, not only the server on the other side of a call. An
 `ask` rule exists because the operator does not trust a call's own
@@ -308,7 +319,9 @@ the chain rather than only at its tip.
 
 **Peer identity** keeps anything that is not this binary, run by this user, off
 the socket, in both directions. It is a floor, not the authorization model:
-anything able to execute the binary as this user passes it. It is verified at
+anything able to execute the binary as this user passes it. It does nothing about
+a credential that a process of the same user reads straight from the operating
+system's store, which never involves the socket (see *Known gaps*). It is verified at
 accept, while the peer is certainly alive, which also closes the pid-reuse window
 a later check would leave. On Windows it does not exist; see *Windows is
 experimental*.
@@ -417,6 +430,7 @@ it can register a connector.
 | **Windows has no peer verification** | high, on Windows | Not implemented. AF_UNIX there has no `SO_PEERCRED` equivalent; the peer's process id can be read (`SIO_AF_UNIX_GETPEERPID`) but is not, and a user and image identity would have to be derived from it. A named-pipe transport is the other route and reverses a standing decision. The suite does run on `windows-latest` in CI since 2026-09-28, with the tests that show an attacker refused skipped by name. Since this change no secret is released to a peer that cannot be verified, so on Windows no connector works. See *Windows is experimental*. |
 | **Windows directories have no real ACL** | high, on Windows | `os.Chmod` only toggles the read-only attribute, and nothing here reads or sets an ACL. Home, journal and socket privacy rests on the default ACLs under the user's profile. On Linux and macOS the directories are created `0700` and an existing one must be the user's own; see *Private directories*. |
 | **PATH resolution on the registered command** | medium | The registered argv is spawned through normal PATH lookup, so a caller that already controls PATH can front-run the binary name. Closing it needs process inversion. |
+| **Credentials are readable by any process running as the same user** | high, against the adversary in the threat model | Not through the daemon, so peer identity does not come into it. Each secret is stored under a name derived only from values any process of the user can compute (`holdcall-` and the first four bytes of the SHA-256 of the Holdcall home, with the connector name as the account), and nothing Holdcall passes to the store limits who may ask for it. Linux: the Secret Service entry `secret-tool lookup service holdcall-<hex> account <connector>` returns it. macOS: `security find-generic-password -a <connector> -s holdcall-<hex> -w`; Holdcall stores the item with no access list of its own (no `-T`, no `-A`), and whether the Keychain would then prompt a second program was not tested. Windows: the `.dpapi` file under the home is decrypted by `CryptUnprotectData` for any process of the same Windows user, because it is user-scoped and no entropy is passed. This is read from what `internal/credential` stores and how, an implementation inference: no test, and nothing in this repository, has queried a store from a second process. What holds: the secret is injected only into the one command it was registered for, never into another connector's environment, and it is not in argv, SQLite, a log, the console or a client's config. |
 | **The credential is handed to the connector** | medium | Injected into the downstream's environment, so a compromised connector has its own secret and, on Linux, any same-user process can read `/proc/<pid>/environ`. Holdcall cannot revoke what it has given away. |
 | **The journal is unkeyed** | medium | See the threat model. Only `--expect-head` covers rewriting. |
 | **A relay killed with SIGKILL cannot stop its connector** | low | Only a connector that reads its stdin notices. SIGTERM and SIGINT are handled; nothing can handle SIGKILL. |

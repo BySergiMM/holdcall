@@ -16,9 +16,10 @@ It is for a developer who already runs one of those clients with MCP servers
 configured and wants three things none of them give you on their own: a
 record of what a tool was asked to do, a way to refuse one by name before it
 runs, and each server's credential kept out of a client's plaintext config
-and away from the servers it isn't registered for. It is pre-alpha — see
-Status below for exactly what that means before you point it at something
-you cannot afford to have go wrong.
+and handed only to the one server it is registered for. That last one is not
+a defence against another program running as you; *Credentials* below says
+exactly what it is. It is pre-alpha — see Status below for exactly what that
+means before you point it at something you cannot afford to have go wrong.
 
 ## Status
 
@@ -251,8 +252,22 @@ given on the command line is ignored when a connector supplies one: the daemon
 decides what receives a credential, not the caller. Not on Windows, where no
 credential is released and `connector set` refuses; see Status.
 
-Both ends of the daemon socket verify each other by peer identity, so neither
-a process pretending to be a shim nor one pretending to be the daemon gets in.
+On Linux and macOS both ends of the daemon socket verify each other: the kernel
+says which user, and which executable, is on the other end, so another user, or a
+program that is not this binary, is refused by the daemon and is not taken for
+the daemon by a relay. Windows cannot do that; see Status.
+
+**That does not make a credential private from another program running as you.**
+The secret sits in the operating system's credential store under a name anyone can
+work out, and nothing Holdcall does limits which of your own processes may ask the
+store for it, so a program running as your user, an MCP server that Holdcall
+started included, can read any secret Holdcall keeps there without going through
+the daemon at all. The one server a secret is injected into also has it in its
+environment, which your other processes can read (on Linux, `/proc/<pid>/environ`).
+What Holdcall does guarantee is narrower: it injects a credential only into the
+one command it was registered for, never writes one to a client's config, argv,
+the journal, a log or the console, and the daemon releases one only to a
+Holdcall binary run by you. `docs/security.md` has the detail, under *Known gaps*.
 
 ## What the record is, and is not
 
