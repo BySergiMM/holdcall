@@ -11,9 +11,10 @@ suite on Windows as well as Linux and macOS. `docs/milestones.md` is the
 source of truth this section summarizes, and is where the detail and the
 test names behind each claim live.
 
-## [Unreleased]
+## [0.1.3] - 2026-10-01
 
-What 0.1.3 will say when it is cut. Nothing here is released yet.
+The approval-timeout fix and a hardening pass. After upgrading, run
+`holdcall daemon restart`: a 0.1.2 relay and a 0.1.3 daemon refuse each other.
 
 ### Security
 

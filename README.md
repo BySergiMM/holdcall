@@ -100,7 +100,7 @@ to `data/holdcall.db` inside it to keep the journal, rules and enrolments, run
 connector's credential again, since the keychain items were stored under the
 old name. `CHANGELOG.md` has the full list.
 
-**From a release.** `v0.1.2` was built and published by the release
+**From a release.** `v0.1.3` was built and published by the release
 workflow on GitHub's runners, from a tree that passed the suite on all
 three platforms; `CHANGELOG.md` says what each version was
 tested on. The installer resolves the latest release, verifies the archive
