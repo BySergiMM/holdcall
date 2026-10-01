@@ -162,12 +162,17 @@ the call never reached the server that would have run it.
 
 ```bash
 holdcall log        # shows the call: deny, no result
-holdcall console    # the same journal, plus held calls, sessions and policy, at 127.0.0.1:7717
+holdcall console    # the same journal, plus held calls, sessions and policy; prints the address to open
 ```
 
 ![The console's Journal view over a demo journal: every entry in chain order with its kind, tool, decision, agent and connector, and entry 22, a rejected call, open beside it with its prev_hash and hash](docs/images/console.png)
 
-The console is read-only and serves loopback only. It has five views:
+The console is read-only and serves loopback only. It also needs a token: it
+makes one when it starts and prints it as part of the address to open
+(`http://127.0.0.1:7717/#token=…`), the page sends it with every request for
+data, and a process on the machine that was not handed the address is refused.
+Whoever has the address reads everything the console shows, and the token is
+gone when the console stops. It has five views:
 an overview of the record (chain check, decisions, detectable gaps, the
 policy in effect), the calls **held** for a human with their real
 arguments and the `holdcall approve` / `holdcall reject` lines to copy, the
@@ -176,7 +181,8 @@ the chain, **sessions** with a timeline each, and the **policy** with an
 "explain a call" form that runs the daemon's own decision function. Deciding
 stays on the command line on purpose: a page any other page on this machine
 can reach must not be able to approve. `/#held`, `/#journal/22` and
-`/#sessions/<id>` open a view, an entry or a session directly.
+`/#sessions/<id>` open a view, an entry or a session directly, in a tab that
+already holds the token.
 
 ![The console's Held view: one call to dangerous_tool held for a human, with the agent, connector, its real arguments including a bidirectional override shown as an escape, and the approve and reject commands to copy](docs/images/console-held.png)
 

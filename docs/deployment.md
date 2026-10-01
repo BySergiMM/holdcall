@@ -16,8 +16,10 @@ has no server-side component and no hosted API.
 The one HTML file in the engine, `engine/internal/console/index.html`, is
 embedded in the binary and served by `holdcall console` over **loopback only**, and
 since 2026-09-14 only to a loopback name in the `Host` header -- a page on
-another site that rebinds its own name to 127.0.0.1 is refused. It makes three
-same-origin requests and no external ones. It is an observability view of the
+another site that rebinds its own name to 127.0.0.1 is refused. Every route but
+the page needs a token that `holdcall console` makes when it starts and prints
+in the address to open. Its requests are all same-origin, to its own `/api`
+routes, and none goes anywhere else. It is an observability view of the
 local journal, deliberately read-only and deliberately unreachable from a
 network interface. It is not a website and cannot be hosted.
 

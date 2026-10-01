@@ -177,7 +177,11 @@ its environment (`docs/security.md`, *Known gaps*).
   (what the daemon holds for approval, read over the verified socket; it
   says so when the daemon cannot be asked). Views are URL fragments, and
   `#journal/<chain_seq>` or `#sessions/<id>` open one entry or session.
-  There is no write route: approving stays on the CLI.
+  There is no write route: approving stays on the CLI. Every path but the page
+  needs a token made when the console starts (256 random bits, an
+  `Authorization: Bearer` header, compared with `crypto/subtle`); the command
+  prints it in the fragment of the address it prints, which a browser never
+  sends, and the page attaches it to every request it makes.
 
 ## Layer 7: the repository's own claims (`dashboard/`, `.github/`)
 

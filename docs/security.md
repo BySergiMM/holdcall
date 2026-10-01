@@ -273,6 +273,7 @@ section, and to delete that test.
 | 34 | Connect as another user running the same binary | **blocked** (linux and darwin: the peer's user is compared before its image) | `peer_uid_test.go` |
 | 35 | Pre-create the socket's directory as another user, or leave the socket in a shared directory | **blocked** (linux and darwin: the daemon will not start in a directory another user owns) | `privatedir_test.go`, `listen_dir_test.go` |
 | 36 | Ask for a credential over a connection the platform could not verify | **blocked** (nothing is released, and the store is not read); this is every connection on Windows | `peer_unverified_test.go`, `peer_unverified_windows_test.go` |
+| 37 | Read the journal, or the arguments of a held call, from another process on this machine through the console's port | **blocked** (every path but the page needs a per-launch token; anyone who was handed it still reads everything) | `token_test.go`, `console_token_test.go` |
 
 Live vulnerabilities found by audit rather than hypotheticals: **1** (any local
 process could read every credential), **3** (the journal was writable by
@@ -294,8 +295,11 @@ enrolled against one executable with an unordered lookup between them, and
 running install: peer identity compared a peer's executable and not
 its user, the directories the socket and journal live in were assumed private
 rather than checked, and a connection the platform could not verify was handed
-credentials as if it had been. Each has a test that fails when the check it
-exercises is removed.
+credentials as if it had been. **37** is the console: it bound loopback and
+checked the `Host` header, and then answered whoever asked, including for the
+real arguments of the calls held for a human. With the new check switched off,
+the real command answers a read with no token with 200. Each has a test that
+fails when the check it exercises is removed.
 
 The table above is the attacks someone thought of, and `dashboard/data/state.json`
 is the copy the build checks -- every test named there must exist. When the two

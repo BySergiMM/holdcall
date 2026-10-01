@@ -845,6 +845,34 @@
       },
       "lastVerified": "2026-10-01",
       "provenance": "declared"
+    },
+    {
+      "id": "console-needs-its-token",
+      "title": "The console is read only by whoever was handed its address",
+      "status": "verified",
+      "statement": "Every request to holdcall console except the one for its page needs a token of 256 random bits, made when the console starts, and sent in an Authorization header. The command prints it in the fragment of the address it prints, so it is in no request, Referer or log until the page attaches it. A process that was not handed the address, and cannot guess 256 bits, reads none of the record and none of the held calls' arguments.",
+      "notGuaranteed": "Whoever has the token reads everything the console serves: it is on the terminal the command printed it to and in the console's memory, so a process of the same user that can read either is not stopped, and nothing records who read. The page itself loads without it, and holds nothing from any journal. The comparison uses crypto/subtle.ConstantTimeCompare, which no test can show. The script in the page that keeps the token and attaches it has not been run in a browser.",
+      "implementation": [
+        "engine/internal/console/console.go",
+        "engine/internal/console/index.html",
+        "engine/cmd/holdcall/main.go"
+      ],
+      "tests": [
+        "TestNothingButThePageIsReadWithoutTheToken",
+        "TestTheTokenIsAcceptedInTheAuthorizationHeaderOnly",
+        "TestTheTokenOpensEveryRouteTheConsoleServes",
+        "TestThePageLoadsWithoutTheTokenAndHoldsNothingFromTheJournal",
+        "TestEveryConsoleHasATokenOfItsOwnThatCannotBeGuessed",
+        "TestEveryRequestThePageMakesGoesThroughTheOneFunctionThatCarriesTheToken",
+        "TestTheConsoleTheCommandStartsAnswersOnlyToWhoWasHandedItsAddress"
+      ],
+      "platforms": {
+        "darwin": "verified",
+        "linux": "verified",
+        "windows": "verified"
+      },
+      "lastVerified": "2026-10-01",
+      "provenance": "declared"
     }
   ],
   "attacks": [
@@ -1537,6 +1565,19 @@
       "wasLive": false,
       "evidence": "Not run against a store. Read from engine/internal/credential: each secret is stored under a name derived from values any process of the user can compute, and Holdcall passes the store no restriction on who may read it, so a process of the same user, a compromised downstream server included, can run the same lookup Holdcall does without the daemon being asked. Peer identity does not come into it. Whether the macOS Keychain would prompt a second program was not tested.",
       "tests": []
+    },
+    {
+      "id": "console-other-local-process",
+      "name": "Read the journal, or the arguments of a held call, from another process on this machine through the console's port",
+      "category": "console",
+      "status": "pass",
+      "wasLive": true,
+      "evidence": "holdcall console bound loopback and checked the Host header, and answered every request that named a loopback host, so any local process could read /api/pending: with the token check switched off, which is what the old Handler did, the real command answered a read with no token with 200. Every path but the page now needs the per-launch token in an Authorization header: no token, a wrong one, one in the query string, a cookie or another header is a 401, an unknown path is a 401 and not a 404, and the real command's printed address opens the record while the same address without its token does not. Whoever is handed the token reads everything; a process of the same user that can read the terminal the address was printed in is not stopped.",
+      "tests": [
+        "TestNothingButThePageIsReadWithoutTheToken",
+        "TestTheTokenIsAcceptedInTheAuthorizationHeaderOnly",
+        "TestTheConsoleTheCommandStartsAnswersOnlyToWhoWasHandedItsAddress"
+      ]
     }
   ],
   "findings": [
@@ -1923,6 +1964,17 @@
       "evidence": "Probed with a scratch test in the local rig that was not kept, and a search of engine/ for synchronous and fullfsync finds none. docs/benchmarks.md, the README and the code comments no longer say durable.",
       "status": "open",
       "nextAction": "Set synchronous(FULL), and fullfsync on macOS, in the journal's DSN, read the values back in a test, and re-run the benchmarks on the machine they came from.",
+      "provenance": "declared"
+    },
+    {
+      "id": "F-035",
+      "severity": "medium",
+      "title": "Any process on the machine could read the console",
+      "problem": "holdcall console bound loopback and refused a Host that was not a loopback name (F-016), but a request that did name one was answered whoever sent it. Any process able to open a connection to 127.0.0.1:7717 could read the journal and, from /api/pending, the real arguments of the calls held for a human.",
+      "impact": "Another user's process on a shared machine, or a sandboxed tool allowed to reach loopback, could read tool names, sessions, policy and the arguments of a call an agent was waiting for a person to decide, with no credential of any kind.",
+      "evidence": "Read from Handler: after the method and Host checks every route ran. Fixed: every path but the page needs a token of 256 random bits, made when the console starts and sent in an Authorization header; the command prints it in the address's fragment. TestNothingButThePageIsReadWithoutTheToken, and the test that runs the real command, fail with the check switched off, which is what the old Handler did. The page's script, which attaches the token, has not been run in a browser.",
+      "status": "fixed",
+      "nextAction": "A person should open the printed address in a browser once and confirm the page loads the record; no browser has run the page's script.",
       "provenance": "declared"
     }
   ],
