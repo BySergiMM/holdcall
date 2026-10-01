@@ -685,10 +685,10 @@ func dialDaemon(cfg config.Config) *reporter {
 	// past. Verified before a single byte is sent, so it never learns what
 	// this session was going to ask.
 	if conn != nil {
-		if genuine, pid := daemonIsGenuine(conn); !genuine {
+		if genuine, verdict := daemonIsGenuine(conn); !genuine {
 			fmt.Fprintf(os.Stderr,
 				"holdcall: %s\nnim: refusing to take decisions from it; every tool call in this session will be denied\n",
-				peerRefusalReason(cfg, pid, peer.DiagnosePID(pid)))
+				peerRefusalReason(cfg, verdict))
 			conn.Close()
 			conn = nil
 		}
@@ -732,15 +732,16 @@ func dialDaemon(cfg config.Config) *reporter {
 // It cannot invent a guarantee the OS does not offer, and pretending otherwise
 // would only move the gap somewhere less visible.
 //
-// pid is the peer's, read once via peer.IsSelfPID -- exactly the value a
-// caller that gets false back needs to diagnose the refusal with
-// peer.DiagnosePID, without touching conn a second time to get it. See
+// The peer is asked once and the whole answer comes back, not just its pid: a
+// caller that gets false back builds its message from the verdict, which says
+// whether the peer is another program or this program run by another user
+// (peer.Verdict), without touching conn a second time to find out. See
 // peer.IsSelfPID's doc comment for why a second, separate read is unsafe
 // here: the peer on the other end of a refused conn is, in every real
 // caller, already closing its side.
-func daemonIsGenuine(conn net.Conn) (genuine bool, pid int) {
-	supported, isSelf, pid := peer.IsSelfPID(conn)
-	return !supported || isSelf, pid
+func daemonIsGenuine(conn net.Conn) (genuine bool, v peer.Verdict) {
+	v = peer.Check(conn)
+	return !v.Supported || v.Same, v
 }
 
 // ErrDaemonOlderBuild means the peer on the socket is provably an older
@@ -757,17 +758,16 @@ var ErrDaemonOlderBuild = errors.New("the daemon on the socket is an older build
 
 // peerRefusalReason is the sentence every caller that refuses a peer builds
 // its message from -- an error return or a line on stderr -- so an upgrade
-// gets one diagnosis, written once: the specific remedy when diag is
-// peer.SameLaunchPathOlderBuild, the unchanged "is not Holdcall" wording
-// otherwise. diag is computed by the caller with a single peer.Diagnose (or
-// peer.DiagnosePID) call, never recomputed here -- see peer.Diagnose's doc
-// comment on why calling it twice on the same connection is unsafe.
-func peerRefusalReason(cfg config.Config, pid int, diag peer.Diagnosis) string {
-	if diag == peer.SameLaunchPathOlderBuild {
-		return fmt.Sprintf("the daemon on %s is an older build of Holdcall at the same path; run `holdcall daemon restart`",
-			cfg.Daemon.Socket)
-	}
-	return fmt.Sprintf("the process listening on %s is not Holdcall (%s)", cfg.Daemon.Socket, peer.ExplainPID(pid))
+// gets one diagnosis, written once: the specific remedy when the peer is at our
+// own path running a different file (peer.SameLaunchPathOlderBuild), the user
+// mismatch spelled out when the kernel says the peer runs as someone else, the
+// unchanged "is not Holdcall" wording otherwise. The verdict is the one
+// daemonIsGenuine read, and the diagnosis is made once, from its pid, never
+// from the connection again -- see peer.Diagnose's doc comment on why touching
+// a refused connection twice is unsafe.
+func peerRefusalReason(cfg config.Config, v peer.Verdict) string {
+	reason, _ := peerRefusal(cfg, v)
+	return reason
 }
 
 // peerRefusalError is peerRefusalReason for a caller that returns an error
@@ -775,11 +775,26 @@ func peerRefusalReason(cfg config.Config, pid int, diag peer.Diagnosis) string {
 // ErrDaemonOlderBuild so it can be matched with errors.Is; every other case
 // keeps the "is not Holdcall; <suffix>" wording callers used before Diagnose
 // existed, with suffix naming what that particular caller was about to do.
-func peerRefusalError(cfg config.Config, pid int, diag peer.Diagnosis, suffix string) error {
-	if diag == peer.SameLaunchPathOlderBuild {
-		return fmt.Errorf("%w: %s", ErrDaemonOlderBuild, peerRefusalReason(cfg, pid, diag))
+func peerRefusalError(cfg config.Config, v peer.Verdict, suffix string) error {
+	reason, olderBuild := peerRefusal(cfg, v)
+	if olderBuild {
+		return fmt.Errorf("%w: %s", ErrDaemonOlderBuild, reason)
 	}
-	return fmt.Errorf("the process listening on %s is not Holdcall (%s); %s", cfg.Daemon.Socket, peer.ExplainPID(pid), suffix)
+	return fmt.Errorf("%s; %s", reason, suffix)
+}
+
+// peerRefusal makes the one diagnosis a refusal needs, so the sentence and the
+// error's kind can never come from two different looks at a process that may
+// have exited between them.
+func peerRefusal(cfg config.Config, v peer.Verdict) (reason string, olderBuild bool) {
+	switch {
+	case v.WrongUser:
+		return fmt.Sprintf("the process listening on %s runs as another user (%s)", cfg.Daemon.Socket, v.Reason()), false
+	case peer.DiagnosePID(v.PID) == peer.SameLaunchPathOlderBuild:
+		return fmt.Sprintf("the daemon on %s is an older build of Holdcall at the same path; run `holdcall daemon restart`",
+			cfg.Daemon.Socket), true
+	}
+	return fmt.Sprintf("the process listening on %s is not Holdcall (%s)", cfg.Daemon.Socket, peer.ExplainPID(v.PID)), false
 }
 
 // PeerPID connects to the daemon socket and reports the pid of whatever is
@@ -808,14 +823,22 @@ func PeerPID(cfg config.Config, timeout time.Duration) (pid int, confirmedNim bo
 	// daemonIsGenuine's own doc comment gives: this pid belongs to a peer
 	// this call is about to decide about, and a second read risks racing
 	// whatever that peer does next.
-	supported, isSelf, p := peer.IsSelfPID(conn)
-	if !supported {
+	v := peer.Check(conn)
+	if !v.Supported {
 		return 0, false, fmt.Errorf("the pid of the process listening on %s could not be determined", cfg.Daemon.Socket)
 	}
-	if isSelf || peer.DiagnosePID(p) == peer.SameLaunchPathOlderBuild {
-		return p, true, nil
+	if v.WrongUser {
+		// Not "confirmed" however it might otherwise look, and not a plain
+		// "something else is listening" either: it may well be Holdcall, run
+		// by another user, which is a different thing to tell an operator and
+		// a different thing to refuse to signal.
+		return v.PID, false, fmt.Errorf("the process listening on %s runs as another user (%s); refusing to signal it",
+			cfg.Daemon.Socket, v.Reason())
 	}
-	return p, false, nil
+	if v.Same || peer.DiagnosePID(v.PID) == peer.SameLaunchPathOlderBuild {
+		return v.PID, true, nil
+	}
+	return v.PID, false, nil
 }
 
 // attach binds the connection and the codecs that read and write it, so they
@@ -1140,8 +1163,8 @@ func DialDaemon(cfg config.Config) (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	if genuine, pid := daemonIsGenuine(conn); !genuine {
-		err := peerRefusalError(cfg, pid, peer.DiagnosePID(pid), "refusing to talk to it")
+	if genuine, verdict := daemonIsGenuine(conn); !genuine {
+		err := peerRefusalError(cfg, verdict, "refusing to talk to it")
 		conn.Close()
 		return nil, err
 	}
@@ -1170,8 +1193,8 @@ func DialRunningDaemon(cfg config.Config, timeout time.Duration) (net.Conn, erro
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrDaemonNotReachable, err)
 	}
-	if genuine, pid := daemonIsGenuine(conn); !genuine {
-		err := peerRefusalError(cfg, pid, peer.DiagnosePID(pid), "refusing to talk to it")
+	if genuine, verdict := daemonIsGenuine(conn); !genuine {
+		err := peerRefusalError(cfg, verdict, "refusing to talk to it")
 		conn.Close()
 		return nil, err
 	}
@@ -1248,8 +1271,8 @@ func fetchConnector(cfg config.Config, connector string) (injection, error) {
 	// Whoever is on the other end of this decides what command receives a
 	// credential, so it has to be Holdcall. Refusing to spawn is the only safe
 	// answer here: an impostor's answer is worse than no answer.
-	if genuine, pid := daemonIsGenuine(conn); !genuine {
-		return injection{}, peerRefusalError(cfg, pid, peer.DiagnosePID(pid), "refusing to ask it for a credential or a command")
+	if genuine, verdict := daemonIsGenuine(conn); !genuine {
+		return injection{}, peerRefusalError(cfg, verdict, "refusing to ask it for a credential or a command")
 	}
 
 	conn.SetDeadline(time.Now().Add(2 * time.Second))

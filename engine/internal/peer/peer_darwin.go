@@ -13,10 +13,29 @@ import (
 // golang.org/x/sys/unix.
 const kernProcargs2 = 49
 
-// isSelfImpl asks the kernel who is on the other end of conn, and whether it
-// is executing the same file we are.
+// xucredVersion is XUCRED_VERSION from <sys/ucred.h>, the layout version of
+// struct xucred that LOCAL_PEERCRED fills in. Not exported by
+// golang.org/x/sys/unix.
+const xucredVersion = 0
+
+// checkImpl asks the kernel who is on the other end of conn: which user it
+// runs as, and whether it is executing the same file we are.
 //
-// LOCAL_PEERPID is a Darwin getsockopt on AF_UNIX sockets giving the
+// Who, first. LOCAL_PEERCRED is the Darwin getsockopt behind getpeereid(3),
+// which Apple documents as returning "the effective user and group IDs of the
+// peer connected to a UNIX-domain socket": for the side that accept()ed, those
+// the peer had when it called connect(2); for the side that connect()ed, those
+// the listener had when it called listen(2). "This mechanism is reliable;
+// there is no way for either side to influence the credentials returned to
+// its peer except by calling the appropriate system call ... under different
+// effective credentials." (getpeereid(3), developer.apple.com archive.) Go has
+// no getpeereid, but x/sys/unix wraps the option it is built on --
+// GetsockoptXucred(fd, SOL_LOCAL, LOCAL_PEERCRED) -- and so does this, without
+// cgo. The effective uid is compared with this process's own, and a difference
+// ends the check: see Verdict.WrongUser. libc's getpeereid refuses a struct
+// whose cr_version is not XUCRED_VERSION; so does this.
+//
+// Then what. LOCAL_PEERPID is a Darwin getsockopt on AF_UNIX sockets giving the
 // connecting process's pid, with no cooperation or truthfulness required from
 // that process. What to do with that pid is the part that matters.
 //
@@ -38,10 +57,10 @@ const kernProcargs2 = 49
 // in an internal ABI would show up. Falling back is not a silent downgrade: it
 // is the previous behaviour, and it is the honest response to a mechanism that
 // has just failed to describe something we already know.
-func isSelfImpl(conn net.Conn) (supported, same bool, pid int) {
+func checkImpl(conn net.Conn) Verdict {
 	uc, ok := conn.(*net.UnixConn)
 	if !ok {
-		return false, false, 0
+		return Verdict{}
 	}
 	// A *net.UnixConn whose SyscallConn() itself errors is not "this platform
 	// cannot check" (that is the type-assertion failure above) -- it is a
@@ -51,15 +70,31 @@ func isSelfImpl(conn net.Conn) (supported, same bool, pid int) {
 	// same as every other error below.
 	raw, err := uc.SyscallConn()
 	if err != nil {
-		return true, false, 0
+		return Verdict{Supported: true}
 	}
 
+	var pid int
+	var cred *unix.Xucred
 	var sockErr error
 	ctrlErr := raw.Control(func(fd uintptr) {
 		pid, sockErr = unix.GetsockoptInt(int(fd), unix.SOL_LOCAL, unix.LOCAL_PEERPID)
+		if sockErr != nil {
+			return
+		}
+		cred, sockErr = unix.GetsockoptXucred(int(fd), unix.SOL_LOCAL, unix.LOCAL_PEERCRED)
 	})
 	if ctrlErr != nil || sockErr != nil {
-		return true, false, 0
+		return Verdict{Supported: true}
+	}
+	v := Verdict{Supported: true, PID: pid}
+	if cred.Version != xucredVersion {
+		// A layout this code does not know is not a uid it can compare.
+		return v
+	}
+
+	if self := selfUID(); !sameUser(int(cred.Uid), self) {
+		v.WrongUser, v.PeerUID, v.SelfUID = true, int(cred.Uid), self
+		return v
 	}
 
 	if self, trustworthy := selfImageID(); trustworthy {
@@ -67,12 +102,14 @@ func isSelfImpl(conn net.Conn) (supported, same bool, pid int) {
 		if err != nil {
 			// The peer exited, or belongs to another user we cannot inspect.
 			// Either way this is not an identity we can confirm.
-			return true, false, pid
+			return v
 		}
-		return true, peer.Equal(self), pid
+		v.Same = peer.Equal(self)
+		return v
 	}
 
-	return true, samePathIdentity(pid), pid
+	v.Same = samePathIdentity(pid)
+	return v
 }
 
 // samePathIdentity is the pre-vnode comparison, kept only as the fallback

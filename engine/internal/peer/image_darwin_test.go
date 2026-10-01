@@ -13,7 +13,7 @@ import (
 // the struct offsets are computed from a header -- and turns it into something
 // verified at runtime against a process whose identity is already known.
 //
-// If it stops holding on a healthy system, isSelfImpl silently falls back to
+// If it stops holding on a healthy system, checkImpl silently falls back to
 // the weaker path comparison, so it is worth asserting directly rather than
 // only through its consequences.
 func TestSelfImageIsTrustworthyAndCorrect(t *testing.T) {

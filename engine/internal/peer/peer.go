@@ -7,26 +7,98 @@ import (
 	"path/filepath"
 )
 
-// verifyPeerIsSelf asks the OS, not the connecting process, whether the
-// process on the other end of conn is running this same holdcall binary.
+// Verdict is what the kernel said about the process on the other end of a
+// connection, read once.
 //
-// This is the actual authorization boundary for credential.get and every
-// connector.* operation: socket file permissions only prove "same OS user",
-// which is not enough once a downstream MCP server -- code the operator did
-// not write and should not be assumed to trust -- can open the same socket.
-// A claim inside a Request ("my target is X") is exactly as easy for an
-// attacker to write as for the real shim, so nothing self-reported can be
-// the basis for a decision here. Peer identity, read from the kernel's own
-// connection-tracking state, cannot be forged by the connecting process.
+// It carries the reason alongside the answer because a refusal has to say
+// which check refused: "that is not Holdcall" and "that is Holdcall, run by
+// another user" call for different things from whoever reads the log, and
+// telling them apart afterwards from a pid would mean reading the connection a
+// second time, which IsSelfPID's doc comment explains is unsafe.
+type Verdict struct {
+	// Supported is false on platforms with no way to ask the OS this at all
+	// (Windows AF_UNIX exposes no peer-credential API, unlike Linux's
+	// SO_PEERCRED or Darwin's LOCAL_PEERCRED) -- see peer_windows.go. Callers
+	// must decide what "not supported" means for their own request; it is not
+	// automatically an allow, and for releasing a secret it is a refusal.
+	Supported bool
+
+	// Same is true only when the peer is running this same holdcall binary AND
+	// is running as the same user as this process. Never true unless both were
+	// established by the kernel; every lookup that fails leaves it false.
+	Same bool
+
+	// PID is the peer's, as the kernel reports it, or 0 when that could not be
+	// read. Never meaningful without Supported.
+	PID int
+
+	// WrongUser is true when the kernel says the peer's effective user id is
+	// not ours. PeerUID and SelfUID are set with it, for the sentence a
+	// refusal prints; they carry no meaning otherwise.
+	//
+	// The user is checked before the executable, and a mismatch ends the check.
+	// Running this binary is not enough to be trusted with the socket. The
+	// socket's directory and mode are what keep other users off it; this is the
+	// second check behind them, for the day one of them is wrong -- a directory
+	// that was looser than it should be, a socket path in a shared temp
+	// directory -- and not a substitute for either.
+	WrongUser bool
+	PeerUID   int
+	SelfUID   int
+}
+
+// Verified reports whether the platform could answer and the answer was yes.
+// It is the question a secret's release has to ask: not "was the peer refused"
+// but "was the peer confirmed", which are different things exactly where the
+// platform cannot ask.
+func (v Verdict) Verified() bool { return v.Supported && v.Same }
+
+// Reason is the clause a refusal is built from: why the peer is not accepted.
+// Empty for a peer that is. Wording only -- the decision was made by Same.
+func (v Verdict) Reason() string {
+	switch {
+	case !v.Supported:
+		return "this platform cannot tell who is on the other end of the socket"
+	case v.WrongUser:
+		return fmt.Sprintf("it runs as uid %d and this process runs as uid %d: Holdcall only talks to processes of its own user",
+			v.PeerUID, v.SelfUID)
+	case !v.Same:
+		return "it is not running this binary"
+	}
+	return ""
+}
+
+// Check asks the OS, not the connecting process, who is on the other end of
+// conn: which user it runs as, and whether it is running this same holdcall
+// binary.
 //
-// supported is false on platforms with no way to ask the OS this at all
-// (Windows AF_UNIX exposes no peer-credential API, unlike Linux's
-// SO_PEERCRED or Darwin's LOCAL_PEERPID) -- see peer_windows.go. Callers
-// must decide what "not supported" means for their own request; it is not
-// automatically an allow.
+// This is what keeps everything that is not Holdcall off the daemon socket, and
+// so away from credential.get and every connector.* operation: socket file
+// permissions only prove "same OS user", which is not enough once a
+// downstream MCP server -- code the operator did not write and should not be
+// assumed to trust -- can open the same socket. A claim inside a Request ("my
+// target is X") is exactly as easy for an attacker to write as for the real
+// shim, so nothing self-reported can be the basis for a decision here. Peer
+// identity, read from the kernel's own connection-tracking state, cannot be
+// forged by the connecting process. It is a floor, not the authorization
+// model: anything able to execute this binary as this user passes it, which
+// is why the connector's registered command, not the caller, decides what a
+// secret is handed to.
+//
+// Both halves come from the kernel and both are required. The user is what
+// SO_PEERCRED (linux) and LOCAL_PEERCRED (darwin) report: the peer's
+// effective uid when it connected, compared with this process's effective uid.
+// The binary is the running image -- see Image.
+//
+// Not supported is not the same as refused, and callers must say which they
+// mean: see Verdict.Supported.
+func Check(conn net.Conn) Verdict { return checkImpl(conn) }
+
+// IsSelf is Check reduced to the two booleans older callers use. same means
+// the peer runs this binary as this user.
 func IsSelf(conn net.Conn) (supported, same bool) {
-	supported, same, _ = isSelfImpl(conn)
-	return supported, same
+	v := checkImpl(conn)
+	return v.Supported, v.Same
 }
 
 // IsSelfPID is IsSelf plus the pid the identity decision was made against,
@@ -44,13 +116,15 @@ func IsSelf(conn net.Conn) (supported, same bool) {
 // once, then failed moments later on the same conn. Reading the pid once,
 // here, and diagnosing from it afterwards with DiagnosePID -- which touches
 // only the pid, never conn -- is what removes the race instead of merely
-// narrowing it.
+// narrowing it. Check exists for the same reason: it reads everything a
+// refusal needs in that one look.
 //
 // pid is 0 exactly when supported is false or the identity check otherwise
 // could not resolve one; it is never meaningful on its own without
 // supported also being true.
 func IsSelfPID(conn net.Conn) (supported, same bool, pid int) {
-	return isSelfImpl(conn)
+	v := checkImpl(conn)
+	return v.Supported, v.Same, v.PID
 }
 
 // PrimeSelf resolves this process's own image identity now, rather than on

@@ -424,26 +424,36 @@ func handle(
 	// keeps delivering buffered bytes after the writer has exited, so a
 	// client that writes and leaves could otherwise be read from after its
 	// pid was gone and denied for being fast.
-	if supported, isSelf, pid := peer.IsSelfPID(conn); supported && !isSelf {
-		// Told apart from an ordinary impostor for F-001: a peer at our own
-		// executable path running a different file is not an attacker, it is
-		// the new build of Holdcall an operator just installed over this running
-		// process. The trust boundary does not move either way -- this
-		// connection is refused exactly as it always was -- but the log line
-		// now says which case it was, and names the remedy for the one that
-		// has one.
-		//
-		// Diagnosed from pid, the one IsSelfPID already read conn's peer
-		// credentials for, rather than by touching conn again: a peer that
-		// has just been refused is, in practice, already closing its end,
-		// and a second connection-based read was observed to race that
-		// close and misreport a genuine upgrade as a plain impostor. See
-		// peer.IsSelfPID's doc comment.
-		if peer.DiagnosePID(pid) == peer.SameLaunchPathOlderBuild {
+	//
+	// "Holdcall" means this binary run by this user. The user is what the kernel
+	// reports for the connecting process, compared with the one this daemon runs
+	// as: the socket's directory and mode are what keep other users off it, and
+	// this refuses the one that got through anyway, rather than leaving the
+	// executable check to be the only thing standing between the two.
+	if v := peer.Check(conn); v.Supported && !v.Same {
+		switch {
+		case v.WrongUser:
+			log.Printf("refusing a connection from a process running as another user (uid %d; this daemon runs as uid %d)",
+				v.PeerUID, v.SelfUID)
+		case peer.DiagnosePID(v.PID) == peer.SameLaunchPathOlderBuild:
+			// Told apart from an ordinary impostor for F-001: a peer at our own
+			// executable path running a different file is not an attacker, it is
+			// the new build of Holdcall an operator just installed over this
+			// running process. The trust boundary does not move either way --
+			// this connection is refused exactly as it always was -- but the log
+			// line now says which case it was, and names the remedy for the one
+			// that has one.
+			//
+			// Diagnosed from pid, the one Check already read conn's peer
+			// credentials for, rather than by touching conn again: a peer that
+			// has just been refused is, in practice, already closing its end,
+			// and a second connection-based read was observed to race that
+			// close and misreport a genuine upgrade as a plain impostor. See
+			// peer.IsSelfPID's doc comment.
 			self, _ := os.Executable()
 			log.Printf("refusing a connection from a different build of Holdcall at %s; "+
 				"this daemon is the older one, restart it with holdcall daemon restart", self)
-		} else {
+		default:
 			log.Printf("refusing a connection from an unverified peer")
 		}
 		return
