@@ -4,30 +4,44 @@ package peer
 
 import "net"
 
-// checkImpl always reports unsupported: Windows' AF_UNIX
-// implementation (afunix.sys) exposes no peer-credential API equivalent to
-// Linux's SO_PEERCRED or Darwin's LOCAL_PEERPID/LOCAL_PEERCRED. This was
-// investigated again, specifically, during the M3 final audit -- not just
-// re-asserted -- and no workaround was found that gives a genuine,
-// kernel-verified answer for an AF_UNIX peer on Windows. What was
-// considered and why each was rejected:
+// checkImpl always reports unsupported: Holdcall asks nothing of the peer of a
+// Windows AF_UNIX connection. docs/security.md, "Windows is experimental", is the
+// table of what that leaves enforced and what it does not; this is why the
+// check is absent, and what was and was not looked at.
+//
+// What the platform offers. afunix.sys has no peer-credentials call equivalent
+// to Linux's SO_PEERCRED or Darwin's LOCAL_PEERCRED: Microsoft's announcement of
+// AF_UNIX lists ancillary data, which is what SCM_CREDENTIALS travels in, as
+// unsupported (https://devblogs.microsoft.com/commandline/af_unix-comes-to-windows/).
+// It does have the equivalent of Darwin's LOCAL_PEERPID: the
+// SIO_AF_UNIX_GETPEERPID control code returns the peer's process id. It is
+// defined in mingw-w64's afunix.h, reported working on Windows 10 1903 to 2004
+// in https://github.com/microsoft/WSL/issues/4676, and not listed in
+// Microsoft's Winsock IOCTL reference. An earlier version of this comment, and
+// of docs/security.md, said no such thing existed; that was wrong, and what
+// follows is what remains true of it.
+//
+// Nothing here uses that pid. A user and an executable identity would have to be
+// derived from it (OpenProcess and a token's user SID for the first;
+// QueryFullProcessImageName and GetFileInformationByHandle's volume serial and
+// file index for the second, which is a path-based lookup of the weaker kind
+// pathswap_test.go is about), and that would be written without a Windows
+// machine to run it on, which is how an identity check that reads as working
+// without being one gets written. The other candidates, and why each was set
+// aside when this file was first written:
 //
 //   - Named pipes (GetNamedPipeClientProcessId + a per-pipe DACL) are the
-//     one mechanism that actually matches darwin/linux's guarantee: kernel-
+//     mechanism that most directly matches darwin/linux's guarantee: kernel-
 //     verified PID, then the same open-process/compare-exe-identity check
-//     peer_darwin.go and peer_linux.go already do. This is a real
-//     architecture change, though, not a fix: Holdcall deliberately uses one
-//     unix-socket transport on all three platforms (see docs/milestones.md,
-//     M1's Standing Decision) specifically to avoid needing go-winio, and
-//     that decision reached every caller of this socket -- the shim, the
-//     CLI's dialConnectorDaemon, StartDaemon's detachment logic -- not just
-//     this file. M1 made that call before M3's threat model (a
-//     potentially-malicious downstream MCP server on the same socket)
-//     existed to weigh against it. Reversing it is exactly the kind of
-//     product-shaping decision the M3 remediation instructions say to stop
-//     and ask about, not decide unilaterally -- and it cannot be verified
-//     in this environment, which has no real Windows machine, only
-//     cross-compilation.
+//     peer_darwin.go and peer_linux.go already do. It is a real architecture
+//     change, though, not a fix: Holdcall deliberately uses one unix-socket
+//     transport on all three platforms (see docs/milestones.md, M1's Standing
+//     Decision) specifically to avoid needing go-winio, and that decision
+//     reached every caller of this socket -- the shim, the CLI's
+//     dialConnectorDaemon, StartDaemon's detachment logic -- not just this
+//     file. M1 made that call before M3's threat model (a potentially-malicious
+//     downstream MCP server on the same socket) existed to weigh against it.
+//     Reversing it is a product-shaping decision for the architect, not a fix.
 //   - An ephemeral capability/token issued by the daemon does not actually
 //     solve this on its own: it only moves the question to "how does the
 //     daemon know THIS connection deserves a token", which is the same
@@ -37,27 +51,26 @@ import "net"
 //     inheriting the shim's environment by default) could read straight
 //     back out and replay -- it would need its own delivery mechanism with
 //     a real, unforgeable root of trust, which on Windows is precisely what
-//     is missing. It does not avoid the architecture change above; a
-//     Windows-only capability channel is its own new transport to build and
-//     verify, not a smaller version of the named-pipe fix.
+//     is missing.
 //   - A file-content or file-ACL-based check (proving the caller can read
 //     something only this user can) only reconstructs "same OS user", the
 //     exact guarantee target-binding already treats as insufficient once a
 //     downstream MCP server is in scope -- it adds nothing over what the
-//     socket's own permissions already claim to provide (see config.go's
-//     EnsureDirs, which documents that even that same-user claim is not
-//     actually enforced by this codebase on Windows today).
+//     socket's own permissions already claim to provide (see
+//     config.EnsurePrivateDir, which on Windows only creates the directory:
+//     privatedir_other.go).
 //
-// The practical effect: on Windows, credential.get still enforces
-// target-binding (see handleCredentialGet) and connector.set/list/remove
-// still enforce target/size validation -- both are peer-identity-independent
-// and hold on every platform -- but none of them can verify the caller is
-// genuinely this binary. Combined with config.go's EnsureDirs gap, Windows'
-// confidentiality for this socket rests on the OS's own default directory
-// ACLs, not on anything Holdcall itself verifies. This is a known, real,
-// load-bearing gap, not a theoretical one -- see docs/milestones.md and the
-// M3 final audit report for the READY-WITH-KNOWN-LIMITATION reasoning this
-// feeds into.
+// The practical effect, which the daemon enforces and not this file: a
+// connection on Windows is let through, because refusing every connection
+// would refuse every relay, and it carries on as one nobody verified
+// (Verdict.Verified is false). A connection nobody verified is never given a
+// credential: handleCredentialGet answers it with an error before reading the
+// store, the relay takes no connector from a daemon it cannot verify, and
+// `holdcall connector set` refuses to send one. What is not refused is
+// everything that carries no secret: a decision, a journal entry, an approval.
+// Windows' confidentiality for this socket therefore rests on the OS's default
+// directory ACLs and on nothing Holdcall verifies. This is a known, real,
+// load-bearing gap, not a theoretical one.
 func checkImpl(conn net.Conn) Verdict {
 	return Verdict{}
 }

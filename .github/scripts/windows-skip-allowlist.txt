@@ -7,8 +7,9 @@
 # Every entry here traces to the same root cause, in one of two shapes:
 #
 #   Holdcall never implemented a kernel-verified peer identity for Windows'
-#   AF_UNIX (afunix.sys exposes no SO_PEERCRED/LOCAL_PEERPID equivalent),
-#   and said so rather than ship an unverified one -- see
+#   AF_UNIX (afunix.sys has no peer-credentials call, and Holdcall does not
+#   use the peer pid it can report), and said so rather than ship an
+#   unverified one -- see
 #   engine/internal/peer/peer_windows.go and image_windows.go. Production
 #   code treats "unsupported" as "not a denial" for the accept check
 #   (daemon.go) and for decisions (shim.go's daemonIsGenuine), which is a
@@ -20,9 +21,9 @@
 #   tests that show that are not in this list because they run and pass.
 #
 #   Agent enrolment (peer.ImageOfFile) is an admitted stub on Windows for
-#   the same reason: "nothing in this project has ever run on Windows and
-#   an unverified identity mechanism is worse than an absent one" --
-#   image_windows.go. Enrolling a real file cannot succeed there.
+#   the same reason: an unverified identity mechanism is worse than an
+#   absent one (image_windows.go). Enrolling a real file cannot succeed
+#   there.
 #
 # Each t.Skip site names this file and its reason inline; this list is
 # what makes the CI gate that would otherwise catch a skip honest about it.

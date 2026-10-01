@@ -22,8 +22,9 @@ import (
 // permissions. This is deliberately the smaller of the two mechanisms named
 // in the M3 decision (DPAPI, not the full Credential Manager API): its ABI
 // surface is two structs and two calls rather than a whole struct-heavy
-// CRED_* API, which matters because this cannot be run on real Windows in
-// this environment -- it is cross-compiled and reviewed, not verified.
+// CRED_* API, which matters because no test in this repository stores or reads
+// a secret with it: it is compiled and vetted for Windows in CI and has never
+// been run by a test.
 func New() (Store, error) {
 	sum := sha256.Sum256([]byte(config.Home()))
 	dir := filepath.Join(config.Home(), "credentials-"+hex.EncodeToString(sum[:4]))

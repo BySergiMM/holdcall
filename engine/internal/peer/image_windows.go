@@ -13,9 +13,9 @@ import (
 // A file identity does exist there -- the volume serial number and file index
 // from GetFileInformationByHandle are the equivalent of a device and inode --
 // and a process's image could be reached through QueryFullProcessImageName.
-// Neither is written here, because nothing in this project has ever run on
-// Windows and an unverified identity mechanism is worse than an absent one: it
-// would read as a working check to everything above it.
+// Neither is written here: until one exists and a test shows it refusing the
+// wrong process, an unverified identity mechanism is worse than an absent one,
+// because it would read as a working check to everything above it.
 //
 // Callers get an error rather than a zero Image that might be mistaken for an
 // answer. Enrolment therefore fails on Windows with a clear reason, which
