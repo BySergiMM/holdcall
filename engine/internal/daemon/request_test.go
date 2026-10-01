@@ -421,6 +421,14 @@ func TestHandleConnectorRemoveLeavesMetadataIfSecretRemovalFails(t *testing.T) {
 // This uses net.Pipe, so peer verification reports "unsupported" (like
 // Windows); the authorization-layer-specific tests below use a real unix
 // socket, which is what peer verification actually inspects.
+//
+// Unsupported means nobody verified the peer, and a credential is not released
+// to a peer nobody verified (peer_unverified_test.go). So the answer to the
+// credential.get below is the refusal and not the secret. It used to be the
+// secret, and this test used to say so; what it is here to show is that a
+// request is answered and that an event after it is still taken, which the
+// refusal shows as well as the secret did. The release to a peer that was
+// verified, over a real socket, is TestACredentialIsReleasedToAPeerTheKernelConfirmed.
 func TestHandleDispatchesRequestsAndEventsOnTheSameConnection(t *testing.T) {
 	j := freshJournal(t)
 	store := newFakeStore()
@@ -441,8 +449,8 @@ func TestHandleDispatchesRequestsAndEventsOnTheSameConnection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SendRequest: %v", err)
 	}
-	if !resp.Found || resp.Env["GITHUB_TOKEN"] != "ghp_x" {
-		t.Fatalf("unexpected response: %+v", resp)
+	if !resp.Found || resp.Error == "" || len(resp.Env) != 0 || len(resp.Command) != 0 {
+		t.Fatalf("a connection nobody verified should be refused the credential, with an answer that says so: %+v", resp)
 	}
 
 	enc := json.NewEncoder(client)
@@ -479,9 +487,12 @@ func TestHandleRejectsMixingCredentialAndConnectorRequestsOnOneConnection(t *tes
 		close(done)
 	}()
 
+	// net.Pipe is a peer nobody verified, so the answer is the refusal (Found,
+	// with an error) and not the secret. What this test needs from the first
+	// request is only that it makes the connection a credential connection.
 	first, err := SendRequest(client, Request{ID: "1", Kind: KindCredentialGet, Target: "github"})
 	if err != nil || !first.Found {
-		t.Fatalf("first (credential.get) request should succeed: %+v, %v", first, err)
+		t.Fatalf("first (credential.get) request should be answered as a configured connector: %+v, %v", first, err)
 	}
 
 	second, err := SendRequest(client, Request{ID: "2", Kind: KindConnectorList})
