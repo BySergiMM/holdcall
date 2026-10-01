@@ -107,7 +107,7 @@ tested on. The installer resolves the latest release, verifies the archive
 against `SHA256SUMS`, and refuses on any mismatch:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/BySergiMM/holdcall/m1-bootstrap/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/BySergiMM/holdcall/main/install.sh | sh
 ```
 
 POSIX `sh`, never `sudo`, writes only inside `HOLDCALL_INSTALL_DIR` (default

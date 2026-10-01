@@ -129,7 +129,7 @@ export default function Page() {
           lede="Point a real MCP client at Holdcall in about five minutes."
         >
           <Field k="Install">
-            <code>curl -fsSL https://raw.githubusercontent.com/BySergiMM/holdcall/m1-bootstrap/install.sh | sh</code>
+            <code>curl -fsSL https://raw.githubusercontent.com/BySergiMM/holdcall/main/install.sh | sh</code>
           </Field>
           <Field k="Five minutes to a first decision">
             <ol style={{ margin: 0, paddingLeft: "1.1rem" }}>
