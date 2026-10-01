@@ -195,8 +195,12 @@ func TestARealDaemonsApprovalTimeoutIsAnsweredAsATimeoutAndTheSessionGoesOn(t *t
 	// The record: what the daemon wrote, in an order that still verifies. The
 	// journal is deliberately unchanged by the fix -- a timeout is recorded as
 	// the rejection it always was.
+	//
+	// Read the way every reader reads it, read-only: the daemon still holds the
+	// database open for writing, and a second writer opening it here would be
+	// racing the daemon for a lock the test has no business taking.
 	seed, _ := config.ReadMachineID()
-	j, err := journal.Open(cfg.DatabasePath(), seed)
+	j, err := journal.OpenReadOnly(cfg.DatabasePath(), seed)
 	if err != nil {
 		t.Fatalf("opening the journal: %v", err)
 	}
