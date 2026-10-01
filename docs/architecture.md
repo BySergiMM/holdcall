@@ -70,9 +70,11 @@ terminal. It listens on a unix socket named by a short hash of the Holdcall home
 socket cannot live in it), in a directory only this user can use:
 `$XDG_RUNTIME_DIR`, else the temp directory if it is already private (macOS's
 `$TMPDIR`), else a `holdcall-<uid>` directory inside it (Linux's `/tmp`). The
-home, data and socket directories are created `0700` and checked at startup, and
-the daemon refuses to start in one another user owns
-(`config.EnsurePrivateDir`; not on Windows, where nothing is checked). Two things
+home, data and socket directories are created `0700` when they are missing and
+checked at startup: the daemon refuses to start in one another user owns, and
+warns about, without changing, one the user owns that others can reach and that
+Holdcall did not create (`config.EnsurePrivateDir`; not on Windows, where
+nothing is checked). Two things
 happen at accept, before a byte is read:
 
 - **Peer identity** (`internal/peer`): the kernel is asked which user the

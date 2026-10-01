@@ -143,16 +143,33 @@ needed: the vnode check answers the question actually being asked.
 ## Private directories
 
 What keeps another user off the daemon starts with their not being able to reach
-it. Holdcall's home, its data directory (the journal and the install's
-identifier) and the directory the socket is in are created `0700`, and on Linux
-and macOS one that already exists is **checked**, not assumed: it must belong to
-the user running Holdcall (a link is followed, and the directory it leads to is
-the one checked), and any access group or other has to it is removed. A
-directory somebody else owns is refused, with a message naming it and the setting
-that moves it, and the daemon does not start. The socket is bound only inside a
-directory that passed this, so it is never reachable in the gap between
-`net.Listen` creating it and the `chmod` that narrowed it (F-008 was exactly that
-gap).
+it. On Linux and macOS the directories Holdcall keeps things in are treated by
+who made them:
+
+- **One Holdcall creates** (its home, its data directory or the directory the
+  socket is in, when it is not there yet) is created `0700`, its parents too.
+- **One that is already there** must belong to the user running Holdcall (a link
+  is followed, and the directory it leads to is the one checked). One somebody
+  else owns is refused, with a message naming it and the setting that moves it,
+  and the daemon does not start.
+- **One that is already there, is the user's own, and that group or other can
+  reach is left exactly as it is** and warned about once per process in the
+  daemon's log (and on the relay's stderr). Holdcall did not make it, and
+  `socket = ~/holdcall.sock` names the user's home directory: taking away the
+  access their other users and groups have to it is not Holdcall's to do, and a
+  `chmod` that fails where the mode is not the owner's to set (drvfs, NFS) would
+  stop the daemon over a directory it does not own. The exception is Holdcall's
+  own default runtime directory (below), which is tightened to `0700`, and which
+  is refused if it is a symbolic link.
+
+The socket is bound only inside a directory that is private, so it is never
+reachable in the gap between `net.Listen` creating it and the `chmod` that
+narrowed it (F-008 was exactly that gap), **except** where the operator chose a
+directory that others can enter. There the gap exists, and what covers it is
+the peer check: the daemon refuses a connection from another user, and a relay
+refuses a socket that is not the daemon's. The journal is the other casualty of
+such a directory: SQLite creates it with the umask's default, usually `0644`, so
+it is as readable as the directory lets it be, and the warning says so.
 
 Where the default socket goes follows from it: `$XDG_RUNTIME_DIR` when set (the
 XDG Base Directory specification makes it the user's own, mode 0700), otherwise
@@ -162,10 +179,14 @@ Never directly in a shared directory such as Linux's `/tmp`: root owns that, so 
 daemon that insists on owning its socket's directory could not start there, and
 one that did not insist could have its socket pre-created or replaced by any
 local user. Evidence: `TestEnsurePrivateDirRefusesADirectoryAnotherUserOwns`,
-`TestEnsurePrivateDirNarrowsADirectoryWeOwnThatOthersCouldReach`,
+`TestEnsurePrivateDirNeverChangesADirectoryItDidNotCreate`,
+`TestEnsurePrivateDirDoesNotTakeAHomeDirectoryAway`,
+`TestEnsurePrivateDirTightensTheDefaultRuntimeDirectory`,
+`TestEnsurePrivateDirRefusesALinkAtTheDefaultRuntimeDirectory`,
 `TestTheDefaultSocketIsNeverPutDirectlyInADirectoryOthersCanUse`
 (`internal/config/privatedir_test.go`) and `TestListenRefusesASocketDirectoryAnotherUserOwns`,
-`TestListenNarrowsAPreExistingSocketDirectory` (`internal/daemon/listen_dir_test.go`),
+`TestListenLeavesAPreExistingSocketDirectoryAsItIs`,
+`TestListenCreatesAMissingSocketDirectoryPrivate` (`internal/daemon/listen_dir_test.go`),
 which fail when the checks they exercise are removed. Another user's directory
 is simulated by making the test believe it runs as a different uid; no test here
 creates a real second account.
@@ -194,7 +215,7 @@ user.** Use it there to see what an agent does, not to stop one.
 | A server with no connector runs through the relay, decided and journaled | yes | yes |
 | Rules, budgets, `ask`, strict reading, fail-closed, the chain and `verify` | yes | the same code, and the tests that do not depend on peer identity run on `windows-latest`; nothing stops another process from using the same daemon |
 | Agent identity: an enrolment is an executable | yes | **no.** `holdcall agent add` fails, no session is ever matched to an enrolment, and only rules that name no agent apply |
-| Home, data and socket directories are private to the user | created `0700`, and an existing one must be the user's own | **not checked.** No ACL is read or set; privacy rests on the default ACLs under the user's profile |
+| Home, data and socket directories are private to the user | created `0700`; an existing one must be the user's own, and one that is open to others is warned about and not changed (except Holdcall's own default runtime directory, which is tightened) | **not checked.** No ACL is read or set; privacy rests on the default ACLs under the user's profile |
 | `holdcall daemon restart` | yes | refuses, and says how to stop the daemon by hand |
 | Daemons racing at startup are serialised | yes (`flock`) | no: the startup lock does nothing, so the stale-socket reclaim race is not closed |
 | Credential store | Keychain, Secret Service | DPAPI (`store_windows.go`). No test calls it, and with no secret able to move, nothing reaches it |
@@ -432,7 +453,7 @@ it can register a connector.
 | Gap | Severity | Why it is open |
 |---|---|---|
 | **Windows has no peer verification** | high, on Windows | Not implemented. AF_UNIX there has no `SO_PEERCRED` equivalent; the peer's process id can be read (`SIO_AF_UNIX_GETPEERPID`) but is not, and a user and image identity would have to be derived from it. A named-pipe transport is the other route and reverses a standing decision. The suite does run on `windows-latest` in CI since 2026-09-28, with the tests that show an attacker refused skipped by name. Since this change no secret is released to a peer that cannot be verified, so on Windows no connector works. See *Windows is experimental*. |
-| **Windows directories have no real ACL** | high, on Windows | `os.Chmod` only toggles the read-only attribute, and nothing here reads or sets an ACL. Home, journal and socket privacy rests on the default ACLs under the user's profile. On Linux and macOS the directories are created `0700` and an existing one must be the user's own; see *Private directories*. |
+| **Windows directories have no real ACL** | high, on Windows | `os.Chmod` only toggles the read-only attribute, and nothing here reads or sets an ACL. Home, journal and socket privacy rests on the default ACLs under the user's profile. On Linux and macOS the directories are created `0700` and an existing one must be the user's own; see *Private directories*, which also says what is not done to a directory the user chose. |
 | **PATH resolution on the registered command** | medium | The registered argv is spawned through normal PATH lookup, so a caller that already controls PATH can front-run the binary name. Closing it needs process inversion. |
 | **Credentials are readable by any process running as the same user** | high, against the adversary in the threat model | Not through the daemon, so peer identity does not come into it. Each secret is stored under a name derived only from values any process of the user can compute (`holdcall-` and the first four bytes of the SHA-256 of the Holdcall home, with the connector name as the account), and nothing Holdcall passes to the store limits who may ask for it. Linux: the Secret Service entry `secret-tool lookup service holdcall-<hex> account <connector>` returns it. macOS: `security find-generic-password -a <connector> -s holdcall-<hex> -w`; Holdcall stores the item with no access list of its own (no `-T`, no `-A`), and whether the Keychain would then prompt a second program was not tested. Windows: the `.dpapi` file under the home is decrypted by `CryptUnprotectData` for any process of the same Windows user, because it is user-scoped and no entropy is passed. This is read from what `internal/credential` stores and how, an implementation inference: no test, and nothing in this repository, has queried a store from a second process. What holds: the secret is injected only into the one command it was registered for, never into another connector's environment, and it is not in argv, SQLite, a log, the console or a client's config. |
 | **The credential is handed to the connector** | medium | Injected into the downstream's environment, so a compromised connector has its own secret and, on Linux, any same-user process can read `/proc/<pid>/environ`. Holdcall cannot revoke what it has given away. |
