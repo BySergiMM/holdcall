@@ -345,6 +345,25 @@ func (r *relay) errors() string {
 	return r.stderr.String()
 }
 
+// saidOnStderr waits, for at most d, until the relay has written text to its
+// stderr. Reading errors() the moment an answer arrives is a race: the relay's
+// stderr is copied into the buffer by a goroutine of its own, separate from the
+// one that delivers its stdout, so what the relay wrote before it answered is
+// not necessarily in the buffer yet when the answer is. Lost under load, once,
+// by the test that asserts the relay said its calls would be denied.
+func (r *relay) saidOnStderr(text string, d time.Duration) bool {
+	deadline := time.Now().Add(d)
+	for {
+		if strings.Contains(r.errors(), text) {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func (r *relay) kill() {
 	if r.cmd.Process != nil {
 		r.cmd.Process.Kill()
@@ -520,7 +539,7 @@ func TestRealRelayWithNoDaemonReachesNothing(t *testing.T) {
 	if got := s.received(t); strings.Contains(got, "tools/call") {
 		t.Errorf("a call reached the connector with no daemon to record it:\n%s", got)
 	}
-	if !strings.Contains(r.errors(), "denied") {
+	if !r.saidOnStderr("denied", 5*time.Second) {
 		t.Errorf("the relay did not say on stderr that calls would be denied:\n%s", r.errors())
 	}
 }
