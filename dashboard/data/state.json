@@ -1967,7 +1967,7 @@
       "title": "The journal's synchronous setting is the SQLite build's default",
       "problem": "Nothing in engine/ sets synchronous or fullfsync, so whether a commit survives a power cut depends on the SQLite build's defaults.",
       "impact": "The docs and the benchmarks called the journal write durable and said synchronous=FULL. A one-off probe in a Linux sandbox, through a stand-in for the shipped driver (ncruces/go-sqlite3, which is not in this repository), reported synchronous=1 (NORMAL); that is not reproducible from here and the shipped driver's value was not measured. On macOS the flush is a plain fsync unless fullfsync is on.",
-      "evidence": "Probed with a scratch test in the local rig that was not kept, and a search of engine/ for synchronous and fullfsync finds none. docs/benchmarks.md, the README and the code comments no longer say durable.",
+      "evidence": "Probed with a scratch test in the local rig that was not kept, and a search of engine/ for synchronous and fullfsync finds none. docs/benchmarks.md, docs/journal-format.md, the README and the code comments no longer say durable.",
       "status": "open",
       "nextAction": "Set synchronous(FULL), and fullfsync on macOS, in the journal's DSN, read the values back in a test, and re-run the benchmarks on the machine they came from.",
       "provenance": "declared"
