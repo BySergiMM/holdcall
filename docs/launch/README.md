@@ -95,7 +95,7 @@ Se pone entre el cliente (Claude Code, Cursor, Claude Desktop) y los
 servidores MCP y decide cada llamada antes de que llegue: permitir,
 denegar, o retenerla para que la mire una persona. Una llamada retenida
 muestra los argumentos reales y espera; si nadie decide, se rechaza, y el
-modelo recibe que un humano ha dicho que no.
+modelo recibe que nadie decidió.
 
 Todo lo que ve va a un registro encadenado por hash que se verifica sin
 red. Las credenciales no están en el fichero de configuración del cliente,
