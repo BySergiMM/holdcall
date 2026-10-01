@@ -166,21 +166,24 @@ them is a separate step.
 
 Since 2026-09-25 the same deployment serves two pages. The product page at
 `/` is the public face of Holdcall: a real session's `holdcall log`, the `holdcall approve`
-moment, how the relay fits, what Holdcall does not promise, and an early-access
-form. The status page, this dashboard, moved to `/status/`; every anchor it
+moment, how the relay fits, what Holdcall does not promise, and how to install
+it. The status page, this dashboard, moved to `/status/`; every anchor it
 had still works there. Both are built from the same repository by the same
 generator, and the output scan covers both. The product page is meant to be
 found, so the `noindex` header (D-005) now applies to `/status` only.
 
-The early-access form is the one thing here with a server behind it:
-`api/waitlist.js`, a Vercel function outside Next that stores an address and
-a timestamp in a private Blob store and nothing else, one record per address.
-Its token is a Vercel environment variable, never in the repository. When the
-store is absent the function answers 503 and the page says sign-ups are not
-open yet, rather than pretending. The store lives in Vercel's Paris region
-(`cdg1`) since 2026-09-25: the addresses are people's, and nothing about
-them needs to leave the EU. The move was proven end to end with one probe
-address that was then deleted; the store held no other record at the time.
+Nothing in the tree has a server behind it. The product page used to carry an
+early-access form, backed by `api/waitlist.js`, a Vercel function outside Next
+that stored an email address and a timestamp in a private Vercel Blob store
+(region `cdg1`, one record per address, written with the project's
+`BLOB_READ_WRITE_TOKEN` environment variable). The form, the function and the
+`@vercel/blob` dependency are removed from the tree, and the page links to the
+repository and shows the install command instead. Two things that change does
+not do: deployment is by hand, so the live site keeps the form and the function
+until `dashboard/` is deployed again; and the store is a resource of the Vercel
+project, outside this repository, so it may still hold the addresses people
+submitted. Deleting it and the environment variable is the operator's to do in
+the Vercel dashboard.
 
 How it got there is worth keeping. An earlier version of this section said the
 project had Vercel Authentication enabled and that a deployment would be
@@ -199,9 +202,9 @@ Two things remain true:
   through `VERCEL_ORG_ID` and `VERCEL_PROJECT_ID`: `vercel build --prod` over
   the same `npm run build` the checks run, then `vercel deploy --prebuilt
   --prod`. Last done on 2026-09-25, the first deployment of the `holdcall`
-  project, and verified by fetching every hostname anonymously afterwards,
-  including the waitlist function with one probe address that was then
-  deleted.
+  project, and verified by fetching every hostname anonymously afterwards
+  (at that time including the waitlist function, with one probe address that
+  was then deleted).
 - Until 2026-09-16, historical deployment URLs and stale branch aliases also
   answered publicly (F-012), serving Vercel's failure page and an abandoned
   placeholder. They were removed that day; every one of them answers 404 now,

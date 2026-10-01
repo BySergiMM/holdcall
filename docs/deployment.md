@@ -2,11 +2,10 @@
 
 One thing in this repository is deployed: `dashboard/`, a static site built
 from the repository -- the product page at `/` and the status page at
-`/status/` -- plus one function, `api/waitlist.js`, that stores early-access
-addresses and nothing else. `docs/dashboard.md` describes it, and its
-*Deployment* section is the record of how it is published and why it is
-public. This file exists for the engine, which is not deployed anywhere and is
-not meant to be.
+`/status/` -- with no function and no server behind it. `docs/dashboard.md`
+describes it, and its *Deployment* section is the record of how it is
+published and why it is public. This file exists for the engine, which is not
+deployed anywhere and is not meant to be.
 
 ## The engine is not a service
 
